@@ -1,0 +1,32 @@
+# secrets
+.env
+*.pem
+client_secret*.json
+token*.json
+
+# python / node
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+templates/.bundle/
+.remotion/
+
+# runtime data (jobs are working state, outputs are deliverables)
+jobs/*
+!jobs/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# local model weights and caches (downloaded by `python -m gta_factory setup`)
+assets/models/*
+!assets/models/.gitkeep
+reference_analysis/.cache/
+
+# generated audio beds are rebuilt by `python -m gta_factory setup` (kept out of git to stay small)
+assets/music/*.wav
+assets/sound_effects/*.wav
+
+.DS_Store
+*.log
