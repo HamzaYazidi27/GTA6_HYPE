@@ -4,19 +4,34 @@ Tu donnes l'URL d'un article sur GTA 6. L'usine produit un **paquet prêt à rel
 
 Chaîne : **NEON DISPATCH**, « GTA 6 news, verified. » Chaque affirmation à l'écran porte son statut : CONFIRMED, REPORTED, RUMOR ou SPECULATION.
 
-Coût par défaut : **0 $**. Le LLM passe par ton abonnement Claude (CLI `claude`), la voix (Kokoro) et l'alignement des sous-titres (Whisper) tournent en local, et la musique et les effets sont synthétisés par le projet.
+Coût : **0 $, sans aucun abonnement ni clé API.** Tout tourne sur ta machine : le LLM est un modèle open-source servi par [Ollama](https://ollama.com) (gratuit), la voix (Kokoro) et l'alignement des sous-titres (Whisper) sont locaux, et la musique et les effets sont synthétisés par le projet. Un abonnement Claude ou une clé API restent possibles en option, jamais nécessaires.
 
 ## Installation (une fois)
 
-Prérequis : macOS ou Linux, Python 3.11+, Node 18+, ffmpeg (`brew install ffmpeg node`), et le CLI Claude Code connecté (`claude login`).
+Prérequis : macOS ou Linux, Python 3.11+, Node 18+, ffmpeg et Ollama, tous gratuits :
+
+```bash
+brew install ffmpeg node ollama      # Linux : paquets ffmpeg/node + curl -fsSL https://ollama.com/install.sh | sh
+```
 
 ```bash
 cd ~/GTA6_HYPE
 uv venv && uv pip install -e ".[align,dev]"   # ou : python -m venv .venv && .venv/bin/pip install -e ".[align,dev]"
 source .venv/bin/activate
-python -m gta_factory setup     # npm install, modèle de voix Kokoro (~350 Mo), musiques et effets originaux
+python -m gta_factory setup     # npm install, LLM local (Ollama), voix Kokoro (~350 Mo), musiques et effets
 python -m gta_factory doctor --ping
 ```
+
+`setup` démarre Ollama et télécharge **une fois** le meilleur modèle pour ta RAM (`model: auto`) :
+
+| RAM | Modèle | Taille |
+|---|---|---|
+| 48 Go et + | `qwen3:32b` | 20 Go |
+| 32 Go | `qwen3:30b` | 19 Go |
+| 16 Go | `qwen3:14b` | 9,3 Go |
+| 8 Go | `qwen3:8b` | 5,2 Go |
+
+Plus le modèle est gros, meilleurs sont le script et les titres. Pour en forcer un : `python -m gta_factory setup --model qwen3:8b` puis `providers.llm.ollama.model` dans `config.yaml`. Les garde-fous (preuves vérifiées mot pour mot, classement des affirmations par règles fixes, audit puis révision du script, contrôle qualité) ne dépendent pas du modèle : un modèle local ne peut pas faire passer une rumeur pour un fait.
 
 ## Utilisation
 
@@ -86,11 +101,26 @@ Si un point **critique** du contrôle qualité échoue (droits non validés, aff
 
 Tout est dans `config.yaml` (valeurs par défaut : `gta_factory/app/config/defaults.yaml`). Les clés API vont dans `.env` (voir `.env.example`). Aucune n'est nécessaire avec la configuration par défaut.
 
-- LLM : `providers.llm.default` = `claude_code` (abonnement), `anthropic`, `openai` ou `ollama` (100 % local).
+- LLM : `providers.llm.default` = `ollama` (gratuit, 100 % local, par défaut). En option : `claude_code` (abonnement Claude), `anthropic` ou `openai` (clés API payantes). `think: true` laisse le modèle « réfléchir » avant de répondre (plus lent).
 - Voix : `providers.tts.default` = `kokoro` (local), `elevenlabs` ou `openai`. Liste des voix : `python -m gta_factory voices`. Prononciations : `gta_factory/modules/voice_generation/pronunciation.yaml`.
 - Musique : `audio.music_mood` = `pulse`, `tension` ou `drive`.
 - Chronologie vérifiée : `knowledge/timeline.yaml`. Elle sert à repérer les vieilles infos ; l'usine y ajoute toute seule les dates confirmées.
-- Upload YouTube : **désactivé** (`youtube.upload_enabled: false`). L'upload n'est pas encore implémenté : tu téléverses le paquet toi-même, en privé d'abord.
+- Upload YouTube : **désactivé** par défaut (`youtube.upload_enabled: false`), voir ci-dessous.
+
+## Publier sur YouTube (optionnel, gratuit)
+
+1. Google Cloud Console → active **YouTube Data API v3** → crée un identifiant OAuth de type **Application de bureau** → télécharge le JSON et mets `YOUTUBE_CLIENT_SECRETS_FILE=/chemin/client_secret.json` dans `.env`.
+2. `youtube.upload_enabled: true` dans `config.yaml`, puis `python -m gta_factory youtube auth` (une fois : le navigateur s'ouvre, tu autorises ta chaîne ; le jeton reste dans `.secrets/`, jamais commité).
+3. Relis le paquet et coche la checklist de `outputs/<job>/REVIEW.md` (ou confirme avec `--reviewed`).
+
+```bash
+python -m gta_factory publish <job> --dry-run                    # ce qui serait envoyé, sans rien envoyer
+python -m gta_factory publish <job> --title 2 --thumbnail 1      # envoi en PRIVÉ + miniature + sous-titres + playlist
+python -m gta_factory publish <job> --publish-at 2026-11-20T18:00   # programmé (heure locale)
+python -m gta_factory youtube status <job>                       # traitement côté YouTube
+```
+
+Garde-fous : seul un job `completed` part (un échec critique du QC se lève check par check avec `--override-qc <id>`, sauf droits, fact-check, fichier et sous-titres, jamais), la checklist doit être cochée, le titre choisi repasse les règles d'honnêteté, et la vidéo est privée par défaut. L'upload est **reprenable** : relance la même commande après une coupure, elle reprend au dernier octet reçu par YouTube sans créer de doublon. Une miniature refusée (chaîne non vérifiée) n'annule pas l'upload. L'API ne permet pas d'épingler un commentaire : la commande t'affiche celui à épingler.
 
 ## Analyse des concurrents
 

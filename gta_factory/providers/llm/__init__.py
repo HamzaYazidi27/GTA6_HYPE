@@ -16,7 +16,7 @@ def register_llm(name: str, cls: type[LLMProvider]) -> None:
 
 
 def get_llm(settings: Any, name: str | None = None) -> LLMProvider:
-    chosen = name or settings.get("providers.llm.default", "claude_code")
+    chosen = name or settings.get("providers.llm.default", "ollama")
     pool = {**REGISTRY, **_EXTRA}
     if chosen not in pool:
         raise ConfigError(f"unknown LLM provider '{chosen}'", hint=f"Use one of: {', '.join(sorted(pool))}")

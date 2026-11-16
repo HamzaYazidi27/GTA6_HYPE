@@ -1,6 +1,6 @@
 """Command line: ``python -m gta_factory <command>``.
 
-    setup                      one-time install: Remotion packages, voice model, original audio library
+    setup                      one-time install: Remotion packages, local LLM (Ollama), voice model, audio library
     doctor                     check every tool and provider
     new URL [URL ...]          create a job from article URL(s) and run it
     resume JOB [--from STEP]   continue (or redo from a step)
@@ -8,6 +8,8 @@
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
     voices                     list the voices of the TTS provider
     competitors CHANNEL_URL    refresh the competitor reference database
+    youtube auth|whoami|logout|status JOB    connect the channel (OAuth, one time)
+    publish JOB                upload a reviewed package (private by default, resumable)
     dashboard                  local web dashboard (http://127.0.0.1:8600)
 """
 from __future__ import annotations
@@ -47,13 +49,48 @@ def cmd_setup(args: argparse.Namespace) -> int:
             return proc.returncode
     if not args.skip_models and s.get("providers.tts.default") == "kokoro":
         ensure_kokoro(s, log=_print)
+    llm_ok = True
+    if not args.skip_models and s.get("providers.llm.default", "ollama") == "ollama":
+        llm_ok = _setup_local_llm(s, args.model)
     lib = build_library(s.assets_dir, force=args.force_audio, log=_print)
     _print(f"audio library: {len(lib['generated'])} generated, {len(lib['kept'])} already present")
     (s.root / "knowledge").mkdir(exist_ok=True)
     if not (s.root / ".env").exists() and (s.root / ".env.example").exists():
         _print("tip: copy .env.example to .env only if you use API-key providers (the defaults need no key)")
+    if not llm_ok:
+        return 1
     _print("setup complete. Next: `python -m gta_factory doctor`")
     return 0
+
+
+def _setup_local_llm(s: Any, model: str | None) -> bool:
+    """Make the free local model ready: Ollama server running and the model downloaded."""
+    from ...providers.llm import get_llm
+    from ...providers.llm.local import machine_summary
+
+    llm = get_llm(s, "ollama")
+    if model:
+        llm._model = model  # type: ignore[attr-defined]
+    _print(f"local LLM: {machine_summary()}")
+    if not llm.start_server(log=_print):  # type: ignore[attr-defined]
+        _print(
+            "\nOllama is needed for the free local LLM and is not installed (or not running).\n"
+            "  macOS : brew install ollama   (or the app from https://ollama.com/download)\n"
+            "  Linux : curl -fsSL https://ollama.com/install.sh | sh\n"
+            "then run `python -m gta_factory setup` again."
+        )
+        return False
+    tag = llm.model  # type: ignore[attr-defined]
+    from ...providers.llm.local import _same_model
+
+    if any(_same_model(tag, h) for h in llm.installed_models()):  # type: ignore[attr-defined]
+        _print(f"local LLM: {tag} already downloaded")
+    else:
+        _print(f"downloading the local model {tag} (one time) ...")
+        llm.pull(tag, log=_print)  # type: ignore[attr-defined]
+    if model and str(s.get("providers.llm.ollama.model")) not in (model,):
+        _print(f"tip: set providers.llm.ollama.model: \"{model}\" in config.yaml to always use it")
+    return True
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -93,6 +130,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     stock = [p.name for p in get_stock_providers(s)]
     rows.append((True, "stock b-roll", ", ".join(stock) if stock else "off (no PEXELS/PIXABAY key; scenes use original graphics)"))
     rows.append((True, "rights mode", str(s.get("rights_review.mode"))))
+    paid = [x for x, on in (("Claude subscription", s.get("providers.llm.default") == "claude_code"), ("Anthropic API", s.get("providers.llm.default") == "anthropic"), ("OpenAI API", s.get("providers.llm.default") == "openai" or s.get("providers.tts.default") == "openai"), ("ElevenLabs", s.get("providers.tts.default") == "elevenlabs")) if on]
+    rows.append((True, "cost", "0 $ - everything runs locally, no account or subscription" if not paid else "uses " + ", ".join(paid)))
     rows.append((True, "youtube upload", "enabled" if s.get("youtube.upload_enabled") else "off (packages are produced for review)"))
     ok = all(r[0] for r in rows)
     for good, name, detail in rows:
@@ -282,6 +321,73 @@ def cmd_competitors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_youtube(args: argparse.Namespace) -> int:
+    from ...modules.publishing import youtube as yt
+
+    s = get_settings()
+    if args.action == "auth":
+        ch = yt.authorize(s, open_browser=not args.no_browser, log=_print)
+        _print(f"connected to the channel '{ch['title']}' ({ch['id']}). Token saved in {yt.token_path(s)} (keep it private).")
+    elif args.action == "whoami":
+        client = yt.YouTubeClient(s)
+        try:
+            ch = client.channel()
+        finally:
+            client.close()
+        _print(f"{ch['title']}  {ch['custom_url']}  ({ch['id']}, {ch.get('subscribers') or '?'} subscribers)")
+    elif args.action == "logout":
+        _print("access revoked and token deleted." if yt.logout(s) else "not connected.")
+    elif args.action == "status":
+        if not args.job:
+            raise FactoryError("Give the job: python -m gta_factory youtube status <job>")
+        rec = yt.refresh_status(s, args.job)
+        _print(json.dumps({k: rec.get(k) for k in ("url", "studio_url", "privacy", "publish_at", "steps", "youtube_status")}, indent=1, ensure_ascii=False))
+    return 0
+
+
+def cmd_publish(args: argparse.Namespace) -> int:
+    from ...modules.publishing import youtube as yt
+
+    s = get_settings()
+    pkg = yt.Package(s, args.job)
+    items = yt.review_checklist(pkg.review)
+    if items and not all(i["done"] for i in items) and not args.dry_run:
+        _print("REVIEW.md checklist:")
+        for i in items:
+            _print(f"  [{'x' if i['done'] else ' '}] {i['text']}")
+        confirmed = args.reviewed
+        if not confirmed and sys.stdin.isatty():
+            confirmed = input("Did you do all of the above yourself? [y/N] ").strip().lower() in ("y", "yes", "o", "oui")
+        if not confirmed:
+            raise FactoryError("The package has not been reviewed.", hint="Tick the boxes in REVIEW.md, or pass --reviewed once you have done the review.")
+        yt.set_review_checklist(pkg.review, True)
+    res = yt.publish(
+        s,
+        args.job,
+        title_index=args.title,
+        title_text=args.title_text,
+        thumbnail=args.thumbnail,
+        privacy=args.privacy,
+        publish_at=args.publish_at,
+        overrides=args.override_qc or [],
+        again=args.again,
+        dry_run=args.dry_run,
+        log=_print,
+    )
+    if args.dry_run:
+        _print(json.dumps(res, indent=1, ensure_ascii=False))
+        return 0
+    _print(f"\nuploaded: {res['url']}  ({res['privacy']}{', scheduled ' + res['publish_at'] if res.get('publish_at') else ''})")
+    _print(f"YouTube Studio: {res['studio_url']}")
+    for step, state in res.get("steps", {}).items():
+        if state != "done":
+            _print(f"  ! {step}: {state}")
+    meta = pkg.metadata
+    if meta.get("pinned_comment"):
+        _print(f"\nto pin by hand (the API cannot pin comments): {meta['pinned_comment']}")
+    return 0
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     from ..dashboard.server import serve
 
@@ -298,8 +404,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("setup", help="one-time install (Remotion, voice model, audio library)")
-    sp.add_argument("--skip-models", action="store_true", help="do not download the Kokoro voice model")
+    sp.add_argument("--skip-models", action="store_true", help="do not download the voice model nor the local LLM")
     sp.add_argument("--force-audio", action="store_true", help="regenerate the music beds and sound effects")
+    sp.add_argument("--model", help="local LLM to download instead of the automatic choice (e.g. qwen3:8b)")
     sp.set_defaults(fn=cmd_setup)
 
     sp = sub.add_parser("doctor", help="check tools and providers")
@@ -312,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--no-search", action="store_true", help="skip the corroboration search")
         sp.add_argument("--no-audit", action="store_true", help="skip the standards-editor audit of the script (faster, less safe)")
         sp.add_argument("--no-whisper", action="store_true", help="skip audio-based subtitle alignment")
-        sp.add_argument("--llm", help="LLM provider for this job (claude_code, anthropic, openai, ollama)")
+        sp.add_argument("--llm", help="LLM provider for this job (ollama = free local default, claude_code, anthropic, openai)")
         sp.add_argument("--tts", help="voice provider for this job (kokoro, elevenlabs, openai)")
         sp.add_argument("--voice", help="voice name / id for this job")
         sp.add_argument("--today", help="override today's date (YYYY-MM-DD)")
@@ -369,6 +476,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("channel_url", help="e.g. https://www.youtube.com/@SomeChannel")
     sp.add_argument("--refresh", action="store_true", help="ignore cached listings")
     sp.set_defaults(fn=cmd_competitors)
+
+    sp = sub.add_parser("youtube", help="connect the YouTube channel (auth | whoami | logout | status JOB)")
+    sp.add_argument("action", choices=("auth", "whoami", "logout", "status"))
+    sp.add_argument("job", nargs="?")
+    sp.add_argument("--no-browser", action="store_true", help="print the consent URL instead of opening the browser")
+    sp.set_defaults(fn=cmd_youtube)
+
+    sp = sub.add_parser("publish", help="upload a reviewed package to YouTube (private by default)")
+    sp.add_argument("job")
+    sp.add_argument("--title", type=int, help="pick title option N (1-3) from metadata.json")
+    sp.add_argument("--title-text", help="your own title (the honesty rules still apply)")
+    sp.add_argument("--thumbnail", type=int, default=1, help="thumbnail number in thumbnails/ (default 1)")
+    sp.add_argument("--privacy", choices=("private", "unlisted", "public"), help="default: youtube.default_privacy (private)")
+    sp.add_argument("--publish-at", help="schedule: 2026-11-20T18:00 (local time) or ISO with offset; uploads private until then")
+    sp.add_argument("--override-qc", action="append", metavar="CHECK_ID", help="accept one failed QC check you verified yourself (repeatable)")
+    sp.add_argument("--reviewed", action="store_true", help="confirm you did the REVIEW.md checklist (ticks the boxes)")
+    sp.add_argument("--again", action="store_true", help="upload again even though it was already published")
+    sp.add_argument("--dry-run", action="store_true", help="show exactly what would be sent, without uploading")
+    sp.set_defaults(fn=cmd_publish)
 
     sp = sub.add_parser("dashboard", help="local web dashboard")
     sp.add_argument("--host")

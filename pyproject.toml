@@ -25,7 +25,7 @@ research = ["yt-dlp>=2024.8"]
 # paid providers, only if you choose them in config.yaml
 anthropic = ["anthropic>=0.70"]
 openai = ["openai>=1.50"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pillow>=10"]
 
 [project.scripts]
 gta-factory = "gta_factory.app.cli.main:main"

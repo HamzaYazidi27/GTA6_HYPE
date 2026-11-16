@@ -31,6 +31,8 @@ _SECRET_PATTERNS = [
     re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"),
     re.compile(r"sk-[A-Za-z0-9_\-]{20,}"),
     re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),
+    re.compile(r"ya29\.[0-9A-Za-z_\-\.]{20,}"),  # Google OAuth access token
+    re.compile(r"1//[0-9A-Za-z_\-]{20,}"),  # Google OAuth refresh token
     re.compile(r"(?i)(api[_-]?key|authorization|xi-api-key|bearer)([\"'=:\s]+)([A-Za-z0-9_\-\.]{12,})"),
 ]
 
@@ -42,9 +44,9 @@ def redact(text: str) -> str:
         val = os.environ.get(name)
         if val and len(val) >= 8:
             out = out.replace(val, f"<{name}>")
-    for rx in _SECRET_PATTERNS[:3]:
+    for rx in _SECRET_PATTERNS[:5]:
         out = rx.sub("<redacted>", out)
-    out = _SECRET_PATTERNS[3].sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", out)
+    out = _SECRET_PATTERNS[5].sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", out)
     return out
 
 

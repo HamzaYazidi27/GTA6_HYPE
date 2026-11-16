@@ -1,4 +1,4 @@
-"""Concrete LLM adapters: Claude Code CLI (subscription), Anthropic API, OpenAI API, Ollama."""
+"""Concrete LLM adapters: Ollama (local, free - the default), Claude Code CLI (subscription), Anthropic API, OpenAI API."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,7 @@ from typing import Any
 from ...app.core.errors import ConfigError, ProviderError
 from ...app.core.utils import which
 from .base import LLMProvider
+from .local import OllamaProvider
 
 
 class ClaudeCodeProvider(LLMProvider):
@@ -67,7 +68,7 @@ class ClaudeCodeProvider(LLMProvider):
         if payload.get("is_error") or payload.get("subtype") not in (None, "success"):
             raise ProviderError(
                 f"Claude Code CLI reported an error: {str(payload.get('result') or payload.get('subtype'))[:400]}",
-                hint="Check your subscription usage limits, or switch providers.llm.default in config.yaml.",
+                hint="Run `claude login`, or use the free local model: set providers.llm.default: ollama in config.yaml and run `python -m gta_factory setup`.",
             )
         return str(payload.get("result") or "")
 
@@ -148,33 +149,9 @@ class OpenAIProvider(LLMProvider):
         return resp.choices[0].message.content or ""
 
 
-class OllamaProvider(LLMProvider):
-    """Fully local generation through an Ollama server (good fit for Apple Silicon)."""
-
-    name = "ollama"
-
-    def complete(self, system: str, prompt: str, *, max_tokens: int = 8000) -> str:
-        import httpx
-
-        host = (self.config.get("host") or "http://localhost:11434").rstrip("/")
-        body = {
-            "model": self.config.get("model") or "llama3.3",
-            "stream": False,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            "options": {"num_predict": max_tokens, "num_ctx": int(self.config.get("context_tokens") or 32768), "temperature": 0.6},
-        }
-        try:
-            r = httpx.post(f"{host}/api/chat", json=body, timeout=1800)
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"Could not reach Ollama at {host}.", hint="Start it with `ollama serve` and pull the model with `ollama pull <model>`.") from exc
-        if r.status_code != 200:
-            raise ProviderError(f"Ollama error {r.status_code}: {r.text[:300]}")
-        return (r.json().get("message") or {}).get("content", "")
-
-
 REGISTRY: dict[str, type[LLMProvider]] = {
+    "ollama": OllamaProvider,
     "claude_code": ClaudeCodeProvider,
     "anthropic": AnthropicProvider,
     "openai": OpenAIProvider,
-    "ollama": OllamaProvider,
 }

@@ -28,13 +28,25 @@ _rights.VOICE_LICENSES["fake"] = ("Synthetic test tone", True, "approved")
 RENDER = os.environ.get("GTA_FACTORY_RENDER_TESTS") == "1"
 
 
+@pytest.fixture(scope="session")
+def audio_assets(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The original music beds and SFX: the repo's own if `setup` already ran, else synthesised once per session."""
+    from gta_factory.modules.asset_management.audio_library import build_library, library_ready
+
+    if not library_ready(REPO / "assets"):
+        return REPO / "assets"
+    assets = tmp_path_factory.mktemp("audio_assets")
+    build_library(assets, log=lambda _m: None)
+    return assets
+
+
 @pytest.fixture()
-def project(tmp_path: Path):
+def project(tmp_path: Path, audio_assets: Path):
     """A throw-away project root wired to the offline fakes."""
     root = tmp_path / "proj"
     root.mkdir()
     for sub in ("music", "sound_effects"):
-        src = REPO / "assets" / sub
+        src = audio_assets / sub
         dst = root / "assets" / sub
         dst.mkdir(parents=True)
         for f in src.glob("*.wav"):

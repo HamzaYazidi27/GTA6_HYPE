@@ -573,7 +573,11 @@ Job `{job_id}` - format **{fmt}** - durée **{duration}** - contrôle qualité *
 - [ ] Relire `fact_check_report.md` : rien de présenté comme CONFIRMÉ qui ne le soit pas
 - [ ] Choisir la miniature et le titre ({n_titles} propositions dans `metadata.json`)
 - [ ] Vérifier les points du contrôle qualité ci-dessous
-- [ ] Téléverser en **privé**, ajouter les sous-titres, puis publier
+
+## Publier
+`python -m gta_factory publish {job_id}` envoie la vidéo **en privé** avec la miniature, les sous-titres et la playlist
+(`--title N`, `--thumbnail N`, `--publish-at 2026-11-20T18:00` pour programmer, `--dry-run` pour voir ce qui serait envoyé).
+Vérifie ensuite dans YouTube Studio, passe-la en public, et épingle le commentaire proposé dans `metadata.json`.
 
 ## Points du contrôle qualité à regarder
 {qc_points}

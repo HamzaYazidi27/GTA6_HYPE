@@ -211,6 +211,10 @@ class Database:
         out = [_row(r) for r in rows]
         return [s for s in out if s and s["job_id"] != exclude_job]
 
+    def mark_story_published(self, job_id: str, video_id: str) -> None:
+        with self.connect() as con:
+            con.execute("UPDATE stories SET published=1 WHERE job_id=?", (job_id,))
+
     # -------------------------------------------------------------- articles
     def remember_article(self, *, url: str, job_id: str, publisher: str, title: str, published_at: str | None, content_hash: str) -> dict[str, Any] | None:
         """Record an article. Returns the earlier record when the URL was already processed by another job."""

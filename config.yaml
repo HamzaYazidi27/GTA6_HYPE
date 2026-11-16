@@ -13,9 +13,18 @@ channel:
 # ---------------------------------------------------------------------------
 providers:
   llm:
-    # claude_code = your Claude subscription through the official Claude Code CLI (`claude -p`).
-    # anthropic / openai = API keys from .env.  ollama = fully local model.
-    default: "claude_code"
+    # ollama      = FREE, 100 % local open-weight model (no account, no key, no subscription). Default.
+    # claude_code = optional: a Claude subscription through the Claude Code CLI (`claude -p`).
+    # anthropic / openai = optional: paid API keys from .env.
+    default: "ollama"
+    ollama:
+      host: "http://127.0.0.1:11434"
+      model: "auto"                 # auto = best model for this machine's RAM (qwen3:32b / 30b / 14b / 8b / 4b); or any tag from ollama.com/library
+      context_tokens: 32768         # upper bound; each request uses the smallest window that fits
+      temperature: 0.5
+      think: false                  # true = let hybrid "thinking" models reason first (slower, sometimes better)
+      keep_alive: "15m"             # keep the model in memory between the steps of a job
+      timeout_seconds: 900          # max wait between two streamed tokens
     claude_code:
       binary: "claude"
       model: ""                     # empty = the CLI's default model
@@ -28,10 +37,6 @@ providers:
       model: "gpt-5"
       base_url: ""                  # set for OpenAI-compatible gateways
       max_tokens: 16000
-    ollama:
-      host: "http://localhost:11434"
-      model: "llama3.3"
-      context_tokens: 32768
   tts:
     default: "kokoro"
     kokoro:
@@ -192,9 +197,16 @@ quality_control:
 
 youtube:
   upload_enabled: false            # stays false until you opt in; the package is always produced for human review first
-  default_privacy: "private"
+  default_privacy: "private"       # private | unlisted | public (publish --publish-at always uploads private + scheduled)
   category_id: "20"                # Gaming
   made_for_kids: false
+  contains_synthetic_media: false  # YouTube's "altered or synthetic content" flag (realistic people/events); review it
+  notify_subscribers: true
+  upload_captions: true
+  captions_name: "Subtitles"
+  add_to_playlist: true            # adds the video to "<playlist_prefix> <format>" (created if missing)
+  client_secrets_file: ""          # OAuth "Desktop app" client JSON, or YOUTUBE_CLIENT_SECRETS_FILE in .env
+  token_file: ".secrets/youtube_token.json"
 
 dashboard:
   host: "127.0.0.1"

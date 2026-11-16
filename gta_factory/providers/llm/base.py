@@ -64,6 +64,9 @@ def extract_json(text: str) -> Any:
 
 class LLMProvider(ABC):
     name = "base"
+    # providers that can force syntactically valid JSON (e.g. Ollama's ``format: json``) set this and
+    # accept a ``json_mode`` keyword in :meth:`complete`
+    supports_json_mode = False
 
     def __init__(self, config: dict[str, Any]):
         self.config = config or {}
@@ -80,9 +83,12 @@ class LLMProvider(ABC):
         """Raise :class:`ProviderError` when the provider cannot be used (missing key, binary ...)."""
 
     # ------------------------------------------------------------------ helpers
-    def _timed(self, system: str, prompt: str, max_tokens: int, label: str) -> str:
+    def _timed(self, system: str, prompt: str, max_tokens: int, label: str, *, json_mode: bool = False) -> str:
         t0 = time.time()
-        out = self.complete(system, prompt, max_tokens=max_tokens)
+        if json_mode and self.supports_json_mode:
+            out = self.complete(system, prompt, max_tokens=max_tokens, json_mode=True)  # type: ignore[call-arg]
+        else:
+            out = self.complete(system, prompt, max_tokens=max_tokens)
         dt = time.time() - t0
         self.usage.calls += 1
         self.usage.seconds += dt
@@ -113,9 +119,14 @@ class LLMProvider(ABC):
         attempt_prompt = prompt
         last_error = ""
         for attempt in range(retries + 1):
-            raw = self._timed(sys_prompt, attempt_prompt, max_tokens, f"{label}#{attempt + 1}")
+            raw = self._timed(sys_prompt, attempt_prompt, max_tokens, f"{label}#{attempt + 1}", json_mode=True)
             try:
                 data = extract_json(raw)
+                if validate and isinstance(data, dict) and validate(data):
+                    # JSON mode makes some models wrap a requested top-level list in an object
+                    lists = [v for v in data.values() if isinstance(v, list)]
+                    if len(data) == 1 and len(lists) == 1 and not validate(lists[0]):
+                        data = lists[0]
                 if required_keys and isinstance(data, dict):
                     missing = [k for k in required_keys if k not in data]
                     if missing:
