@@ -1,0 +1,16 @@
+# Verified background timeline (operator-maintained).
+#
+# The fact checker uses these events to spot old news ("this was already public
+# months ago") and the writer may use them as context. Only add events you have
+# checked against an official source, and name that source.
+#
+# The pipeline also learns on its own: every CONFIRMED, high-confidence claim
+# with a date from a finished video is appended to knowledge/auto_timeline.json.
+#
+# Format:
+# events:
+#   - date: "2026-01-31"          # ISO date (YYYY-MM-DD)
+#     event: "What happened, in one factual sentence."
+#     source: "Rockstar Games newswire"
+
+events: []

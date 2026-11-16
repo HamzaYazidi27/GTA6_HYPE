@@ -1,0 +1,106 @@
+# GTA6_HYPE — usine à vidéos d'actualité GTA 6 vérifiées
+
+Tu donnes l'URL d'un article sur GTA 6. L'usine produit un **paquet prêt à relire** : la vidéo MP4 (format long 16:9 ou Short 9:16), trois miniatures, les sous-titres, le titre, la description avec chapitres et sources, le script et un rapport de fact-check.
+
+Chaîne : **NEON DISPATCH**, « GTA 6 news, verified. » Chaque affirmation à l'écran porte son statut : CONFIRMED, REPORTED, RUMOR ou SPECULATION.
+
+Coût par défaut : **0 $**. Le LLM passe par ton abonnement Claude (CLI `claude`), la voix (Kokoro) et l'alignement des sous-titres (Whisper) tournent en local, et la musique et les effets sont synthétisés par le projet.
+
+## Installation (une fois)
+
+Prérequis : macOS ou Linux, Python 3.11+, Node 18+, ffmpeg (`brew install ffmpeg node`), et le CLI Claude Code connecté (`claude login`).
+
+```bash
+cd ~/GTA6_HYPE
+uv venv && uv pip install -e ".[align,dev]"   # ou : python -m venv .venv && .venv/bin/pip install -e ".[align,dev]"
+source .venv/bin/activate
+python -m gta_factory setup     # npm install, modèle de voix Kokoro (~350 Mo), musiques et effets originaux
+python -m gta_factory doctor --ping
+```
+
+## Utilisation
+
+```bash
+# une vidéo longue à partir d'un ou plusieurs articles sur LA MÊME histoire
+python -m gta_factory new https://www.ign.com/articles/... 
+
+# un Short
+python -m gta_factory new https://... --format short
+
+# relire le script avant de lancer la voix et le rendu
+python -m gta_factory new https://... --until script
+python -m gta_factory rewrite <job> hook "plus court, commence par la date"
+python -m gta_factory resume <job> --from scenes
+
+# article payant ou bloqué : colle le texte dans un fichier
+python -m gta_factory new https://site/article --text-file https://site/article=~/article.txt
+
+python -m gta_factory list            # derniers jobs
+python -m gta_factory status <job>    # étapes, erreurs, chemin du paquet
+python -m gta_factory log <job> -f    # suivre le journal
+python -m gta_factory dashboard       # interface web : http://127.0.0.1:8600
+```
+
+Formats : `long` (~8 min), `breaking` (~4 min), `announcement`, `recap`, `analysis`, `guide` (~8-9 min), `short` (45 s).
+
+## Les 16 étapes
+
+| # | Étape | Ce qu'elle fait |
+|---|---|---|
+| 1 | extract | Récupère et nettoie les articles (trafilatura, JSON-LD) |
+| 2 | analyze | Extrait les affirmations, chaque preuve est vérifiée **mot pour mot** dans l'article |
+| 3 | corroborate | Cherche d'autres sources (flux RSS des médias, Bing/Google News RSS) |
+| 4 | fact_check | Classe chaque affirmation par **règles fixes** selon le niveau des sources (le LLM ne peut pas transformer une rumeur en fait) |
+| 5 | select | **Score de nouveauté** (0-100), détection des doublons avec les vidéos passées, choix d'un angle original |
+| 6 | script | Écriture pour l'oral + contrôle automatique + audit par un « rédacteur en chef » + une révision |
+| 7 | scenes | Storyboard : 16 modèles animés (stat, timeline, carte fact-check, citation…), la narration ne peut pas être modifiée |
+| 8 | rights | Validation des droits de chaque visuel et son |
+| 9 | voice | Voix scène par scène (avec cache : modifier une scène ne regénère qu'elle) |
+| 10 | timeline | Placement à l'image près, sous-titres mot à mot (Whisper), SRT/VTT |
+| 11 | render | Rendu Remotion par morceaux (avec cache par morceau) |
+| 12 | mix | Voix + musique avec ducking + effets, −14 LUFS, limiteur, encodage H.264/AAC |
+| 13 | thumbnail | 3 miniatures (bandeau + tampon, chiffre géant, split), texte contrôlé |
+| 14 | metadata | Titres, description (bilan confirmé/rapporté/rumeur, chapitres, sources, crédits), tags |
+| 15 | qc | Contrôle du MP4 final : noir, image figée, silence, loudness, crêtes, synchro, sous-titres, script, droits |
+| 16 | package | Copie dans `outputs/<job>/` + `REVIEW.md` (checklist avant publication) + mémoire des histoires |
+
+Un job qui échoue garde tout ce qui a été fait. `resume <job>` reprend à l'étape en échec, `resume <job> --from <étape>` refait à partir d'une étape.
+
+Si l'histoire a déjà été traitée ou si son score de nouveauté est trop bas, le job s'**arrête volontairement** (statut `stopped`). `resume <job> --force` produit quand même.
+
+## Ce que contient `outputs/<job>/`
+
+`<titre>.mp4`, `thumbnails/`, `captions.srt` / `.vtt`, `description.txt`, `metadata.json` (3 titres proposés, tags, chapitres, corps prêt pour l'API YouTube), `script.md`, `fact_check_report.md`, `sources.json`, `rights_review.json`, `qc_report.json`, et `REVIEW.md`.
+
+Si un point **critique** du contrôle qualité échoue (droits non validés, affirmation non sourcée restée dans le script, crête audio, désynchro…), le job finit en `needs_review` au lieu de `completed`.
+
+## Droits et règles éditoriales
+
+- Pas d'images du jeu, de logos ni de vidéos tierces. Tous les visuels sont dessinés en code, et la musique et les effets sont synthétisés (aucun sample), donc pas de Content ID.
+- Photos d'ambiance (optionnel) : Pexels/Pixabay si une clé est dans `.env`, ou tes propres images dans `assets/licensed_visuals/` **avec** un fichier `<image>.license.json` (exemple dans `gta_factory/modules/asset_management/rights.py`). Sans licence documentée, la scène redevient de la typographie animée.
+- Mode `rights_review.mode: strict` par défaut : le matériel presse officiel est refusé. En mode `editorial`, il est accepté mais marqué « revue humaine ».
+- Les mots « leak », « leaked », « datamine » et « reupload » bloquent un visuel.
+- Le script n'utilise que les faits vérifiés. Les citations sont vérifiées mot pour mot, et « confirmed » ou « official » sont réservés aux affirmations confirmées.
+
+## Configuration
+
+Tout est dans `config.yaml` (valeurs par défaut : `gta_factory/app/config/defaults.yaml`). Les clés API vont dans `.env` (voir `.env.example`). Aucune n'est nécessaire avec la configuration par défaut.
+
+- LLM : `providers.llm.default` = `claude_code` (abonnement), `anthropic`, `openai` ou `ollama` (100 % local).
+- Voix : `providers.tts.default` = `kokoro` (local), `elevenlabs` ou `openai`. Liste des voix : `python -m gta_factory voices`. Prononciations : `gta_factory/modules/voice_generation/pronunciation.yaml`.
+- Musique : `audio.music_mood` = `pulse`, `tension` ou `drive`.
+- Chronologie vérifiée : `knowledge/timeline.yaml`. Elle sert à repérer les vieilles infos ; l'usine y ajoute toute seule les dates confirmées.
+- Upload YouTube : **désactivé** (`youtube.upload_enabled: false`). L'upload n'est pas encore implémenté : tu téléverses le paquet toi-même, en privé d'abord.
+
+## Analyse des concurrents
+
+`python -m gta_factory competitors https://www.youtube.com/@Chaine` met à jour `reference_analysis/competitor_video_database.json` (métadonnées publiques uniquement, aucun téléchargement de vidéo).
+
+## Tests
+
+```bash
+python -m pytest -q                                  # rapide, hors ligne (LLM scripté, voix factice)
+GTA_FACTORY_RENDER_TESTS=1 python -m pytest -q       # + rendu Remotion complet, mixage, QC et paquet (~1 min)
+npm run typecheck                                    # templates Remotion
+npm run studio                                       # aperçu des templates dans Remotion Studio
+```

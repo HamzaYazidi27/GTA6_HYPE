@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NEON DISPATCH · usine vidéo GTA 6</title>
+<style>
+  :root { --ink:#06070E; --ink2:#0C0F1F; --panel:#12162E; --panel2:#1A2040; --line:rgba(255,255,255,.10); --paper:#F6F8FF; --mute:#9BA6CC;
+          --coral:#FF4D6D; --cyan:#2DE2E6; --sun:#FFD23F; --violet:#8A6BFF; --lime:#2EE59D; --amber:#FFAA2B; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ink); color:var(--paper); font:14px/1.45 Inter, -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  header { display:flex; align-items:center; gap:18px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--ink2); position:sticky; top:0; z-index:5; }
+  header h1 { margin:0; font:800 20px/1 "Barlow Condensed", "Arial Narrow", sans-serif; letter-spacing:.08em; }
+  header h1 span { color:var(--coral); }
+  .counts { color:var(--mute); font-size:12px; margin-left:auto; }
+  main { display:grid; grid-template-columns: 380px 1fr; min-height: calc(100vh - 52px); }
+  aside { border-right:1px solid var(--line); padding:16px; overflow:auto; max-height: calc(100vh - 52px); position:sticky; top:52px; }
+  section.detail { padding:18px 24px 60px; overflow:auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  .card h2 { margin:0 0 10px; font:700 13px/1 Inter, sans-serif; letter-spacing:.12em; text-transform:uppercase; color:var(--mute); }
+  textarea, input, select { width:100%; background:var(--ink2); color:var(--paper); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
+  textarea { resize:vertical; }
+  label.chk { display:flex; gap:8px; align-items:center; color:var(--mute); font-size:13px; margin:6px 0; }
+  label.chk input { width:auto; }
+  button { background:var(--coral); color:var(--ink); border:0; border-radius:8px; padding:8px 14px; font-weight:700; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--paper); border:1px solid var(--line); }
+  button.small { padding:4px 10px; font-size:12px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .job { padding:10px 12px; border-radius:10px; cursor:pointer; border:1px solid transparent; margin-bottom:6px; background:var(--ink2); }
+  .job:hover { border-color:var(--line); }
+  .job.active { border-color:var(--coral); }
+  .job .t { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .job .m { color:var(--mute); font-size:12px; display:flex; gap:8px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+  .s-completed { background:rgba(46,229,157,.15); color:var(--lime); }
+  .s-running, .s-queued { background:rgba(45,226,230,.15); color:var(--cyan); }
+  .s-failed { background:rgba(255,77,109,.15); color:var(--coral); }
+  .s-needs_review, .s-paused { background:rgba(255,170,43,.15); color:var(--amber); }
+  .s-stopped { background:rgba(155,166,204,.15); color:var(--mute); }
+  .v-confirmed { color:var(--lime); } .v-reported { color:var(--cyan); } .v-rumor { color:var(--amber); } .v-speculation { color:var(--violet); }
+  .bar { height:6px; background:var(--ink2); border-radius:99px; overflow:hidden; margin:8px 0 4px; }
+  .bar > div { height:100%; background:linear-gradient(90deg, var(--coral), var(--sun)); }
+  .steps { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
+  .step { background:var(--ink2); border-radius:8px; padding:6px 9px; font-size:12px; border-left:3px solid var(--line); }
+  .step.done { border-left-color:var(--lime); } .step.failed { border-left-color:var(--coral); } .step.running { border-left-color:var(--cyan); } .step.skipped { opacity:.5; }
+  .step .n { font-weight:600; } .step .d { color:var(--mute); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mute); font-weight:600; font-size:12px; }
+  .score { font:800 46px/1 "Barlow Condensed", sans-serif; color:var(--sun); }
+  .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  video { width:100%; border-radius:10px; background:#000; }
+  .thumbs { display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; }
+  .thumbs img { width:100%; border-radius:8px; border:1px solid var(--line); }
+  pre.log { background:var(--ink2); padding:10px; border-radius:8px; max-height:340px; overflow:auto; font:12px/1.5 "JetBrains Mono", Menlo, monospace; color:var(--mute); white-space:pre-wrap; }
+  .sec { margin-bottom:12px; } .sec .h { display:flex; justify-content:space-between; color:var(--mute); font-size:12px; margin-bottom:4px; }
+  .err { color:var(--coral); white-space:pre-wrap; }
+  .muted { color:var(--mute); }
+  .empty { color:var(--mute); text-align:center; padding:60px 0; }
+  .qc-critical { color:var(--coral); } .qc-warning { color:var(--amber); } .qc-pass { color:var(--lime); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { position:static; max-height:none; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header><h1>NEON <span>DISPATCH</span> · USINE GTA 6</h1><div class="counts" id="counts"></div></header>
+<main>
+  <aside>
+    <div class="card">
+      <h2>Nouvelle vidéo</h2>
+      <textarea id="urls" rows="3" placeholder="URL(s) d'article sur UNE histoire, une par ligne"></textarea>
+      <div class="row" style="margin-top:8px"><select id="format"></select></div>
+      <label class="chk"><input type="checkbox" id="opt-force"> Produire même si l'histoire est un doublon</label>
+      <label class="chk"><input type="checkbox" id="opt-nosearch"> Sans recherche de corroboration</label>
+      <label class="chk"><input type="checkbox" id="opt-nobroll"> Graphiques originaux uniquement (pas de photos)</label>
+      <div class="row" style="margin-top:8px"><button id="go">Lancer</button><span id="go-msg" class="muted"></span></div>
+    </div>
+    <div id="jobs"></div>
+  </aside>
+  <section class="detail" id="detail"><div class="empty">Choisis un job ou colle une URL d'article pour commencer.</div></section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') n.className = v; else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined && v !== false) n.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  return n;
+}
+async function api(method, path, body) {
+  const r = await fetch(path, {method, headers: {'Content-Type': 'application/json', 'X-Factory': '1'}, body: body ? JSON.stringify(body) : undefined});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((data.error || r.statusText) + (data.hint ? ' → ' + data.hint : ''));
+  return data;
+}
+const STATUS_FR = {completed:'terminé', running:'en cours', queued:'en attente', failed:'échec', needs_review:'à relire', paused:'en pause', stopped:'arrêté'};
+const STEP_FR = {extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
+const VERDICT_FR = {confirmed:'CONFIRMÉ', reported:'RAPPORTÉ', rumor:'RUMEUR', speculation:'SPÉCULATION'};
+let current = null, timer = null, formats = {};
+
+async function loadJobs() {
+  const data = await api('GET', '/api/jobs');
+  formats = data.formats;
+  const sel = $('#format');
+  if (!sel.options.length) for (const [k, v] of Object.entries(formats)) sel.append(el('option', {value: k}, v + ' (' + k + ')'));
+  const c = data.counts;
+  $('#counts').textContent = `${c.total || 0} jobs · ${c.completed || 0} terminés · ${c.running || 0} en cours · ${c.needs_review || 0} à relire`;
+  const box = $('#jobs'); box.replaceChildren();
+  for (const j of data.jobs) {
+    box.append(el('div', {class: 'job' + (j.id === current ? ' active' : ''), onclick: () => openJob(j.id)},
+      el('div', {class: 't'}, j.title || j.id),
+      el('div', {class: 'm'}, el('span', {class: 'pill s-' + j.status}, STATUS_FR[j.status] || j.status), el('span', {}, j.format), el('span', {}, (j.summary || {}).novelty_score != null ? 'nouveauté ' + j.summary.novelty_score : ''), el('span', {}, j.created_at.slice(0, 16).replace('T', ' ')))));
+  }
+}
+
+function stepsCard(d) {
+  const job = d.job;
+  const card = el('div', {class: 'card'}, el('h2', {}, 'Progression'));
+  card.append(el('div', {class: 'row'}, el('span', {class: 'pill s-' + job.status}, STATUS_FR[job.status] || job.status), el('span', {class: 'muted'}, job.current_step ? 'étape : ' + (STEP_FR[job.current_step] || job.current_step) : '')));
+  card.append(el('div', {class: 'bar'}, el('div', {style: `width:${Math.round((job.progress || 0) * 100)}%`})));
+  if (job.error) card.append(el('div', {class: 'err'}, job.error));
+  const grid = el('div', {class: 'steps', style: 'margin-top:10px'});
+  for (const s of d.steps) grid.append(el('div', {class: 'step ' + s.status}, el('div', {class: 'n'}, STEP_FR[s.name] || s.name), el('div', {class: 'd'}, s.status + (s.seconds ? ' · ' + Math.round(s.seconds) + 's' : ''))));
+  card.append(grid);
+  const sel = el('select', {style: 'width:auto'}, ...d.steps.map((s) => el('option', {value: s.name}, 'refaire depuis : ' + (STEP_FR[s.name] || s.name))));
+  const busy = job.status === 'running';
+  card.append(el('div', {class: 'row', style: 'margin-top:12px'},
+    el('button', {class: 'ghost small', disabled: busy, onclick: () => act(() => api('POST', `/api/jobs/${job.id}/resume`, {}))}, 'Reprendre'),
+    sel, el('button', {class: 'ghost small', disabled: busy, onclick: () => act(() => api('POST', `/api/jobs/${job.id}/resume`, {from_step: sel.value}))}, 'Refaire'),
+    job.status === 'stopped' ? el('button', {class: 'small', onclick: () => act(() => api('POST', `/api/jobs/${job.id}/resume`, {force: true}))}, 'Produire quand même') : null,
+    el('button', {class: 'ghost small', disabled: busy, onclick: () => { if (confirm('Supprimer ce job et ses fichiers ?')) act(async () => { await api('DELETE', `/api/jobs/${job.id}`); current = null; $('#detail').replaceChildren(el('div', {class: 'empty'}, 'Job supprimé.')); }); }}, 'Supprimer')));
+  return card;
+}
+
+function storyCard(st) {
+  if (!st) return null;
+  const card = el('div', {class: 'card'}, el('h2', {}, 'Score de nouveauté et angle'));
+  const rows = Object.entries(st.sub_scores || {}).map(([k, v]) => el('tr', {}, el('td', {}, k.replace(/_/g, ' ')), el('td', {}, String(v.score)), el('td', {class: 'muted'}, v.why)));
+  card.append(el('div', {class: 'row'}, el('div', {class: 'score'}, String(st.novelty_score)), el('div', {}, el('div', {}, st.decision), el('div', {class: 'muted'}, st.decision_reason))));
+  if (st.angle) card.append(el('p', {}, el('b', {}, 'Angle : '), st.angle.thesis || ''), el('p', {class: 'muted'}, st.angle.why_original || ''));
+  card.append(el('table', {}, el('tbody', {}, rows)));
+  return card;
+}
+
+function factCard(fc) {
+  if (!fc) return null;
+  return el('div', {class: 'card'}, el('h2', {}, `Fact-check (${fc.length} affirmations)`),
+    el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Statut'), el('th', {}, 'Affirmation'), el('th', {}, 'Source'))),
+      el('tbody', {}, fc.map((c) => el('tr', {}, el('td', {class: 'v-' + c.classification}, VERDICT_FR[c.classification] + ' · ' + c.confidence), el('td', {}, c.claim, c.note ? el('div', {class: 'muted'}, c.note) : null), el('td', {class: 'muted'}, c.original_publisher + (c.corroborating_sources.length ? ' +' + c.corroborating_sources.length : '')))))));
+}
+
+function scriptCard(d) {
+  const sc = d.script;
+  if (!sc) return null;
+  const card = el('div', {class: 'card'}, el('h2', {}, `Script · ${sc.word_budget.actual} mots · audit ${sc.quality.audit_verdict}`), el('p', {}, el('b', {}, sc.title)));
+  const areas = {};
+  for (const s of sc.sections) {
+    const ta = el('textarea', {rows: Math.max(2, Math.ceil(s.narration.length / 110))}); ta.value = s.narration; areas[s.id] = ta;
+    const instr = el('input', {placeholder: 'consigne pour réécrire cette section (ex. "plus court, commence par la date")'});
+    card.append(el('div', {class: 'sec'}, el('div', {class: 'h'}, el('span', {}, s.label + ' · ' + s.words + ' mots'), el('span', {}, (s.claim_ids || []).join(' '))), ta,
+      el('div', {class: 'row', style: 'margin-top:4px'}, instr, el('button', {class: 'ghost small', onclick: (e) => act(async () => { e.target.disabled = true; e.target.textContent = '…'; await api('POST', `/api/jobs/${d.job.id}/rewrite`, {section: s.id, instruction: instr.value}); })}, 'Réécrire (IA)'))));
+  }
+  card.append(el('div', {class: 'row'}, el('button', {onclick: () => act(() => api('PUT', `/api/jobs/${d.job.id}/script`, {sections: Object.entries(areas).map(([id, ta]) => ({id, narration: ta.value}))}))}, 'Enregistrer mes modifications'),
+    el('span', {class: 'muted'}, 'puis « refaire depuis : Storyboard » pour regénérer la vidéo')));
+  return card;
+}
+
+function packageCard(d) {
+  if (!d.video && !d.thumbnails.length && !d.metadata) return null;
+  const card = el('div', {class: 'card'}, el('h2', {}, 'Paquet de relecture'));
+  if (d.video) card.append(el('video', {src: d.video, controls: true, preload: 'metadata'}));
+  if (d.thumbnails.length) card.append(el('div', {class: 'thumbs', style: 'margin-top:10px'}, d.thumbnails.map((t) => el('a', {href: t, target: '_blank'}, el('img', {src: t + '?v=' + Date.now(), alt: 'miniature'})))));
+  if (d.metadata) {
+    card.append(el('p', {}, el('b', {}, d.metadata.title)));
+    card.append(el('div', {class: 'muted'}, 'Autres titres : ' + (d.metadata.title_options || []).join(' · ')));
+    card.append(el('pre', {class: 'log', style: 'margin-top:8px'}, d.metadata.description));
+  }
+  return card;
+}
+
+function qcCard(qc) {
+  if (!qc) return null;
+  return el('div', {class: 'card'}, el('h2', {}, 'Contrôle qualité : ' + qc.verdict.toUpperCase()),
+    el('table', {}, el('tbody', {}, qc.checks.filter((c) => c.severity !== 'info').map((c) => el('tr', {}, el('td', {class: c.passed ? 'qc-pass' : 'qc-' + c.severity}, c.passed ? '✓' : (c.severity === 'critical' ? '✗' : '!')), el('td', {}, c.id), el('td', {class: 'muted'}, c.detail))))));
+}
+
+async function openJob(id) {
+  current = id;
+  clearTimeout(timer);
+  let d;
+  try { d = await api('GET', '/api/jobs/' + id); } catch (e) { $('#detail').replaceChildren(el('div', {class: 'err'}, e.message)); return; }
+  const log = await api('GET', `/api/jobs/${id}/log?lines=120`).catch(() => ({lines: []}));
+  const view = el('div', {}, el('h2', {style: 'margin:0 0 14px;font:800 26px/1.1 "Barlow Condensed",sans-serif'}, d.job.title || id), stepsCard(d));
+  view.append(el('div', {class: 'grid2'}, el('div', {}, storyCard(d.story), factCard(d.fact_check)), el('div', {}, packageCard(d), qcCard(d.qc))));
+  const sc = scriptCard(d); if (sc) view.append(sc);
+  view.append(el('div', {class: 'card'}, el('h2', {}, 'Journal'), el('pre', {class: 'log'}, log.lines.join('\n'))));
+  const keepScroll = window.scrollY;
+  const focused = document.activeElement && document.activeElement.closest('#detail');
+  if (!(focused && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName))) { $('#detail').replaceChildren(view); window.scrollTo(0, keepScroll); }
+  loadJobs();
+  if (['running', 'queued'].includes(d.job.status)) timer = setTimeout(() => openJob(id), 2500);
+}
+
+async function act(fn) {
+  try { await fn(); } catch (e) { alert(e.message); }
+  if (current) setTimeout(() => openJob(current), 600); else loadJobs();
+}
+
+$('#go').addEventListener('click', () => act(async () => {
+  const urls = $('#urls').value.split(/\s+/).filter((u) => /^https?:\/\//.test(u));
+  if (!urls.length) throw new Error("Colle au moins une URL d'article (http…)");
+  const options = {};
+  if ($('#opt-force').checked) options.force = true;
+  if ($('#opt-nosearch').checked) options.no_search = true;
+  if ($('#opt-nobroll').checked) options.allow_broll = false;
+  const r = await api('POST', '/api/jobs', {urls, format: $('#format').value, options});
+  $('#urls').value = ''; $('#go-msg').textContent = 'job lancé';
+  current = r.id;
+}));
+loadJobs().then(() => { const first = document.querySelector('.job'); if (first) first.click(); });
+setInterval(() => { if (!current) loadJobs(); }, 8000);
+</script>
+</body>
+</html>

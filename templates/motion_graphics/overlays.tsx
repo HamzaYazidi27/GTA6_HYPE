@@ -116,7 +116,8 @@ export const Captions: React.FC<{phrases: Phrase[]; accent: string; emphasis?: s
           display: 'flex',
           flexWrap: 'wrap',
           justifyContent: 'center',
-          gap: `${size * 0.08}px ${size * 0.26}px`,
+          // the column gap must stay wider than the active word's scale-up, or long words touch their neighbours
+          gap: `${size * 0.08}px ${size * (vertical ? 0.36 : 0.3)}px`,
           padding: vertical ? 0 : `${12 * u}px ${28 * u}px ${14 * u}px`,
           borderRadius: 18 * u,
           background: vertical ? 'transparent' : hexA(C.ink, 0.78),
@@ -141,7 +142,8 @@ export const Captions: React.FC<{phrases: Phrase[]; accent: string; emphasis?: s
               key={i}
               style={{
                 color,
-                transform: active ? `translateY(${-3 * u}px) scale(${vertical ? 1.12 : 1.04})` : 'none',
+                transform: active ? `translateY(${-3 * u}px) scale(${vertical ? 1.06 : 1.03})` : 'none',
+                transformOrigin: 'center bottom',
                 display: 'inline-block',
                 textShadow: vertical ? `0 ${5 * u}px 0 ${C.ink}, 0 0 ${26 * u}px rgba(0,0,0,0.9), ${3 * u}px ${3 * u}px 0 ${C.ink}, ${-3 * u}px ${-3 * u}px 0 ${C.ink}, ${3 * u}px ${-3 * u}px 0 ${C.ink}, ${-3 * u}px ${3 * u}px 0 ${C.ink}` : 'none',
               }}

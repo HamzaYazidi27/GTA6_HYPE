@@ -1,0 +1,320 @@
+"""Local dashboard: start jobs, follow progress, read the fact-check, edit the script, review the package.
+
+Standard library only (``http.server``). It binds to 127.0.0.1 by default and
+protects every state-changing request:
+
+* the ``Host`` header must be a loopback name (blocks DNS-rebinding pages),
+* mutating requests need the ``X-Factory: 1`` header, which a foreign web page
+  cannot send without a CORS preflight this server never answers.
+
+Jobs run in a separate ``python -m gta_factory resume`` process, so a long
+render never blocks the dashboard and survives a browser refresh.
+"""
+from __future__ import annotations
+
+import json
+import mimetypes
+import re
+import subprocess
+import sys
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
+
+from ..core.errors import FactoryError
+from ..core.utils import read_json, write_json
+from ..database.db import get_db
+
+HERE = Path(__file__).parent
+JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-]{0,80}$")
+LOOPBACK = {"127.0.0.1", "localhost", "[::1]", "::1"}
+
+
+def spawn_runner(settings: Any, job_id: str, *, from_step: str | None = None, force: bool = False) -> None:
+    cmd = [sys.executable, "-m", "gta_factory", "resume", job_id]
+    if from_step:
+        cmd += ["--from", from_step]
+    if force:
+        cmd.append("--force")
+    out = open(settings.jobs_dir / job_id / "pipeline.out", "ab")
+    subprocess.Popen(cmd, cwd=str(settings.root), stdout=out, stderr=out, start_new_session=True)
+
+
+def job_payload(settings: Any, job_id: str) -> dict[str, Any] | None:
+    db = get_db(settings.db_path)
+    job = db.get_job(job_id)
+    if job is None:
+        return None
+    root = settings.jobs_dir / job_id
+    out_dir = settings.outputs_dir / job_id
+    story = read_json(root / "story" / "story.json")
+    metadata = read_json(root / "metadata" / "metadata.json")
+    video = next(iter(sorted(out_dir.glob("*.mp4"))), None) if out_dir.exists() else None
+    thumbs = sorted(p.name for p in (root / "thumbnails").glob("thumb_*.png")) if (root / "thumbnails").exists() else []
+    return {
+        "job": job,
+        "steps": db.get_steps(job_id),
+        "story": story and {k: story.get(k) for k in ("novelty_score", "sub_scores", "decision", "decision_reason", "angle", "angles", "similar_stories", "open_questions", "working_title")},
+        "fact_check": read_json(root / "research" / "fact_check.json"),
+        "script": read_json(root / "script" / "script.json"),
+        "scenes": read_json(root / "scenes" / "scene_breakdown.json"),
+        "qc": read_json(root / "qc" / "qc_report.json"),
+        "rights": read_json(root / "assets" / "rights_review.json"),
+        "metadata": metadata and {k: metadata.get(k) for k in ("title", "title_options", "description", "tags", "chapters", "pinned_comment")},
+        "video": f"/files/{job_id}/out/{video.name}" if video else None,
+        "thumbnails": [f"/files/{job_id}/job/thumbnails/{t}" for t in thumbs],
+        "review": (out_dir / "REVIEW.md").read_text(encoding="utf-8") if (out_dir / "REVIEW.md").exists() else None,
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "GTA6Factory/1.0"
+    settings: Any = None
+
+    # ------------------------------------------------------------------ plumbing
+    def log_message(self, fmt: str, *args: Any) -> None:  # quiet console
+        pass
+
+    allowed_hosts: frozenset[str] = frozenset(LOOPBACK)
+
+    def _host_ok(self) -> bool:
+        raw = self.headers.get("Host") or ""
+        host = raw.split("]")[0] + "]" if raw.startswith("[") else raw.rsplit(":", 1)[0]
+        return host in self.allowed_hosts
+
+    def _send(self, code: int, body: bytes, ctype: str, extra: dict[str, str] | None = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, data: Any, code: int = 200) -> None:
+        self._send(code, json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
+
+    def _error(self, code: int, message: str, hint: str = "") -> None:
+        self._json({"error": message, "hint": hint}, code)
+
+    def _body(self) -> dict[str, Any]:
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 2_000_000:
+            raise FactoryError("request too large")
+        raw = self.rfile.read(n) if n else b"{}"
+        try:
+            data = json.loads(raw or b"{}")
+        except json.JSONDecodeError as exc:
+            raise FactoryError("invalid JSON body") from exc
+        return data if isinstance(data, dict) else {}
+
+    def _guard(self, mutating: bool) -> bool:
+        if not self._host_ok():
+            self._error(HTTPStatus.FORBIDDEN, "Host not allowed")
+            return False
+        if mutating and self.headers.get("X-Factory") != "1":
+            self._error(HTTPStatus.FORBIDDEN, "missing X-Factory header")
+            return False
+        return True
+
+    # ------------------------------------------------------------------ files
+    def _serve_file(self, path: Path) -> None:
+        if not path.is_file():
+            self._error(HTTPStatus.NOT_FOUND, "file not found")
+            return
+        size = path.stat().st_size
+        ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        rng = self.headers.get("Range")
+        m = re.match(r"bytes=(\d*)-(\d*)$", rng or "")
+        if m and (m.group(1) or m.group(2)):
+            start = int(m.group(1)) if m.group(1) else max(0, size - int(m.group(2)))
+            end = int(m.group(2)) if m.group(1) and m.group(2) else size - 1
+            end = min(end, size - 1)
+            if start > end:
+                self._send(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, b"", ctype, {"Content-Range": f"bytes */{size}"})
+                return
+            self.send_response(HTTPStatus.PARTIAL_CONTENT)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            with path.open("rb") as fh:
+                fh.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = fh.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                    left -= len(chunk)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+        with path.open("rb") as fh:
+            while chunk := fh.read(1 << 20):
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+
+    def _file_route(self, parts: list[str]) -> None:
+        # /files/<job>/<out|job>/<relative path>
+        if len(parts) < 4 or not JOB_ID.match(parts[1]) or parts[2] not in ("out", "job"):
+            self._error(HTTPStatus.NOT_FOUND, "not found")
+            return
+        base = (self.settings.outputs_dir if parts[2] == "out" else self.settings.jobs_dir) / parts[1]
+        target = (base / "/".join(unquote(p) for p in parts[3:])).resolve()
+        if not str(target).startswith(str(base.resolve()) + "/"):
+            self._error(HTTPStatus.FORBIDDEN, "outside the job folder")
+            return
+        self._serve_file(target)
+
+    # ------------------------------------------------------------------ routes
+    def do_HEAD(self) -> None:
+        self.do_GET()
+
+    def do_GET(self) -> None:
+        if not self._guard(False):
+            return
+        url = urlparse(self.path)
+        parts = [p for p in url.path.split("/") if p]
+        s = self.settings
+        try:
+            if not parts:
+                self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8", {"Content-Security-Policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"})
+            elif parts == ["api", "jobs"]:
+                db = get_db(s.db_path)
+                self._json({"jobs": db.list_jobs(200), "counts": db.job_counts(), "formats": {k: v.get("label") for k, v in (s.get("formats") or {}).items()}})
+            elif len(parts) == 3 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]):
+                payload = job_payload(s, parts[2])
+                self._json(payload) if payload else self._error(404, "unknown job")
+            elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "log" and JOB_ID.match(parts[2]):
+                n = int((parse_qs(url.query).get("lines") or ["200"])[0])
+                path = s.jobs_dir / parts[2] / "pipeline.log"
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-min(n, 2000) :] if path.exists() else []
+                self._json({"lines": lines})
+            elif parts[0] == "files":
+                self._file_route(parts)
+            else:
+                self._error(404, "not found")
+        except FactoryError as exc:
+            self._error(400, exc.message, exc.hint)
+
+    def do_POST(self) -> None:
+        if not self._guard(True):
+            return
+        parts = [p for p in urlparse(self.path).path.split("/") if p]
+        s = self.settings
+        try:
+            body = self._body()
+            if parts == ["api", "jobs"]:
+                from ..core.pipeline import create_job
+
+                urls = [u for u in (body.get("urls") or []) if isinstance(u, str) and re.match(r"^https?://", u.strip())]
+                if not urls:
+                    raise FactoryError("Give at least one http(s) article URL.")
+                options = {k: v for k, v in (body.get("options") or {}).items() if k in ("force", "no_search", "audit", "whisper", "allow_broll", "target_seconds", "voice", "today")}
+                job_id = create_job(s, urls, fmt=str(body.get("format") or "long"), options=options)
+                spawn_runner(s, job_id)
+                self._json({"id": job_id}, 201)
+            elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "resume":
+                from ..core.pipeline import STEP_NAMES
+
+                step = body.get("from_step")
+                if step and step not in STEP_NAMES:
+                    raise FactoryError(f"unknown step '{step}'")
+                spawn_runner(s, parts[2], from_step=step, force=bool(body.get("force")))
+                self._json({"ok": True})
+            elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "rewrite":
+                from ...modules.script_generation.writer import render_script_markdown, rewrite_section
+                from ...providers.llm import get_llm
+
+                root = s.jobs_dir / parts[2]
+                script = read_json(root / "script" / "script.json")
+                if not script:
+                    raise FactoryError("This job has no script yet.")
+                fc = read_json(root / "research" / "fact_check.json", [])
+                quotes = (read_json(root / "research" / "analysis.json", {}) or {}).get("quotes") or []
+                script = rewrite_section(get_llm(s), script=script, section_id=str(body.get("section")), instruction=str(body.get("instruction") or ""), fact_check=fc, quotes=quotes)
+                write_json(root / "script" / "script.json", script)
+                (root / "script" / "script.md").write_text(render_script_markdown(script, read_json(root / "story" / "story.json", {}), fc), encoding="utf-8")
+                self._json({"script": script})
+            else:
+                self._error(404, "not found")
+        except FactoryError as exc:
+            self._error(400, exc.message, exc.hint)
+        except KeyError as exc:
+            self._error(400, str(exc))
+
+    def do_PUT(self) -> None:
+        if not self._guard(True):
+            return
+        parts = [p for p in urlparse(self.path).path.split("/") if p]
+        s = self.settings
+        try:
+            if len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "script":
+                from ...modules.script_generation.writer import render_script_markdown, word_count
+
+                root = s.jobs_dir / parts[2]
+                script = read_json(root / "script" / "script.json")
+                if not script:
+                    raise FactoryError("This job has no script yet.")
+                edits = {e.get("id"): e.get("narration") for e in self._body().get("sections") or [] if isinstance(e, dict)}
+                for sec in script["sections"]:
+                    if isinstance(edits.get(sec["id"]), str) and edits[sec["id"]].strip():
+                        sec["narration"] = re.sub(r"\s+", " ", edits[sec["id"]]).strip()
+                        sec["words"] = word_count(sec["narration"])
+                        sec["edited_by_operator"] = True
+                script["word_budget"]["actual"] = sum(x["words"] for x in script["sections"])
+                write_json(root / "script" / "script.json", script)
+                fc = read_json(root / "research" / "fact_check.json", [])
+                (root / "script" / "script.md").write_text(render_script_markdown(script, read_json(root / "story" / "story.json", {}), fc), encoding="utf-8")
+                self._json({"script": script})
+            else:
+                self._error(404, "not found")
+        except FactoryError as exc:
+            self._error(400, exc.message, exc.hint)
+
+    def do_DELETE(self) -> None:
+        if not self._guard(True):
+            return
+        parts = [p for p in urlparse(self.path).path.split("/") if p]
+        if len(parts) == 3 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]):
+            from ..core.pipeline import delete_job
+
+            delete_job(self.settings, parts[2])
+            self._json({"ok": True})
+        else:
+            self._error(404, "not found")
+
+
+def make_server(settings: Any, host: str = "127.0.0.1", port: int = 8600) -> ThreadingHTTPServer:
+    allowed = set(LOOPBACK) | ({host} if host not in ("0.0.0.0", "", "::") else set())
+    handler = type("BoundHandler", (Handler,), {"settings": settings, "allowed_hosts": frozenset(allowed)})
+    return ThreadingHTTPServer((host, port), handler)
+
+
+def serve(settings: Any, host: str = "127.0.0.1", port: int = 8600) -> None:
+    httpd = make_server(settings, host, port)
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"warning: the dashboard is listening on {host}; anyone on that network can start jobs.")
+    print(f"dashboard: http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}  (Ctrl+C to stop)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()

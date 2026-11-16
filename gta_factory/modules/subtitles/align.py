@@ -173,7 +173,9 @@ def build_captions(words: list[dict[str, Any]], *, max_chars: int = 42, max_line
         ends_sentence = bool(re.search(r"[.!?][\"'”’]?$", w["w"]))
         ends_clause = bool(re.search(r"[,;:]$", w["w"]))
         length = len(" ".join(x["w"] for x in cur))
-        if ends_sentence or (ends_clause and length > max_chars * 0.75):
+        # "November 19, 2026" and "1,200" read as one unit: never split before a number
+        next_is_number = i + 1 < len(words) and bool(re.match(r"^\d", words[i + 1]["w"]))
+        if ends_sentence or (ends_clause and length > max_chars * 0.75 and not next_is_number):
             flush()
     flush()
     # timing polish: minimum display time, never overlap the next cue
@@ -199,6 +201,8 @@ def wrap_lines(text: str, max_chars: int, max_lines: int) -> str:
         if len(a) > max_chars or len(b) > max_chars:
             continue
         cost = abs(len(a) - len(b)) + (4 if words[i - 1][-1:] not in ",;:.!?" else 0)
+        if re.match(r"^\d", words[i]):  # keep "PlayStation 5", "December 4" together
+            cost += 12
         if cost < best_cost:
             best, best_cost = a + "\n" + b, cost
     if best_cost == float("inf"):

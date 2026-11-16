@@ -182,7 +182,9 @@ def select_story(
     if history["matches"]:
         for idx in history["matches"][0]["matched_claim_indexes"]:
             cid = fact_check[idx]["id"]
-            if cid not in covered_ids and cid not in new_ids:
+            if cid in new_ids:
+                new_ids.remove(cid)
+            if cid not in covered_ids:
                 covered_ids.append(cid)
     not_covered = int(round(100 * (1 - sim)))
     sub = {
