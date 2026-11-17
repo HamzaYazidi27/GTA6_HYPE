@@ -7,6 +7,7 @@
     list | status JOB | log JOB | delete JOB
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
     voices                     list the voices of the TTS provider
+    footage fetch|add|stills|list   real GTA 6 footage library (official trailers + screenshots)
     competitors CHANNEL_URL    refresh the competitor reference database
     youtube auth|whoami|logout|status JOB    connect the channel (OAuth, one time)
     publish JOB                upload a reviewed package (private by default, resumable)
@@ -130,6 +131,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     stock = [p.name for p in get_stock_providers(s)]
     rows.append((True, "stock b-roll", ", ".join(stock) if stock else "off (no PEXELS/PIXABAY key; scenes use original graphics)"))
     rows.append((True, "rights mode", str(s.get("rights_review.mode"))))
+    try:
+        from ...modules.footage.library import build_index, library_summary
+
+        fs = library_summary(build_index(s)) if s.get("footage.enabled", True) else None
+        rows.append((True, "GTA 6 footage", "off (footage.enabled: false)" if fs is None else (f"{fs['videos']} trailer(s), {fs['usable_shots']} shots, {fs['photos']} photo(s) - ~{float(s.get('footage.ratio', 0.8)):.0%} of each video" if fs["usable_shots"] or fs["photos"] else "empty: run `python -m gta_factory footage fetch` for real trailer footage")))
+    except FactoryError as exc:
+        rows.append((True, "GTA 6 footage", f"not indexed ({exc.message})"))
     paid = [x for x, on in (("Claude subscription", s.get("providers.llm.default") == "claude_code"), ("Anthropic API", s.get("providers.llm.default") == "anthropic"), ("OpenAI API", s.get("providers.llm.default") == "openai" or s.get("providers.tts.default") == "openai"), ("ElevenLabs", s.get("providers.tts.default") == "elevenlabs")) if on]
     rows.append((True, "cost", "0 $ - everything runs locally, no account or subscription" if not paid else "uses " + ", ".join(paid)))
     rows.append((True, "youtube upload", "enabled" if s.get("youtube.upload_enabled") else "off (packages are produced for review)"))
@@ -307,6 +315,40 @@ def cmd_voices(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_footage(args: argparse.Namespace) -> int:
+    from ...modules.footage import library as lib
+
+    s = get_settings()
+    if args.action == "fetch":
+        lib.fetch(s, args.paths or None, max_height=args.max_height, log=_print)
+        if not args.no_stills:
+            lib.extract_stills(s, per_video=args.stills, log=_print)
+    elif args.action == "add":
+        if not args.paths:
+            _print("usage: footage add FILE_OR_FOLDER [...] [--tags lucia,beach]")
+            return 2
+        lib.add_files(s, [Path(p).expanduser() for p in args.paths], tags=[t.strip() for t in (args.tags or "").split(",") if t.strip()], credit=args.credit or "", log=_print)
+    elif args.action == "stills":
+        lib.extract_stills(s, per_video=args.stills, log=_print)
+    index = lib.build_index(s, force=args.reindex, log=_print)
+    summ = lib.library_summary(index)
+    _print(f"\nGTA 6 footage library: {lib.footage_dir(s)}")
+    for v in index["videos"]:
+        ok = [x for x in v["shots"] if x.get("ok")]
+        _print(f"  video  {v['file']}  {v['duration']:.0f}s  {len(ok)} usable shots  tags: {', '.join(v['tags']) or '-'}")
+    if index["photos"]:
+        _print(f"  photos {len(index['photos'])} ({', '.join(p['file'] for p in index['photos'][:4])}{' ...' if len(index['photos']) > 4 else ''})")
+    for sk in summ["skipped"]:
+        _print(f"  skipped {sk['file']}: {sk['reason']}")
+    _print(f"total: {summ['videos']} video(s), {summ['usable_shots']} usable shots ({summ['usable_seconds']:.0f}s), {summ['photos']} photo(s)")
+    ratio = float(s.get("footage.ratio", 0.8))
+    if not summ["usable_shots"] and not summ["photos"]:
+        _print("the library is empty: run `python -m gta_factory footage fetch` (official trailers) or `footage add <folder>`")
+    else:
+        _print(f"new videos will show real footage on ~{ratio:.0%} of the running time (footage.ratio in config.yaml)")
+    return 0
+
+
 def cmd_competitors(args: argparse.Namespace) -> int:
     from ...modules.competitor_analysis.analyze import run
     from ...modules.competitor_analysis.collect import collect_channel
@@ -471,6 +513,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("voices", help="list available voices")
     sp.add_argument("--provider", help="kokoro | elevenlabs | openai")
     sp.set_defaults(fn=cmd_voices)
+
+    sp = sub.add_parser("footage", help="real GTA 6 footage: fetch official trailers, add screenshots, list the library")
+    sp.add_argument("action", choices=("fetch", "add", "stills", "list"), nargs="?", default="list")
+    sp.add_argument("paths", nargs="*", help="fetch: video URLs (default: footage.sources); add: files or folders")
+    sp.add_argument("--tags", help="add: comma-separated tags for the added files (e.g. lucia,beach)")
+    sp.add_argument("--credit", help="add: on-screen credit (default: footage.credit)")
+    sp.add_argument("--max-height", type=int, default=1080, help="fetch: max video height (default 1080)")
+    sp.add_argument("--stills", type=int, default=12, help="stills per trailer pulled into photos/ (default 12)")
+    sp.add_argument("--no-stills", action="store_true", help="fetch: do not pull stills from the trailers")
+    sp.add_argument("--reindex", action="store_true", help="re-detect the shots of every video")
+    sp.set_defaults(fn=cmd_footage)
 
     sp = sub.add_parser("competitors", help="refresh the competitor reference database from public channel metadata")
     sp.add_argument("channel_url", help="e.g. https://www.youtube.com/@SomeChannel")

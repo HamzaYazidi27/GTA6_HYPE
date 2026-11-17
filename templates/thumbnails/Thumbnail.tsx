@@ -9,7 +9,7 @@
  * a verification stamp instead of shock faces or arrows. No third-party artwork.
  */
 import React from 'react';
-import {AbsoluteFill, staticFile} from 'remotion';
+import {AbsoluteFill, Img, staticFile} from 'remotion';
 import {ensureFonts} from '../motion_graphics/fonts';
 import {BrandMark} from '../motion_graphics/overlays';
 import {C, F, STATUS, Status, hexA} from '../motion_graphics/theme';
@@ -27,7 +27,19 @@ export type ThumbProps = {
   brand: string;
   color: 'coral' | 'cyan' | 'sun' | 'violet' | 'lime';
   calendar: {month: string; day: string} | null;
+  /** optional real GTA 6 screenshot / trailer still (public path); replaces the drawn motif */
+  photo?: string | null;
 };
+
+/** Full-bleed real GTA 6 picture, graded into the channel palette. `side` keeps one side darker for the text. */
+const Photo: React.FC<{src: string; color: string; side: 'left' | 'right' | 'none'}> = ({src, color, side}) => (
+  <AbsoluteFill>
+    <Img src={src.startsWith('http') ? src : staticFile(src)} style={{width: '100%', height: '100%', objectFit: 'cover', filter: 'saturate(1.25) contrast(1.08)'}} />
+    <AbsoluteFill style={{background: `linear-gradient(160deg, ${hexA(color, 0.18)} 0%, transparent 40%, ${hexA(C.violet, 0.22)} 100%)`, mixBlendMode: 'screen'}} />
+    {side !== 'none' ? <AbsoluteFill style={{background: `linear-gradient(${side === 'left' ? 90 : 270}deg, ${hexA(C.ink, 0.92)} 0%, ${hexA(C.ink, 0.7)} 38%, transparent 70%)`}} /> : null}
+    <AbsoluteFill style={{background: `linear-gradient(180deg, transparent 55%, ${hexA(C.ink, 0.7)} 100%)`}} />
+  </AbsoluteFill>
+);
 
 const isHot = (word: string, accent: string) => accent.toUpperCase().split(/\s+/).filter(Boolean).includes(word.toUpperCase().replace(/[^A-Z0-9$%.]/g, ''));
 /** Solid outline built from stacked shadows (text-stroke would eat into the letterforms). */
@@ -183,10 +195,16 @@ export const Thumbnail: React.FC<ThumbProps> = (p) => {
     const size = Math.min(430, 1560 / Math.max(3, big.length));
     return (
       <Frame color={color} brand={p.brand}>
-        <AbsoluteFill style={{background: `radial-gradient(70% 80% at 30% 55%, ${hexA(color, 0.42)} 0%, ${hexA(C.violet, 0.16)} 45%, ${C.ink} 80%)`}} />
-        <div style={{position: 'absolute', left: -200, right: -200, top: 430, bottom: -200, perspective: 420}}>
-          <div style={{position: 'absolute', inset: 0, transform: 'rotateX(72deg)', transformOrigin: 'top center', backgroundImage: `linear-gradient(${hexA(color, 0.6)} 2px, transparent 2px), linear-gradient(90deg, ${hexA(color, 0.5)} 2px, transparent 2px)`, backgroundSize: '90px 90px'}} />
-        </div>
+        {p.photo ? (
+          <Photo src={p.photo} color={color} side="left" />
+        ) : (
+          <>
+            <AbsoluteFill style={{background: `radial-gradient(70% 80% at 30% 55%, ${hexA(color, 0.42)} 0%, ${hexA(C.violet, 0.16)} 45%, ${C.ink} 80%)`}} />
+            <div style={{position: 'absolute', left: -200, right: -200, top: 430, bottom: -200, perspective: 420}}>
+              <div style={{position: 'absolute', inset: 0, transform: 'rotateX(72deg)', transformOrigin: 'top center', backgroundImage: `linear-gradient(${hexA(color, 0.6)} 2px, transparent 2px), linear-gradient(90deg, ${hexA(color, 0.5)} 2px, transparent 2px)`, backgroundSize: '90px 90px'}} />
+            </div>
+          </>
+        )}
         <div style={{position: 'absolute', left: 56, top: 40}}>
           <Chip color={C.paper}>GTA 6</Chip>
         </div>
@@ -199,9 +217,11 @@ export const Thumbnail: React.FC<ThumbProps> = (p) => {
             <StaticStamp status={status} size={58} rotate={7} />
           </div>
         ) : null}
-        <div style={{position: 'absolute', right: 70, top: 120}}>
-          <Motif kind={p.motif} color={color} size={300} calendar={p.calendar} />
-        </div>
+        {p.photo ? null : (
+          <div style={{position: 'absolute', right: 70, top: 120}}>
+            <Motif kind={p.motif} color={color} size={300} calendar={p.calendar} />
+          </div>
+        )}
       </Frame>
     );
   }
@@ -209,6 +229,11 @@ export const Thumbnail: React.FC<ThumbProps> = (p) => {
     return (
       <Frame color={color} brand={p.brand}>
         <AbsoluteFill style={{background: `linear-gradient(135deg, ${C.ink2} 0%, ${C.ink} 100%)`}} />
+        {p.photo ? (
+          <div style={{position: 'absolute', left: 560, top: 0, right: 0, bottom: 0}}>
+            <Photo src={p.photo} color={color} side="none" />
+          </div>
+        ) : null}
         <div style={{position: 'absolute', left: -120, top: -80, width: 900, height: 900, background: `linear-gradient(160deg, ${color} 0%, ${hexA(color, 0.82)} 100%)`, transform: 'skewX(-14deg)'}} />
         <div style={{position: 'absolute', left: 700, top: -80, width: 18, height: 900, background: C.sun, transform: 'skewX(-14deg)'}} />
         <div style={{position: 'absolute', left: 54, top: 44}}>
@@ -229,9 +254,11 @@ export const Thumbnail: React.FC<ThumbProps> = (p) => {
             ))}
           </div>
         </div>
-        <div style={{position: 'absolute', right: 70, top: 150}}>
-          <Motif kind={p.motif} color={color} size={400} calendar={p.calendar} />
-        </div>
+        {p.photo ? null : (
+          <div style={{position: 'absolute', right: 70, top: 150}}>
+            <Motif kind={p.motif} color={color} size={400} calendar={p.calendar} />
+          </div>
+        )}
         {status ? (
           <div style={{position: 'absolute', right: 90, bottom: 62}}>
             <StaticStamp status={status} size={62} rotate={-6} />
@@ -243,11 +270,17 @@ export const Thumbnail: React.FC<ThumbProps> = (p) => {
   // stamp concept
   return (
     <Frame color={color} brand={p.brand}>
-      <AbsoluteFill style={{background: `linear-gradient(180deg, ${C.ink} 0%, ${hexA(C.violet, 0.3)} 55%, ${hexA(color, 0.42)} 100%)`}} />
-      <div style={{position: 'absolute', right: -40, top: 90}}>
-        <Motif kind={p.motif} color={color} size={560} calendar={p.calendar} />
-      </div>
-      <AbsoluteFill style={{background: `linear-gradient(90deg, ${hexA(C.ink, 0.96)} 0%, ${hexA(C.ink, 0.85)} 42%, transparent 72%)`}} />
+      {p.photo ? (
+        <Photo src={p.photo} color={color} side="left" />
+      ) : (
+        <>
+          <AbsoluteFill style={{background: `linear-gradient(180deg, ${C.ink} 0%, ${hexA(C.violet, 0.3)} 55%, ${hexA(color, 0.42)} 100%)`}} />
+          <div style={{position: 'absolute', right: -40, top: 90}}>
+            <Motif kind={p.motif} color={color} size={560} calendar={p.calendar} />
+          </div>
+          <AbsoluteFill style={{background: `linear-gradient(90deg, ${hexA(C.ink, 0.96)} 0%, ${hexA(C.ink, 0.85)} 42%, transparent 72%)`}} />
+        </>
+      )}
       <div style={{position: 'absolute', left: 56, top: 40}}>
         <Chip color={color}>GTA 6</Chip>
       </div>

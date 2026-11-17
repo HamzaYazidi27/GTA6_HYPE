@@ -123,6 +123,7 @@ def build_render_props(
     master: dict[str, Any],
     alignments: dict[int, dict[str, Any]],
     media_urls: dict[int, str] | None = None,
+    footage: dict[int, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the ``timeline`` prop. ``alignments`` maps scene number -> {"words": [...]} (scene-audio relative)."""
     profile = settings.video_profile(fmt)
@@ -130,6 +131,7 @@ def build_render_props(
     vertical = settings.format(fmt).get("aspect") == "9:16"
     placed = {p["scene_number"]: p for p in master["scenes"]}
     media_urls = media_urls or {}
+    footage = footage or {}
     out_scenes = []
     for sc in scenes:
         p = placed[sc["scene_number"]]
@@ -155,6 +157,8 @@ def build_render_props(
         if sc["scene_number"] in media_urls:
             item["media"] = media_urls[sc["scene_number"]]
             item["mediaCredit"] = sc.get("media_credit") or ""
+        elif sc["scene_number"] in footage:
+            item["footage"] = footage[sc["scene_number"]]
         out_scenes.append(item)
     chapters = [] if vertical else build_chapters(scenes, placed)
     return {

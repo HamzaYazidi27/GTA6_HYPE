@@ -4,7 +4,7 @@
  * They are built from cheap primitives (no CSS blur filters) to keep renders fast.
  */
 import React, {useMemo} from 'react';
-import {AbsoluteFill, Img, interpolate, staticFile, useCurrentFrame} from 'remotion';
+import {AbsoluteFill, Img, OffthreadVideo, interpolate, staticFile, useCurrentFrame} from 'remotion';
 import {C, hexA, seeded, useLayout} from './theme';
 
 export type BackgroundKind = 'grid' | 'skyline' | 'mesh' | 'rays' | 'waves' | 'dots';
@@ -224,6 +224,36 @@ export const MediaBackdrop: React.FC<{src: string; durationInFrames: number}> = 
     <AbsoluteFill style={{background: C.ink, overflow: 'hidden'}}>
       <Img src={src.startsWith('http') ? src : staticFile(src)} style={{width: '100%', height: '100%', objectFit: 'cover', transform: `scale(${scale})`}} />
       <AbsoluteFill style={{background: `linear-gradient(180deg, ${hexA(C.ink, 0.55)} 0%, ${hexA(C.ink, 0.2)} 40%, ${hexA(C.ink, 0.88)} 100%)`}} />
+    </AbsoluteFill>
+  );
+};
+
+/**
+ * Real GTA 6 footage behind the graphics: a pre-cut trailer clip (played muted, frame-accurate)
+ * or an official screenshot with a slow Ken Burns move. `dim` (0-1) is how much the picture is
+ * pushed back so the overlay stays readable: light for big type, stronger for dense panels.
+ */
+export const FootageBackdrop: React.FC<{src: string; kind: 'video' | 'photo'; durationInFrames: number; seed: number; accent: string; dim: number}> = ({src, kind, durationInFrames, seed, accent, dim}) => {
+  const frame = useCurrentFrame();
+  const t = frame / Math.max(1, durationInFrames);
+  const url = src.startsWith('http') ? src : staticFile(src);
+  // photos drift and zoom in a seed-dependent direction; video gets a barely visible push-in
+  const dir = seed % 2 === 0 ? 1 : -1;
+  const scale = kind === 'photo' ? interpolate(t, [0, 1], [1.08, 1.2]) : interpolate(t, [0, 1], [1.02, 1.06]);
+  const x = kind === 'photo' ? interpolate(t, [0, 1], [-1.5 * dir, 1.5 * dir]) : 0;
+  return (
+    <AbsoluteFill style={{background: C.ink, overflow: 'hidden'}}>
+      <AbsoluteFill style={{transform: `scale(${scale}) translateX(${x}%)`}}>
+        {kind === 'video' ? (
+          <OffthreadVideo src={url} muted style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+        ) : (
+          <Img src={url} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+        )}
+      </AbsoluteFill>
+      {/* channel grade: a touch of the section colour in the shadows, then the readability scrim */}
+      <AbsoluteFill style={{background: `linear-gradient(160deg, ${hexA(accent, 0.16)} 0%, transparent 45%, ${hexA(C.violet, 0.14)} 100%)`, mixBlendMode: 'screen'}} />
+      <AbsoluteFill style={{background: hexA(C.ink, dim)}} />
+      <AbsoluteFill style={{background: `linear-gradient(180deg, ${hexA(C.ink, 0.5)} 0%, transparent 22%, transparent 62%, ${hexA(C.ink, 0.78)} 100%)`}} />
     </AbsoluteFill>
   );
 };

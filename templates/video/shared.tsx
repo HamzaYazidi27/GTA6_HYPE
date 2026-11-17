@@ -25,6 +25,8 @@ export type SceneData = {
   /** path (inside the public dir) of a licensed/operator-supplied image for broll scenes */
   media?: string;
   mediaCredit?: string;
+  /** real GTA 6 footage behind the graphics (pre-cut clip or official screenshot) */
+  footage?: {src: string; kind: 'video' | 'photo'; credit: string};
 };
 
 export type Timeline = {

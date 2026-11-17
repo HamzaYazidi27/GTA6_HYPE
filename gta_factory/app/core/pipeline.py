@@ -384,6 +384,7 @@ def step_scenes(ctx: JobContext) -> dict[str, Any]:
 def step_rights(ctx: JobContext) -> dict[str, Any]:
     from ...modules.asset_management.audio_library import library_ready
     from ...modules.asset_management.rights import review_assets
+    from ...modules.footage.select import assign_footage
 
     missing = library_ready(ctx.settings.assets_dir)
     if missing:
@@ -391,12 +392,19 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
     scenes = ctx.need(ctx.paths.scenes)
     vertical = ctx.settings.format(ctx.fmt).get("aspect") == "9:16"
     review = review_assets(ctx.settings, scenes, media_dir=ctx.paths.media, tts_provider=ctx.tts_name, vertical=vertical, log=ctx.log)
-    write_json(ctx.paths.scenes, scenes)  # b-roll scenes may have been resolved or converted
+    footage = assign_footage(ctx.settings, scenes, log=ctx.log)
+    if footage["ledger"]:
+        review["assets"] = footage["ledger"] + review["assets"]
+        review["credits"] = sorted(set(review["credits"]) | {e["attribution"] for e in footage["ledger"] if e.get("attribution")})
+        review["decisions"] += [{"scene_number": sc["scene_number"], "outcome": f"gta6_{sc['footage']['kind']}", "asset_ids": sc["footage"]["asset_ids"]} for sc in scenes if sc.get("footage")]
+        review["summary"] += f" Real GTA 6 footage on {footage['summary']['share']:.0%} of the narration."
+    review["footage"] = footage["summary"]
+    write_json(ctx.paths.scenes, scenes)  # b-roll scenes may have been resolved or converted, footage assigned
     write_json(ctx.paths.rights, review)
     for a in review["assets"] + review["rejected"]:
         ctx.db.upsert_asset(ctx.job_id, a)
     ctx.log(f"rights: {review['summary']}")
-    return {"verdict": review["verdict"], "summary": review["summary"]}
+    return {"verdict": review["verdict"], "summary": review["summary"], "footage_share": footage["summary"].get("share", 0.0)}
 
 
 def step_voice(ctx: JobContext) -> dict[str, Any]:
@@ -420,7 +428,8 @@ def step_voice(ctx: JobContext) -> dict[str, Any]:
 
 def step_timeline(ctx: JobContext) -> dict[str, Any]:
     from ...modules.subtitles.align import align_scene, build_captions, to_srt, to_vtt
-    from ...modules.video_editing.render import stage_media
+    from ...modules.footage.select import cut_scene_clips
+    from ...modules.video_editing.render import stage_footage, stage_media
     from ...modules.video_editing.timeline import build_render_props
     from ...modules.voice_generation.engine import build_timeline
 
@@ -450,18 +459,24 @@ def step_timeline(ctx: JobContext) -> dict[str, Any]:
     write_text(ctx.paths.srt, to_srt(cues))
     write_text(ctx.paths.vtt, to_vtt(cues))
     script = ctx.need(ctx.paths.script)
+    if any(sc.get("footage") for sc in scenes):
+        prof = s.video_profile(ctx.fmt)
+        cut_scene_clips(s, scenes, {n: p["duration_frames"] / fps for n, p in placed.items()}, out_dir=ctx.paths.media, width=int(prof["width"]), height=int(prof["height"]), fps=fps, log=ctx.log)
+        write_json(ctx.paths.scenes, scenes)
     media = stage_media(s, ctx.job_id, scenes)
-    props = build_render_props(s, job_id=ctx.job_id, fmt=ctx.fmt, title=script["title"], today=ctx.today, scenes=scenes, master=master, alignments=alignments, media_urls=media)
+    footage = stage_footage(s, ctx.job_id, scenes)
+    props = build_render_props(s, job_id=ctx.job_id, fmt=ctx.fmt, title=script["title"], today=ctx.today, scenes=scenes, master=master, alignments=alignments, media_urls=media, footage=footage)
     write_json(ctx.paths.props, props)
     ctx.log(f"timeline: {master['total_seconds']:.1f}s, {len(scenes)} scenes, {len(cues)} subtitle cues, alignment {methods}, voice {master['voiceover']['lufs']:.1f} LUFS")
     return {"seconds": master["total_seconds"], "frames": master["total_frames"], "cues": len(cues), "alignment": methods}
 
 
 def step_render(ctx: JobContext) -> dict[str, Any]:
-    from ...modules.video_editing.render import render_video, stage_media
+    from ...modules.video_editing.render import render_video, stage_footage, stage_media
 
     props = ctx.need(ctx.paths.props)
     stage_media(ctx.settings, ctx.job_id, ctx.need(ctx.paths.scenes))
+    stage_footage(ctx.settings, ctx.job_id, ctx.need(ctx.paths.scenes))
     t0 = time.time()
     info = render_video(ctx.settings, props, work_dir=ctx.paths.render, out=ctx.paths.video_silent, log=ctx.log, progress=ctx.progress)
     info["seconds"] = round(time.time() - t0, 1)
@@ -480,13 +495,25 @@ def step_mix(ctx: JobContext) -> dict[str, Any]:
 
 
 def step_thumbnail(ctx: JobContext) -> dict[str, Any]:
+    from ...modules.footage.select import thumbnail_photos
     from ...modules.thumbnail_generation.concepts import design_thumbnails
+    from ...modules.video_editing.render import bundle_dir
     from ...modules.video_editing.render import render_stills
 
     concepts = design_thumbnails(ctx.llm, ctx.settings, script=ctx.need(ctx.paths.script), story=ctx.need(ctx.paths.story), fact_check=ctx.need(ctx.paths.fact_check), log=ctx.log)
     ctx.paths.thumbnails.mkdir(parents=True, exist_ok=True)
     for old in ctx.paths.thumbnails.glob("thumb_*.png"):
         old.unlink()
+    # real GTA 6 pictures behind the thumbnail text (from the footage library), one per concept
+    script = ctx.need(ctx.paths.script)
+    pics = thumbnail_photos(ctx.settings, f"{script.get('title', '')} " + " ".join(" ".join(c["props"]["lines"]) for c in concepts), len(concepts), out_dir=ctx.paths.thumbnails / "photos")
+    public = bundle_dir(ctx.settings) / "public" / "job_media" / ctx.job_id
+    for i, (c, pic) in enumerate(zip(concepts, pics), 1):
+        public.mkdir(parents=True, exist_ok=True)
+        dest = public / f"thumb_photo_{i}{pic.suffix.lower()}"
+        shutil.copyfile(pic, dest)
+        c["props"]["photo"] = f"job_media/{ctx.job_id}/{dest.name}"
+        c["photo_file"] = str(pic)
     stills = [{"composition": "Thumbnail", "props": c["props"], "out": ctx.paths.thumbnails / f"thumb_{i}_{c['props']['concept']}.png"} for i, c in enumerate(concepts, 1)]
     render_stills(ctx.settings, stills, work_dir=ctx.paths.thumbnails, log=ctx.log)
     for c, st in zip(concepts, stills):
@@ -584,6 +611,16 @@ Vérifie ensuite dans YouTube Studio, passe-la en public, et épingle le comment
 """
 
 
+def _footage_point(ctx: JobContext) -> str:
+    fo = (read_json(ctx.paths.rights, {}) or {}).get("footage") or {}
+    if not fo.get("share"):
+        return ""
+    return (
+        f"\n- [ ] Images réelles de GTA 6 sur {fo['share']:.0%} de la vidéo ({fo.get('video_scenes', 0)} scènes trailer, {fo.get('photo_scenes', 0)} screenshots) :"
+        " vérifier qu'aucun plan ne contredit la narration. Une revendication Content ID de Rockstar/Take-Two est possible après l'upload (regarder l'onglet Droits d'auteur dans YouTube Studio)."
+    )
+
+
 def step_package(ctx: JobContext) -> dict[str, Any]:
     from ...app.core.utils import fmt_duration
 
@@ -629,7 +666,7 @@ def step_package(ctx: JobContext) -> dict[str, Any]:
             n_thumbs=len(list((out / "thumbnails").glob("*.png"))),
             n_titles=len(meta.get("title_options") or []),
             qc_points="\n".join(points) or "Aucun point bloquant ni avertissement.",
-        ),
+        ).replace("- [ ] Vérifier les points du contrôle qualité ci-dessous", "- [ ] Vérifier les points du contrôle qualité ci-dessous" + _footage_point(ctx), 1),
     )
     # story memory: the next article about the same events will be recognised
     analysis = ctx.need(ctx.paths.analysis)

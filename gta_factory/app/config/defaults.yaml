@@ -184,6 +184,25 @@ rights_review:
   max_seconds_per_official_clip: 6
   blocked_keywords: ["leak", "leaked", "datamine", "reupload"]
 
+
+# ---------------------------------------------------------------------------
+# Real GTA 6 footage (official trailers + screenshots) behind the motion graphics
+# ---------------------------------------------------------------------------
+footage:
+  enabled: true
+  ratio: 0.8                       # share of the narration shown over real GTA 6 footage (0.8 = 80 %); the rest stays pure graphics
+  photo_share: 0.25                # of the footage scenes, about this share uses screenshots instead of trailer clips
+  max_clip_seconds: 6              # longest continuous excerpt of one trailer shot (a scene chains several shots)
+  dir: "assets/gta6_footage"       # videos/ and photos/ inside; `python -m gta_factory footage fetch` fills it
+  credit: "Footage: Rockstar Games"
+  thumbnails: true                 # put a real GTA 6 picture behind the thumbnail text
+  sources:                         # official Rockstar uploads downloaded by `footage fetch` (add newer trailers here)
+    - "https://www.youtube.com/watch?v=QdBZY2fkU-0"   # Grand Theft Auto VI Trailer 1
+    - "https://www.youtube.com/watch?v=VQRLujxTm3c"   # Grand Theft Auto VI Trailer 2
+  min_brightness: 28               # shots darker than this (title cards, fades) are skipped
+  skip_head_seconds: 3             # trailer logos
+  skip_tail_seconds: 10            # end card / rating screen
+
 quality_control:
   max_black_seconds: 0.6
   max_static_seconds: 9.0

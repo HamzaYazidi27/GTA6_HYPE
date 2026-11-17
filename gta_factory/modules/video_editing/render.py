@@ -5,7 +5,8 @@
   scene only re-renders the chunk that contains it.
 * Chunks are encoded at high quality (``video.chunk_crf``) and joined without
   re-encoding; the final encode happens once, in the mux step.
-* Operator / stock images are staged into the bundle's ``public/job_media``
+* Real GTA 6 footage (one pre-cut clip or screenshot per scene) and
+  operator / stock images are staged into the bundle's ``public/job_media``
   folder, which the renderer preserves across bundle rebuilds.
 """
 from __future__ import annotations
@@ -69,6 +70,27 @@ def stage_media(settings: Any, job_id: str, scenes: list[dict[str, Any]]) -> dic
         dest = target / f"scene_{sc['scene_number']:03d}{p.suffix.lower()}"
         shutil.copyfile(p, dest)
         out[sc["scene_number"]] = f"job_media/{job_id}/{dest.name}"
+    return out
+
+
+def stage_footage(settings: Any, job_id: str, scenes: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
+    """Copy the per-scene GTA 6 footage (cut clip or screenshot) into the bundle public dir.
+
+    Returns scene number -> {"src": path for ``staticFile``, "kind": "video"|"photo", "credit": ...}.
+    """
+    out: dict[int, dict[str, str]] = {}
+    target = bundle_dir(settings) / "public" / "job_media" / job_id
+    for sc in scenes:
+        fo = sc.get("footage") or {}
+        src = fo.get("clip") if fo.get("kind") == "video" else fo.get("file") if fo.get("kind") == "photo" else None
+        if not src or not Path(src).exists():
+            continue
+        p = Path(src)
+        target.mkdir(parents=True, exist_ok=True)
+        dest = target / f"footage_{sc['scene_number']:03d}{p.suffix.lower()}"
+        if not dest.exists() or dest.stat().st_size != p.stat().st_size:
+            shutil.copyfile(p, dest)
+        out[sc["scene_number"]] = {"src": f"job_media/{job_id}/{dest.name}", "kind": fo["kind"], "credit": fo.get("credit") or ""}
     return out
 
 
@@ -190,6 +212,7 @@ def render_video(
     public = bundle_dir(settings) / "public"
     for c in chunks:
         media = {s["n"]: hashlib.sha1((public / s["media"]).read_bytes()).hexdigest() for s in c["scenes"] if s.get("media") and (public / s["media"]).exists()}
+        media.update({f"f{s['n']}": hashlib.sha1((public / s["footage"]["src"]).read_bytes()).hexdigest() for s in c["scenes"] if s.get("footage") and (public / s["footage"]["src"]).exists()})
         key = stable_hash({"t": thash, "shared": shared, "scenes": c["scenes"], "media": media, "range": c["frameRange"], "comp": composition, "crf": crf})
         path = chunk_dir / f"chunk_{key}.mp4"
         files.append(path)

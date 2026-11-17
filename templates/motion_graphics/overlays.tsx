@@ -75,6 +75,20 @@ export const SourceStrip: React.FC<{source: string}> = ({source}) => {
   );
 };
 
+/** Small credit for the real footage on screen (bottom-right in 16:9, under the brand bug in 9:16). */
+export const FootageCredit: React.FC<{credit: string}> = ({credit}) => {
+  const {u, pad, vertical} = useLayout();
+  const frame = useCurrentFrame();
+  const p = interpolate(frame, [6, 20], [0, 1], {...clamp, easing: easeOut});
+  if (!credit) return null;
+  const pos: React.CSSProperties = vertical ? {left: pad, top: 168 * u} : {right: pad * 0.55, bottom: 34 * u};
+  return (
+    <div style={{position: 'absolute', ...pos, fontFamily: F.mono, fontWeight: 500, fontSize: (vertical ? 20 : 17) * u, letterSpacing: '0.14em', color: C.paper, opacity: p * 0.7, textShadow: '0 1px 6px rgba(0,0,0,0.8)'}}>
+      {credit.toUpperCase()}
+    </div>
+  );
+};
+
 /** Thin progress rail with chapter ticks: shows the video is going somewhere. */
 export const ProgressRail: React.FC<{frame: number; total: number; chapters: {title: string; startFrame: number}[]}> = ({frame, total, chapters}) => {
   const {u, W, vertical} = useLayout();

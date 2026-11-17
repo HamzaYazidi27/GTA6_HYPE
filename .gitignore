@@ -38,3 +38,7 @@ knowledge/auto_timeline.json
 assets/music/LIBRARY.json
 assets/sound_effects/LIBRARY.json
 *.egg-info/
+
+# real GTA 6 footage (official trailers / screenshots, downloaded by `python -m gta_factory footage fetch`)
+assets/gta6_footage/*
+!assets/gta6_footage/README.md

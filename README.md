@@ -16,10 +16,11 @@ brew install ffmpeg node ollama      # Linux : paquets ffmpeg/node + curl -fsSL 
 
 ```bash
 cd ~/GTA6_HYPE
-uv venv && uv pip install -e ".[align,dev]"   # ou : python -m venv .venv && .venv/bin/pip install -e ".[align,dev]"
+uv venv && uv pip install -e ".[align,footage,dev]"   # ou : python -m venv .venv && .venv/bin/pip install -e ".[align,footage,dev]"
 source .venv/bin/activate
 python -m gta_factory setup     # npm install, LLM local (Ollama), voix Kokoro (~350 Mo), musiques et effets
 python -m gta_factory doctor --ping
+python -m gta_factory footage fetch   # vrais trailers GTA 6 (voir plus bas)
 ```
 
 `setup` démarre Ollama et télécharge **une fois** le meilleur modèle pour ta RAM (`model: auto`) :
@@ -32,6 +33,25 @@ python -m gta_factory doctor --ping
 | 8 Go | `qwen3:8b` | 5,2 Go |
 
 Plus le modèle est gros, meilleurs sont le script et les titres. Pour en forcer un : `python -m gta_factory setup --model qwen3:8b` puis `providers.llm.ollama.model` dans `config.yaml`. Les garde-fous (preuves vérifiées mot pour mot, classement des affirmations par règles fixes, audit puis révision du script, contrôle qualité) ne dépendent pas du modèle : un modèle local ne peut pas faire passer une rumeur pour un fait.
+
+## Vraies images de GTA 6 (≈ 80 % de la vidéo)
+
+Les vidéos mélangent les **vrais trailers et screenshots officiels de GTA 6** (environ 80 % du temps) et les animations de la chaîne (les ~20 % restants : graphiques, tableaux, sources). Les cartes fact-check, les chiffres et les sous-titres s'affichent par-dessus les images du jeu.
+
+```bash
+pip install -e ".[footage]"                   # yt-dlp, une fois
+python -m gta_factory footage fetch           # télécharge les trailers officiels de Rockstar (footage.sources) + en tire des photos
+python -m gta_factory footage add ~/Images/gta6 --tags lucia,beach   # tes propres screenshots officiels
+python -m gta_factory footage list            # ce que contient la bibliothèque
+```
+
+- Les fichiers vont dans `assets/gta6_footage/videos/` et `photos/` (hors git). Tu peux aussi y copier les fichiers à la main.
+- Les plans sont détectés automatiquement ; les cartons noirs, le logo du début et l'écran de fin sont ignorés. Chaque extrait dure au plus 6 s (`footage.max_clip_seconds`).
+- Les tags (et les mots du nom de fichier) servent à choisir un plan qui correspond à la phrase : une scène qui parle de Lucia prend en priorité un fichier tagué `lucia`.
+- Proportion réglable : `footage.ratio` (0.8 = 80 %), part de photos : `footage.photo_share`. `footage.enabled: false` revient aux seules animations.
+- Les miniatures utilisent aussi une vraie image du jeu (`footage.thumbnails`).
+- Crédit « Footage: Rockstar Games » à l'écran et dans la description. Les fichiers contenant « leak », « leaked », « datamine » ou « reupload » ne sont jamais utilisés.
+- ⚠️ Les images appartiennent à Rockstar/Take-Two. Les chaînes d'actu les utilisent couramment, mais YouTube peut poser une **revendication Content ID** (monétisation reversée à Rockstar) ; c'est rare qu'une vidéo soit bloquée, mais c'est possible.
 
 ## Utilisation
 
@@ -91,7 +111,7 @@ Si un point **critique** du contrôle qualité échoue (droits non validés, aff
 
 ## Droits et règles éditoriales
 
-- Pas d'images du jeu, de logos ni de vidéos tierces. Tous les visuels sont dessinés en code, et la musique et les effets sont synthétisés (aucun sample), donc pas de Content ID.
+- Images du jeu : uniquement les trailers et screenshots **officiels** de la bibliothèque `assets/gta6_footage` (voir plus haut), en extraits courts, transformés par les graphiques et crédités. Pas de logos ni de vidéos d'autres créateurs. Les animations sont dessinées en code, et la musique et les effets sont synthétisés (aucun sample), donc la bande-son ne déclenche pas de Content ID.
 - Photos d'ambiance (optionnel) : Pexels/Pixabay si une clé est dans `.env`, ou tes propres images dans `assets/licensed_visuals/` **avec** un fichier `<image>.license.json` (exemple dans `gta_factory/modules/asset_management/rights.py`). Sans licence documentée, la scène redevient de la typographie animée.
 - Mode `rights_review.mode: strict` par défaut : le matériel presse officiel est refusé. En mode `editorial`, il est accepté mais marqué « revue humaine ».
 - Les mots « leak », « leaked », « datamine » et « reupload » bloquent un visuel.

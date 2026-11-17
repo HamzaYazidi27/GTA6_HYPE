@@ -20,6 +20,8 @@ dependencies = [
 align = ["faster-whisper>=1.0"]
 # JavaScript-only article pages
 browser = ["playwright>=1.45"]
+# download the official GTA 6 trailers (`python -m gta_factory footage fetch`)
+footage = ["yt-dlp>=2024.8"]
 # competitor research (public channel listings)
 research = ["yt-dlp>=2024.8"]
 # paid providers, only if you choose them in config.yaml
