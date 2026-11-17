@@ -11,6 +11,7 @@ import {CameraDrift} from '../motion_graphics/primitives';
 import {C, STATUS, Status, accentFor, hexA} from '../motion_graphics/theme';
 import {BarsScene, ClaimScene, HeadlineScene, KineticScene, QuoteScene, StatScene, TitleScene} from './scenesA';
 import {BrollScene, BulletsScene, ChapterScene, CountdownScene, OutroScene, SourcesScene, TakeawayScene, TimelineScene, VersusScene} from './scenesB';
+import {DetailScene} from './DetailScene';
 import type {SceneData, SceneProps, Timeline} from './shared';
 
 ensureFonts();
@@ -32,6 +33,7 @@ export const SCENES: Record<string, React.FC<SceneProps>> = {
   chapter: ChapterScene,
   outro: OutroScene,
   broll: BrollScene,
+  detail: DetailScene,
 };
 
 /** How much real footage is pushed back behind each template (big type reads on bright footage, dense panels need more). */
@@ -43,6 +45,20 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
   const accent = scene.template === 'claim' ? accentFor(scene.section, scene.data?.status) : accentFor(scene.section, null);
   const status = scene.status && scene.status in STATUS ? (scene.status as Status) : null;
   const showStatus = status && scene.template !== 'claim' && scene.template !== 'title' && scene.template !== 'chapter' && scene.template !== 'outro';
+  if (scene.template === 'detail') {
+    // the detail scene drives the footage itself (freeze, zoom, ring): no backdrop, no drift
+    return (
+      <AbsoluteFill style={{background: C.ink}}>
+        <Comp scene={scene} accent={accent} today={timeline.today} />
+        <Atmosphere />
+        <BrandBug name={timeline.brand.name} />
+        {scene.footage ? <FootageCredit credit={scene.footage.credit} /> : null}
+        {timeline.burnCaptions ? <Captions phrases={scene.phrases} accent={accent} emphasis={scene.emphasisText} /> : null}
+        <SceneOut durationInFrames={scene.durationFrames} />
+        <TransitionIn kind={scene.transition} accent={accent} />
+      </AbsoluteFill>
+    );
+  }
   return (
     <AbsoluteFill style={{background: C.ink}}>
       {scene.footage ? (

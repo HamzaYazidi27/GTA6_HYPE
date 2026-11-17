@@ -50,6 +50,8 @@ class ScriptedLLM(LLMProvider):
     name = "scripted"
 
     def complete(self, system: str, prompt: str, *, max_tokens: int = 8000) -> str:
+        if "DETAILS (id | where in the footage" in prompt:
+            return details_answer(prompt)
         if "NARRATION - numbered sentences" in prompt:
             n = len(re.findall(r"^\d+\. \[", prompt, re.M))
             return json.dumps({"scenes": self._scenes(n)})
@@ -140,3 +142,15 @@ class FakeTTS(TTSProvider):
         x = 0.25 * np.sin(2 * np.pi * 165 * t) * env + 0.01 * rng.standard_normal(len(t))
         pad = np.zeros(int(0.12 * sr))
         return TTSResult(np.concatenate([pad, x, pad]).astype(np.float32), sr)
+
+
+def details_answer(prompt: str) -> str:
+    """The scripted LLM's answer to the "details you missed" script prompt."""
+    ids = re.findall(r"^(D\d+) \|", prompt, re.M)
+    return json.dumps({
+        "title": f"{len(ids)} details you missed in Trailer 1",
+        "hook": f"You watched the trailer. But did you see these {len(ids)} small details?",
+        "lines": [{"id": i, "line": f"Look at the corner of this shot. There is a small sign here that most people never noticed, number {k}.", "label": f"SMALL SIGN {k}"} for k, i in enumerate(ids, 1)],
+        "outro_question": "Which of these details had you missed?",
+        "thumb_lines": [f"{len(ids)} DETAILS", "YOU MISSED"],
+    })

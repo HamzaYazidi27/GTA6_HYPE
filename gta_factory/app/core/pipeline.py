@@ -25,6 +25,7 @@ any step (``resume --from <step>``); earlier results are reused as they are.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import time
 import traceback
@@ -60,6 +61,16 @@ STEPS: list[tuple[str, str]] = [
 ]
 STEP_NAMES = [s for s, _ in STEPS]
 
+# "Details you missed" videos start from the footage library instead of articles
+DETAIL_STEPS: list[tuple[str, str]] = [
+    ("details", "Find the details in the footage"),
+    ("details_script", "Write the narration"),
+    ("details_scenes", "Storyboard"),
+]
+DETAIL_STEP_NAMES = [s for s, _ in DETAIL_STEPS] + STEP_NAMES[STEP_NAMES.index("rights") :]
+STEP_TITLES = dict(STEPS + DETAIL_STEPS)
+ALL_STEP_NAMES = list(STEP_TITLES)
+
 
 # =========================================================================== job folder
 class JobPaths:
@@ -78,6 +89,7 @@ class JobPaths:
     story = property(lambda self: self.root / "story" / "story.json")
     script = property(lambda self: self.root / "script" / "script.json")
     script_md = property(lambda self: self.root / "script" / "script.md")
+    details = property(lambda self: self.root / "research" / "details.json")
     scenes = property(lambda self: self.root / "scenes" / "scene_breakdown.json")
     rights = property(lambda self: self.root / "assets" / "rights_review.json")
     media = property(lambda self: self.root / "assets" / "media")
@@ -153,6 +165,8 @@ class JobContext:
         self.today: str = self.options.get("today") or date.today().isoformat()
         self.logger = job_logger(job_id, self.paths.log)
         self.step_index = 0
+        self.n_steps = len(db.get_steps(job_id)) or len(STEPS)
+        self.kind: str = self.options.get("kind") or "news"
         self._last_progress = 0.0
         self._usage_saved = 0
 
@@ -168,7 +182,7 @@ class JobContext:
         if now - self._last_progress < 1.0 and fraction < 1:
             return
         self._last_progress = now
-        total = (self.step_index + max(0.0, min(1.0, fraction))) / len(STEPS)
+        total = (self.step_index + max(0.0, min(1.0, fraction))) / self.n_steps
         self.db.update_job(self.job_id, progress=round(total, 4))
         if msg:
             self.logger.info(f"  {msg}")
@@ -381,6 +395,47 @@ def step_scenes(ctx: JobContext) -> dict[str, Any]:
     return {"scenes": len(scenes), "templates": {t: templates.count(t) for t in sorted(set(templates))}, "broll_allowed": allow_broll}
 
 
+def step_details(ctx: JobContext) -> dict[str, Any]:
+    """Look at the footage with the vision model (cached) and pick the best details for this video."""
+    from ...modules.details.find import make_verifier, pick_details, scan
+
+    s = ctx.settings
+    cands = scan(s, videos=ctx.options.get("videos") or None, model=ctx.options.get("vision_model"), log=ctx.log, progress=ctx.progress)
+    vertical = s.format(ctx.fmt).get("aspect") == "9:16"
+    count = int(ctx.options.get("count") or s.get("details.count_short" if vertical else "details.count_long", 5 if vertical else 12))
+    picked = pick_details(s, cands, count, verify=make_verifier(s, model=ctx.options.get("vision_model"), log=ctx.log))
+    if len(picked) < 2:
+        raise FactoryError(
+            f"Only {len(picked)} detail(s) found in this footage ({len(cands)} candidate(s) checked).",
+            hint="Add more footage (`footage update` / `footage add`), pick another video, or use a bigger vision model (footage.vision_model, e.g. qwen2.5vl:32b).",
+        )
+    if len(picked) < count:
+        ctx.warn(f"details: only {len(picked)} good detail(s) found (asked for {count})")
+    write_json(ctx.paths.details, {"details": picked, "candidates": len(cands), "videos": sorted({d["file"] for d in picked})})
+    for d in picked:
+        ctx.log(f"details: #{d['id'][1:]} {d['short_title']} {d['timecode']} - {d['label']}" + (f" « {d['text']} »" if d.get("text") else ""))
+    return {"details": len(picked), "candidates": len(cands)}
+
+
+def step_details_script(ctx: JobContext) -> dict[str, Any]:
+    from ...modules.details.produce import script_markdown, write_script
+
+    details = ctx.need(ctx.paths.details)["details"]
+    script = write_script(ctx.llm, ctx.settings, details, fmt=ctx.fmt, log=ctx.log)
+    write_json(ctx.paths.script, script)
+    write_text(ctx.paths.script_md, script_markdown(script, details))
+    ctx.db.update_job(ctx.job_id, title=script["title"])
+    return {"title": script["title"], "words": script["word_budget"]["actual"]}
+
+
+def step_details_scenes(ctx: JobContext) -> dict[str, Any]:
+    from ...modules.details.produce import build_scenes
+
+    scenes = build_scenes(ctx.need(ctx.paths.script), ctx.need(ctx.paths.details)["details"])
+    write_json(ctx.paths.scenes, scenes)
+    return {"scenes": len(scenes), "details": sum(1 for sc in scenes if sc["template"] == "detail")}
+
+
 def step_rights(ctx: JobContext) -> dict[str, Any]:
     from ...modules.asset_management.audio_library import build_library, library_ready
     from ...modules.asset_management.rights import review_assets
@@ -509,15 +564,23 @@ def step_thumbnail(ctx: JobContext) -> dict[str, Any]:
     from ...modules.video_editing.render import bundle_dir
     from ...modules.video_editing.render import render_stills
 
-    concepts = design_thumbnails(ctx.llm, ctx.settings, script=ctx.need(ctx.paths.script), story=ctx.need(ctx.paths.story), fact_check=ctx.need(ctx.paths.fact_check), log=ctx.log)
+    script = ctx.need(ctx.paths.script)
     ctx.paths.thumbnails.mkdir(parents=True, exist_ok=True)
     for old in ctx.paths.thumbnails.glob("thumb_*.png"):
         old.unlink()
-    # real GTA 6 pictures behind the thumbnail text (from the footage library), one per concept
-    script = ctx.need(ctx.paths.script)
-    pics = thumbnail_photos(ctx.settings, f"{script.get('title', '')} " + " ".join(" ".join(c["props"]["lines"]) for c in concepts), len(concepts), out_dir=ctx.paths.thumbnails / "photos")
+    if ctx.kind == "details":  # a close-up of the best details, circled
+        from ...modules.details.produce import thumbnail_concepts
+
+        concepts = thumbnail_concepts(ctx.settings, script, ctx.need(ctx.paths.details)["details"], out_dir=ctx.paths.thumbnails / "photos")
+        pics = [Path(c["photo_file"]) for c in concepts]
+    else:
+        concepts = design_thumbnails(ctx.llm, ctx.settings, script=script, story=ctx.need(ctx.paths.story), fact_check=ctx.need(ctx.paths.fact_check), log=ctx.log)
+        # real GTA 6 pictures behind the thumbnail text (from the footage library), one per concept
+        pics = thumbnail_photos(ctx.settings, f"{script.get('title', '')} " + " ".join(" ".join(c["props"]["lines"]) for c in concepts), len(concepts), out_dir=ctx.paths.thumbnails / "photos")
     public = bundle_dir(ctx.settings) / "public" / "job_media" / ctx.job_id
     for i, (c, pic) in enumerate(zip(concepts, pics), 1):
+        if not pic.exists():
+            continue
         public.mkdir(parents=True, exist_ok=True)
         dest = public / f"thumb_photo_{i}{pic.suffix.lower()}"
         shutil.copyfile(pic, dest)
@@ -547,19 +610,29 @@ def step_metadata(ctx: JobContext) -> dict[str, Any]:
     master = ctx.need(ctx.paths.master)
     scenes = ctx.need(ctx.paths.scenes)
     placed = {p["scene_number"]: p for p in master["scenes"]}
+    script = ctx.need(ctx.paths.script)
+    details_extra: dict[str, Any] = {}
+    if ctx.kind == "details":
+        from ...modules.details.produce import description_block
+
+        details_extra = {
+            "extra_sections": [("THE DETAILS (and where to find them in the original footage)", description_block(script, ctx.need(ctx.paths.details)["details"]))],
+            "how": "Every detail is shown at its timestamp in the official footage, so you can check it yourself. Anything beyond what is visible is marked as a guess.",
+        }
     meta = build_metadata(
         ctx.llm,
         ctx.settings,
         fmt=ctx.fmt,
-        script=ctx.need(ctx.paths.script),
-        story=ctx.need(ctx.paths.story),
-        fact_check=ctx.need(ctx.paths.fact_check),
+        script=script,
+        story=ctx.need(ctx.paths.story) if ctx.kind == "news" else {"working_title": script["title"], "angle": script.get("angle") or {}},
+        fact_check=ctx.need(ctx.paths.fact_check) if ctx.kind == "news" else [],
         chapters=build_chapters(scenes, placed),
         total_seconds=master["total_seconds"],
         sources=_sources(ctx),
         rights=ctx.need(ctx.paths.rights),
         voice_provider=ctx.tts_name,
         log=ctx.log,
+        **details_extra,
     )
     write_json(ctx.paths.metadata, meta)
     write_text(ctx.paths.description, meta["description"] + "\n")
@@ -685,6 +758,18 @@ def step_package(ctx: JobContext) -> dict[str, Any]:
             qc_points="\n".join(points) or "Aucun point bloquant ni avertissement.",
         ).replace("- [ ] Vérifier les points du contrôle qualité ci-dessous", "- [ ] Vérifier les points du contrôle qualité ci-dessous" + _footage_point(ctx), 1),
     )
+    if ctx.kind == "details":  # the next details video shows other ones
+        from ...modules.details.find import remember_shown
+        from ...modules.details.produce import review_points
+
+        details = ctx.need(ctx.paths.details)["details"]
+        review = (out / "REVIEW.md").read_text(encoding="utf-8")
+        review = review.replace("- [ ] Relire `fact_check_report.md` : rien de présenté comme CONFIRMÉ qui ne le soit pas", "- [ ] Relire `script.md` : la narration ne dit que ce qui se voit" + review_points(details), 1)
+        write_text(out / "REVIEW.md", review)
+        remember_shown(s, details, ctx.job_id)
+        ctx.db.merge_summary(ctx.job_id, duration=master["total_seconds"], video=str(out / video_name), package=str(out))
+        ctx.log(f"package ready: {out}")
+        return {"package": str(out), "video": video_name, "details": len(details)}
     # story memory: the next article about the same events will be recognised
     analysis = ctx.need(ctx.paths.analysis)
     story = ctx.need(ctx.paths.story)
@@ -697,6 +782,9 @@ def step_package(ctx: JobContext) -> dict[str, Any]:
 
 
 STEP_FUNCS: dict[str, Callable[[JobContext], dict[str, Any]]] = {
+    "details": step_details,
+    "details_script": step_details_script,
+    "details_scenes": step_details_scenes,
     "extract": step_extract,
     "analyze": step_analyze,
     "corroborate": step_corroborate,
@@ -718,20 +806,32 @@ STEP_FUNCS: dict[str, Callable[[JobContext], dict[str, Any]]] = {
 
 # =========================================================================== jobs
 def create_job(settings: Any, urls: list[str], *, fmt: str = "long", options: dict[str, Any] | None = None) -> str:
-    settings.format(fmt)  # validates the format name
+    fmt_cfg = settings.format(fmt)  # validates the format name
     options = dict(options or {})
+    details = options.get("kind") == "details"
+    if fmt_cfg.get("footage_only") and not details:
+        raise ConfigError(f"The '{fmt}' format is made from the footage library, not from articles.", hint="Use `python -m gta_factory details ...`.")
     urls = [u.strip() for u in urls if u and u.strip()]
     if not urls:
         raise ConfigError("Give at least one article URL.")
     db = get_db(settings.db_path)
-    job_id = new_job_id(urls[0].rstrip("/").rsplit("/", 1)[-1])
+    job_id = new_job_id(("details-" if details else "") + urls[0].rstrip("/").rsplit("/", 1)[-1])
     while db.get_job(job_id):
         job_id += "-b"
     paths = JobPaths(settings.jobs_dir / job_id)
     paths.root.mkdir(parents=True, exist_ok=True)
     write_json(paths.job_json, {"id": job_id, "created_at": now_iso(), "urls": urls, "format": fmt, "options": options})
-    db.create_job(job_id, urls=urls, fmt=fmt, language=settings.get("channel.language", "en"), options=options, steps=STEP_NAMES, output_dir=str(settings.outputs_dir / job_id))
+    db.create_job(job_id, urls=urls, fmt=fmt, language=settings.get("channel.language", "en"), options=options, steps=DETAIL_STEP_NAMES if details else STEP_NAMES, output_dir=str(settings.outputs_dir / job_id))
     return job_id
+
+
+def create_details_job(settings: Any, *, videos: list[str] | None = None, fmt: str = "short", count: int | None = None, options: dict[str, Any] | None = None) -> str:
+    """A "details you missed" video made from the footage library (all videos, or those matching ``videos``)."""
+    opts = {**(options or {}), "kind": "details", "videos": list(videos or [])}
+    if count:
+        opts["count"] = int(count)
+    label = "-".join(re.sub(r"[^a-z0-9]+", "-", v.lower()).strip("-") for v in videos or [])[:40] or "footage"
+    return create_job(settings, [f"footage:{label}"], fmt=fmt, options=opts)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -775,10 +875,11 @@ def run_job(settings: Any, job_id: str, *, from_step: str | None = None, until: 
     job = db.get_job(job_id)
     if job is None:
         raise ConfigError(f"Unknown job '{job_id}'.", hint="List jobs with `python -m gta_factory list`.")
-    if from_step and from_step not in STEP_NAMES:
-        raise ConfigError(f"Unknown step '{from_step}'.", hint="Steps: " + ", ".join(STEP_NAMES))
-    if until and until not in STEP_NAMES:
-        raise ConfigError(f"Unknown step '{until}'.", hint="Steps: " + ", ".join(STEP_NAMES))
+    names = [st["name"] for st in db.get_steps(job_id)] or STEP_NAMES
+    if from_step and from_step not in names:
+        raise ConfigError(f"Unknown step '{from_step}'.", hint="Steps: " + ", ".join(names))
+    if until and until not in names:
+        raise ConfigError(f"Unknown step '{until}'.", hint="Steps: " + ", ".join(names))
     paths = JobPaths(settings.jobs_dir / job_id)
     with JobLock(paths.lock):
         if from_step:
@@ -801,7 +902,7 @@ def run_job(settings: Any, job_id: str, *, from_step: str | None = None, until: 
                 continue
             db.set_step(job_id, name, status="running", started_at=now_iso(), error=None)
             db.update_job(job_id, current_step=name, progress=round(i / len(steps), 4))
-            ctx.log(f"--- step {i + 1}/{len(steps)}: {name} ({dict(STEPS)[name]})")
+            ctx.log(f"--- step {i + 1}/{len(steps)}: {name} ({STEP_TITLES.get(name, name)})")
             t0 = time.time()
             try:
                 detail = STEP_FUNCS[name](ctx) or {}

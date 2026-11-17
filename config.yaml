@@ -129,6 +129,9 @@ formats:
   analysis:  {label: "Feature analysis", aspect: "16:9", target_seconds: 540, min_seconds: 420, max_seconds: 720}
   guide:     {label: "Guide / explainer", aspect: "16:9", target_seconds: 510, min_seconds: 360, max_seconds: 720}
   short:     {label: "YouTube Short",    aspect: "9:16", target_seconds: 45,  min_seconds: 30,  max_seconds: 58}
+  # "Details you missed" (python -m gta_factory details): made from the footage library, not from articles.
+  # The vertical version uses the "short" format: python -m gta_factory details "Trailer 2" --format short
+  details:   {label: "Details you missed", aspect: "16:9", target_seconds: 240, min_seconds: 90, max_seconds: 720, footage_only: true}
 
 script:
   words_per_minute: 165            # used to turn a target duration into a word budget; re-measured after TTS
@@ -216,6 +219,15 @@ footage:
   min_brightness: 28               # shots darker than this (title cards, fades) are skipped
   skip_head_seconds: 3             # trailer logos
   skip_tail_seconds: 10            # end card / rating screen
+
+# ---------------------------------------------------------------------------
+# "Details you missed" videos: the vision model finds small details in the footage, the edit
+# freezes on each one, zooms in, circles it and names it (python -m gta_factory details)
+# ---------------------------------------------------------------------------
+details:
+  count_short: 5                   # details in a Short
+  count_long: 12                   # details in a 16:9 video
+  min_shot_seconds: 1.5            # shorter shots are not scanned
 
 quality_control:
   max_black_seconds: 0.6

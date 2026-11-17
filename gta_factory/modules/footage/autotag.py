@@ -71,7 +71,7 @@ def labels_prompt(vocab: Vocabulary) -> str:
     return "\n".join(rows)
 
 
-def ollama_tagger(settings: Any, model: str | None = None, *, transport: httpx.BaseTransport | None = None) -> Callable[[bytes, str], dict[str, Any]]:
+def ollama_tagger(settings: Any, model: str | None = None, *, transport: httpx.BaseTransport | None = None, max_tokens: int = 400) -> Callable[[bytes, str], dict[str, Any]]:
     """A function (jpeg bytes, prompt) -> {"tags", "objects", "caption"} backed by the local Ollama server."""
     host = _host(settings)
     tag = model or vision_model(settings)
@@ -91,7 +91,7 @@ def ollama_tagger(settings: Any, model: str | None = None, *, transport: httpx.B
             "format": "json",
             "keep_alive": "10m",
             "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(image).decode()]}],
-            "options": {"temperature": 0.1, "num_predict": 400},
+            "options": {"temperature": 0.1, "num_predict": max_tokens},
         }
         try:
             res = client.post(f"{host}/api/chat", json=body)

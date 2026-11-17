@@ -67,8 +67,11 @@ def youtube_chapters(chapters: list[dict[str, Any]], total_seconds: float) -> li
     return [{"time": fmt_duration(c["t"]), "seconds": round(c["t"], 2), "title": c["title"]} for c in out]
 
 
-def build_description(*, intro: str, fact_check: list[dict[str, Any]], chapters: list[dict[str, Any]], sources: list[dict[str, Any]], credits: list[str], voice_label: str, hashtags: list[str], channel: dict[str, Any]) -> str:
+def build_description(*, intro: str, fact_check: list[dict[str, Any]], chapters: list[dict[str, Any]], sources: list[dict[str, Any]], credits: list[str], voice_label: str, hashtags: list[str], channel: dict[str, Any], extra_sections: list[tuple[str, list[str]]] | None = None, how: str | None = None) -> str:
     parts = [intro.strip(), ""]
+    for heading, lines in extra_sections or []:
+        if lines:
+            parts += [heading, *lines, ""]
     top = sorted(fact_check, key=lambda c: -int(c.get("importance", 3)))[:6]
     if top:
         parts.append("WHAT IS CONFIRMED, REPORTED OR RUMOURED")
@@ -83,7 +86,7 @@ def build_description(*, intro: str, fact_check: list[dict[str, Any]], chapters:
         parts += [f"- {s['publisher']}: {s['title']} {s['url']}" for s in sources]
         parts.append("")
     parts.append("HOW THIS VIDEO IS MADE")
-    parts.append(f"Every claim is checked against the sources above and labelled CONFIRMED, REPORTED, RUMOR or SPECULATION. Narration: {voice_label}. Graphics, music and sound effects are original.")
+    parts.append(f"{how or 'Every claim is checked against the sources above and labelled CONFIRMED, REPORTED, RUMOR or SPECULATION.'} Narration: {voice_label}. Graphics, music and sound effects are original.")
     if credits:
         parts.append("Visual credits: " + "; ".join(credits))
     parts.append(f"{channel.get('name', '')} is an independent fan channel, not affiliated with Rockstar Games or Take-Two Interactive.")
@@ -125,6 +128,8 @@ def build_metadata(
     rights: dict[str, Any],
     voice_provider: str,
     log=lambda m: None,
+    extra_sections: list[tuple[str, list[str]]] | None = None,
+    how: str | None = None,
 ) -> dict[str, Any]:
     fmt_cfg = settings.format(fmt)
     hook = script["sections"][0]["narration"] if script.get("sections") else ""
@@ -164,6 +169,8 @@ def build_metadata(
         voice_label=voice_label,
         hashtags=hashtags,
         channel={"name": settings.get("channel.name", "")},
+        extra_sections=extra_sections,
+        how=how,
     )
     base_tags = ["gta 6", "gta vi", "grand theft auto 6", "gta 6 news", "rockstar games"]
     tags = _clip_tags(base_tags + [str(t) for t in data.get("tags") or []])

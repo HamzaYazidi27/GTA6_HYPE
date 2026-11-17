@@ -164,9 +164,15 @@ def best_item(want: dict[str, float], pool: list[dict[str, Any]], used: dict[str
 
 
 def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None) -> dict[str, Any]:
-    """Mutates ``scenes`` (adds ``footage``) and returns {"ledger": [...], "summary": {...}}."""
+    """Mutates ``scenes`` (adds ``footage``) and returns {"ledger": [...], "summary": {...}}.
+
+    Scenes that already carry a fixed piece of footage (``kind: detail``, the "details you missed"
+    freeze frames) keep it and count as footage time; the others are planned as usual.
+    """
     for sc in scenes:
-        sc.pop("footage", None)
+        if (sc.get("footage") or {}).get("kind") != "detail":
+            sc.pop("footage", None)
+    fixed = {sc["scene_number"] for sc in scenes if sc.get("footage")}
     cfg = settings.get("footage", {}) or {}
     if not cfg.get("enabled", True):
         return {"ledger": [], "summary": {"enabled": False}}
@@ -186,8 +192,9 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
 
     plans: dict[int, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
     for sc in scenes:
-        plans[sc["scene_number"]] = plan_beats(sc.get("narration", ""), items, min_piece=min_piece) if match_on else ([], [])
-    chosen = _pick_scenes(scenes, ratio, wpm, lo=lo, hi=hi, matched={n for n, (b, _) in plans.items() if b})
+        plans[sc["scene_number"]] = plan_beats(sc.get("narration", ""), items, min_piece=min_piece) if match_on and sc["scene_number"] not in fixed else ([], [])
+    free = [sc for sc in scenes if sc["scene_number"] not in fixed]
+    chosen = _pick_scenes(free, ratio, wpm, lo=lo, hi=hi, matched={n for n, (b, _) in plans.items() if b}) if free else set()
 
     root = footage_dir(settings)
     beat_pool = [it for it in shots if it["e"] - it["s"] >= min_piece] + photos
@@ -257,6 +264,14 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
 
     for sc in scenes:
         n = sc["scene_number"]
+        if n in fixed:
+            fo = sc["footage"]
+            rel = Path(fo["file"]).resolve().relative_to(root.resolve()).as_posix() if str(Path(fo["file"]).resolve()).startswith(str(root.resolve())) else Path(fo["file"]).name
+            v = next((x for x in items["index"].get("videos", []) if x["file"] == rel), {})
+            fo["asset_ids"] = [ledger_add({"kind": "shot", "file": rel, "video": {"credit": fo.get("credit") or v.get("credit"), "source_url": v.get("source_url", "")}}, n)]
+            time_footage += _est_seconds(sc, wpm)
+            n_video += 1
+            continue
         beats_plan, miss = plans[n]
         missing += [{"scene": n, **m} for m in miss]
         if n not in chosen:
@@ -314,6 +329,7 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
         "graphics_only_scenes": len(scenes) - n_video - n_photo,
         "matched": matched,
         "missing": missing,
+        **({"fixed_scenes": len(fixed), "mode": "details"} if fixed else {}),
     }
     log(f"footage: {share:.0%} of the narration on real GTA 6 footage ({n_video} trailer scene(s), {n_photo} screenshot scene(s), {summary['graphics_only_scenes']} graphics-only), {len(matched)} spoken mention(s) shown")
     if missing:
@@ -457,6 +473,20 @@ def cut_scene_clips(
     cache_dir.mkdir(parents=True, exist_ok=True)
     for sc in scenes:
         fo = sc.get("footage")
+        if fo and fo.get("kind") == "detail":  # "details you missed": run-in, then the frame freezes for the zoom
+            from ..details.produce import detail_plan, render_detail_clip
+
+            plan = detail_plan(sc, durations.get(sc["scene_number"], 0.0), width=width, height=height, fps=fps)
+            cached = cache_dir / f"detail_{stable_hash({**plan, 'v': 1})}.mp4"
+            if not (cached.exists() and cached.stat().st_size > 0):
+                render_detail_clip(plan, cached)
+                cut += 1
+            dest = out_dir / f"footage_scene_{sc['scene_number']:03d}.mp4"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            if not dest.exists() or dest.stat().st_size != cached.stat().st_size:
+                dest.write_bytes(cached.read_bytes())
+            fo["clip"] = str(dest)
+            continue
         if not fo or fo.get("kind") != "video":
             continue
         need = durations.get(sc["scene_number"], 0.0) + 0.2

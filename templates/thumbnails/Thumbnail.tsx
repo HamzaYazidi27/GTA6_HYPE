@@ -29,6 +29,22 @@ export type ThumbProps = {
   calendar: {month: string; day: string} | null;
   /** optional real GTA 6 screenshot / trailer still (public path); replaces the drawn motif */
   photo?: string | null;
+  /** "details you missed": a neon ring around this part of the photo (fractions of the frame) */
+  ring?: {x: number; y: number; w: number; h: number} | null;
+};
+
+/** Neon ring around a detail of the photo. */
+const Ring: React.FC<{ring: {x: number; y: number; w: number; h: number}; color: string}> = ({ring, color}) => {
+  const cx = (ring.x + ring.w / 2) * W;
+  const cy = (ring.y + ring.h / 2) * H;
+  const rx = Math.max(70, (ring.w * W) / 2 * 1.35 + 20);
+  const ry = Math.max(56, (ring.h * H) / 2 * 1.35 + 20);
+  return (
+    <svg width={W} height={H} style={{position: 'absolute', left: 0, top: 0}}>
+      <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={hexA(color, 0.35)} strokeWidth={26} transform={`rotate(-6 ${cx} ${cy})`} />
+      <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke={color} strokeWidth={9} transform={`rotate(-6 ${cx} ${cy})`} />
+    </svg>
+  );
 };
 
 /** Full-bleed real GTA 6 picture, graded into the channel palette. `side` keeps one side darker for the text. */
@@ -187,7 +203,14 @@ const Frame: React.FC<{children: React.ReactNode; color: string; brand: string}>
   </AbsoluteFill>
 );
 
-export const Thumbnail: React.FC<ThumbProps> = (p) => {
+export const Thumbnail: React.FC<ThumbProps> = (p) => (
+  <AbsoluteFill>
+    <ThumbnailBody {...p} />
+    {p.photo && p.ring ? <Ring ring={p.ring} color={(C as Record<string, string>)[p.color] ?? C.coral} /> : null}
+  </AbsoluteFill>
+);
+
+const ThumbnailBody: React.FC<ThumbProps> = (p) => {
   const color = (C as Record<string, string>)[p.color] ?? C.coral;
   const status = p.status && p.status in STATUS ? p.status : null;
   if (p.concept === 'number') {

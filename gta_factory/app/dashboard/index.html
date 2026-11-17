@@ -109,7 +109,7 @@ async function api(method, path, body) {
   return data;
 }
 const STATUS_FR = {completed:'terminé', running:'en cours', queued:'en attente', failed:'échec', needs_review:'à relire', paused:'en pause', stopped:'arrêté'};
-const STEP_FR = {extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
+const STEP_FR = {details:'Détails', details_script:'Script', details_scenes:'Storyboard', extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
 const VERDICT_FR = {confirmed:'CONFIRMÉ', reported:'RAPPORTÉ', rumor:'RUMEUR', speculation:'SPÉCULATION'};
 let current = null, timer = null, formats = {};
 
@@ -173,7 +173,7 @@ function scriptCard(d) {
     const ta = el('textarea', {rows: Math.max(2, Math.ceil(s.narration.length / 110))}); ta.value = s.narration; areas[s.id] = ta;
     const instr = el('input', {placeholder: 'consigne pour réécrire cette section (ex. "plus court, commence par la date")'});
     card.append(el('div', {class: 'sec'}, el('div', {class: 'h'}, el('span', {}, s.label + ' · ' + s.words + ' mots'), el('span', {}, (s.claim_ids || []).join(' '))), ta,
-      el('div', {class: 'row', style: 'margin-top:4px'}, instr, el('button', {class: 'ghost small', onclick: (e) => act(async () => { e.target.disabled = true; e.target.textContent = '…'; await api('POST', `/api/jobs/${d.job.id}/rewrite`, {section: s.id, instruction: instr.value}); })}, 'Réécrire (IA)'))));
+      sc.kind === 'details' ? null : el('div', {class: 'row', style: 'margin-top:4px'}, instr, el('button', {class: 'ghost small', onclick: (e) => act(async () => { e.target.disabled = true; e.target.textContent = '…'; await api('POST', `/api/jobs/${d.job.id}/rewrite`, {section: s.id, instruction: instr.value}); })}, 'Réécrire (IA)'))));
   }
   card.append(el('div', {class: 'row'}, el('button', {onclick: () => act(() => api('PUT', `/api/jobs/${d.job.id}/script`, {sections: Object.entries(areas).map(([id, ta]) => ({id, narration: ta.value}))}))}, 'Enregistrer mes modifications'),
     el('span', {class: 'muted'}, 'puis « refaire depuis : Storyboard » pour regénérer la vidéo')));
@@ -235,7 +235,7 @@ function delBtn(file) {
 }
 async function footAct(fn) {
   try { await fn(); } catch (e) { alert(e.message); }
-  setTimeout(openFootage, 300);
+  setTimeout(() => { if (!current) openFootage(); }, 300);
 }
 async function uploadFiles(list, tags, msg) {
   let n = 0;
@@ -279,6 +279,15 @@ async function openFootage() {
     el('div', {class: 'row', style: 'margin-top:8px'}, el('button', {onclick: () => footAct(() => { if (!files.files.length) throw new Error('Choisis au moins un fichier'); return uploadFiles([...files.files], ftags.value, fmsg); })}, 'Envoyer'), fmsg),
     el('div', {class: 'row', style: 'margin-top:14px;flex-wrap:nowrap'}, link, ltags, el('button', {class: 'ghost', disabled: running, onclick: () => footAct(() => api('POST', '/api/footage/add', {url: link.value, tags: ltags.value}))}, 'Télécharger'))));
 
+  if (d.videos.length) {
+    const vsel = el('select', {style: 'width:auto'}, el('option', {value: ''}, 'toutes les vidéos'), ...d.videos.map((v) => el('option', {value: v.file.replace(/^videos\//, '').replace(/\.[a-z0-9]+$/i, '')}, v.file.replace(/^videos\//, ''))));
+    const fsel = el('select', {style: 'width:auto'}, el('option', {value: 'short'}, 'Short vertical'), el('option', {value: 'details'}, 'Vidéo 16:9'));
+    const cnt = el('input', {type: 'number', min: '2', max: '30', placeholder: 'nombre', style: 'width:110px'});
+    view.append(el('div', {class: 'card'}, el('h2', {}, 'Vidéo « Details you missed »'),
+      el('p', {class: 'muted'}, "Le modèle de vision cherche les petits détails que personne ne voit (panneaux, textes, plaques, écrans, animaux, personnages au fond…), vérifie chacun en gros plan, puis la vidéo s'arrête sur chaque détail, zoome, l'entoure et le nomme, avec le timestamp. Le premier passage sur une vidéo prend du temps (une seule fois, c'est gardé en cache)."),
+      el('div', {class: 'row'}, vsel, fsel, cnt,
+        el('button', {disabled: !(d.vision && d.vision.ready), title: d.vision && d.vision.ready ? '' : 'il faut le modèle de vision (Ollama)', onclick: () => footAct(async () => { const r = await api('POST', '/api/footage/details', {video: vsel.value, format: fsel.value, count: parseInt(cnt.value) || null}); current = r.id; openJob(r.id); })}, 'Lancer'))));
+  }
   const q = el('input', {placeholder: 'une phrase de narration, ex. « Lucia échappe à la police à Vice City »'});
   const out = el('div', {style: 'margin-top:8px'});
   const find = async () => {

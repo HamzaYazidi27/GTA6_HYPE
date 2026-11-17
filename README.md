@@ -74,6 +74,27 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
 - Crédit « Footage: Rockstar Games » à l'écran et dans la description. Les fichiers contenant « leak », « leaked », « datamine » ou « reupload » ne sont jamais utilisés.
 - ⚠️ Les images appartiennent à Rockstar/Take-Two. Les chaînes d'actu les utilisent couramment, mais YouTube peut poser une **revendication Content ID** (monétisation reversée à Rockstar) ; c'est rare qu'une vidéo soit bloquée, mais c'est possible.
 
+## Vidéos « Details you missed »
+
+Le format préféré des fans de GTA : la vidéo **s'arrête sur une image, zoome sur un petit détail, l'entoure d'un cercle néon et le nomme** (« #3 / 5 PANNEAU DE STATION-SERVICE »), avec le **timestamp** dans la vidéo d'origine pour que chacun puisse vérifier.
+
+```bash
+python -m gta_factory details "Trailer 2"                      # un Short vertical, 5 détails
+python -m gta_factory details "Trailer 2" --format details -n 12   # une vidéo 16:9, 12 détails
+python -m gta_factory details gameplay --scan-only             # juste chercher et lister les détails trouvés
+python -m gta_factory details                                  # toute la bibliothèque
+```
+
+Ou dans le dashboard : page **Footage GTA 6** → « Vidéo Details you missed ».
+
+1. **Recherche** : le modèle de vision local (le même que pour les tags) regarde chaque plan et pointe jusqu'à 3 petits détails par image (textes, panneaux, plaques, écrans, logos parodiques, animaux, personnages au fond…), avec leur position.
+2. **Vérification** : chaque détail est recadré en gros plan et redonné au modèle, qui doit confirmer qu'il le voit (et relit le texte). Les détails non confirmés sont jetés.
+3. **Choix** : les plus intéressants (un texte lisible compte plus), un par plan, espacés, jamais un détail déjà montré dans une vidéo précédente, dans l'ordre du trailer avec le meilleur pour la fin.
+4. **Script** : le LLM local n'écrit que ce qui se voit ; toute interprétation est au conditionnel (« peut-être », « on dirait »), les mots « confirmed », « official », « leaked » sont refusés.
+5. **Montage** : le plan joue ~1 s, se fige (flash), la caméra zoome sur le détail, le cercle se dessine, la carte s'affiche ; en 9:16 le cadrage suit le détail. Miniatures : gros plan du meilleur détail entouré.
+
+La recherche est faite **une seule fois** par vidéo (cache `assets/gta6_footage/details.json`) ; la première fois sur un trailer peut prendre 20 à 60 min selon la machine. Le `REVIEW.md` liste chaque détail avec son timestamp : vérifie-les avant de publier, le modèle peut se tromper (surtout sur les petits textes). Un modèle de vision plus gros (`footage.vision_model: qwen2.5vl:32b`) trouve et lit mieux, si ta machine a la mémoire.
+
 ## Utilisation
 
 ```bash
@@ -97,7 +118,7 @@ python -m gta_factory log <job> -f    # suivre le journal
 python -m gta_factory dashboard       # interface web : http://127.0.0.1:8600
 ```
 
-Formats : `long` (~8 min), `breaking` (~4 min), `announcement`, `recap`, `analysis`, `guide` (~8-9 min), `short` (45 s).
+Formats : `long` (~8 min), `breaking` (~4 min), `announcement`, `recap`, `analysis`, `guide` (~8-9 min), `short` (45 s). Et `details` (« details you missed », fait depuis le footage avec la commande `details`).
 
 ## Les 16 étapes
 

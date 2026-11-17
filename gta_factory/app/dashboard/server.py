@@ -342,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8", {"Content-Security-Policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"})
             elif parts == ["api", "jobs"]:
                 db = get_db(s.db_path)
-                self._json({"jobs": db.list_jobs(200), "counts": db.job_counts(), "formats": {k: v.get("label") for k, v in (s.get("formats") or {}).items()}})
+                self._json({"jobs": db.list_jobs(200), "counts": db.job_counts(), "formats": {k: v.get("label") for k, v in (s.get("formats") or {}).items() if not v.get("footage_only")}})
             elif len(parts) == 3 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]):
                 payload = job_payload(s, parts[2])
                 self._json(payload) if payload else self._error(404, "unknown job")
@@ -391,6 +391,16 @@ class Handler(BaseHTTPRequestHandler):
                     spawn_footage_task(s, ["autotag"])
                 elif parts[2] == "process":  # after uploads: stills from new videos, then auto-tags
                     spawn_footage_task(s, ["stills"])
+                elif parts[2] == "details":  # a "details you missed" video from this footage
+                    from ..core.pipeline import create_details_job
+
+                    video = str(body.get("video") or "").strip()
+                    fmt = "details" if body.get("format") == "details" else "short"
+                    count = int(body.get("count") or 0) or None
+                    job_id = create_details_job(s, videos=[video] if video else [], fmt=fmt, count=count)
+                    spawn_runner(s, job_id)
+                    self._json({"id": job_id}, 201)
+                    return
                 elif parts[2] == "find":
                     from ...modules.footage.select import preview
 
@@ -412,10 +422,10 @@ class Handler(BaseHTTPRequestHandler):
                 spawn_runner(s, job_id)
                 self._json({"id": job_id}, 201)
             elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "resume":
-                from ..core.pipeline import STEP_NAMES
+                from ..core.pipeline import ALL_STEP_NAMES
 
                 step = body.get("from_step")
-                if step and step not in STEP_NAMES:
+                if step and step not in ALL_STEP_NAMES:
                     raise FactoryError(f"unknown step '{step}'")
                 spawn_runner(s, parts[2], from_step=step, force=bool(body.get("force")))
                 self._json({"ok": True})

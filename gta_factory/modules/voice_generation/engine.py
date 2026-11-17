@@ -208,7 +208,7 @@ def generate_voiceover(
     return {"provider": tts.name, "voice": tts.voice_id(), "signature": tts.signature(), "scenes": manifest, "reused_from_cache": reused}
 
 
-MIN_SCENE_SECONDS = {"title": 3.2, "chapter": 2.2, "kinetic": 1.8, "outro": 5.5, "countdown": 3.5, "stat": 3.2}
+MIN_SCENE_SECONDS = {"title": 3.2, "chapter": 2.2, "kinetic": 1.8, "outro": 5.5, "countdown": 3.5, "stat": 3.2, "detail": 3.6}
 
 
 def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str, Any], audio_dir: Path, fps: int) -> dict[str, Any]:

@@ -82,7 +82,7 @@ def stage_footage(settings: Any, job_id: str, scenes: list[dict[str, Any]]) -> d
     target = bundle_dir(settings) / "public" / "job_media" / job_id
     for sc in scenes:
         fo = sc.get("footage") or {}
-        src = fo.get("clip") if fo.get("kind") == "video" else fo.get("file") if fo.get("kind") == "photo" else None
+        src = fo.get("clip") if fo.get("kind") in ("video", "detail") else fo.get("file") if fo.get("kind") == "photo" else None
         if not src or not Path(src).exists():
             continue
         p = Path(src)
@@ -90,7 +90,7 @@ def stage_footage(settings: Any, job_id: str, scenes: list[dict[str, Any]]) -> d
         dest = target / f"footage_{sc['scene_number']:03d}{p.suffix.lower()}"
         if not dest.exists() or dest.stat().st_size != p.stat().st_size:
             shutil.copyfile(p, dest)
-        out[sc["scene_number"]] = {"src": f"job_media/{job_id}/{dest.name}", "kind": fo["kind"], "credit": fo.get("credit") or ""}
+        out[sc["scene_number"]] = {"src": f"job_media/{job_id}/{dest.name}", "kind": "photo" if fo["kind"] == "photo" else "video", "credit": fo.get("credit") or ""}
     return out
 
 

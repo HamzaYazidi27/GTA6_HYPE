@@ -3,6 +3,7 @@
     setup                      one-time install: Remotion packages, local LLM (Ollama), voice model, audio library
     doctor                     check every tool and provider
     new URL [URL ...]          create a job from article URL(s) and run it
+    details [VIDEO ...]        a "details you missed" video from the footage library (freeze, zoom, ring, label)
     resume JOB [--from STEP]   continue (or redo from a step)
     list | status JOB | log JOB | delete JOB
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
@@ -215,6 +216,35 @@ def cmd_new(args: argparse.Namespace) -> int:
         urls += [i.split("=", 1)[0] for i in args.text_file if i.split("=", 1)[0] not in urls]
     job_id = create_job(s, urls, fmt=args.format, options=_options(args))
     _print(f"job {job_id} created ({args.format})")
+    if args.detach:
+        log = open(s.jobs_dir / job_id / "pipeline.out", "ab")
+        subprocess.Popen([sys.executable, "-m", "gta_factory", "resume", job_id] + (["--until", args.until] if args.until else []), cwd=s.root, stdout=log, stderr=log, start_new_session=True)
+        _print(f"running in the background; follow with `python -m gta_factory log {job_id} -f`")
+        return 0
+    return _run(job_id, until=args.until)
+
+
+def cmd_details(args: argparse.Namespace) -> int:
+    from ..core.pipeline import create_details_job
+
+    s = get_settings()
+    videos = list(args.videos)
+    if args.scan_only:
+        from ...modules.details.find import make_verifier, pick_details, scan
+
+        cands = scan(s, videos=videos or None, model=args.model, limit=args.limit, log=_print)
+        picked = pick_details(s, cands, args.count or 15, verify=make_verifier(s, model=args.model, log=_print))
+        _print(f"\n{len(cands)} possible detail(s) found; the best {len(picked)}, checked in close-up:")
+        for d in picked:
+            _print(f"  #{d['id'][1:]:<3} {d['video_title']} {d['timecode']:>6}  {d['label']}" + (f"  « {d['text']} »" if d.get("text") else "") + f"  - {d['what']}")
+        if picked:
+            _print(f"\nmake the video: python -m gta_factory details {' '.join(repr(v) for v in videos)} --format short".rstrip())
+        return 0
+    opts = _options(args)
+    if args.model:
+        opts["vision_model"] = args.model
+    job_id = create_details_job(s, videos=videos, fmt=args.format, count=args.count, options=opts)
+    _print(f"job {job_id} created (details you missed, {args.format})")
     if args.detach:
         log = open(s.jobs_dir / job_id / "pipeline.out", "ab")
         subprocess.Popen([sys.executable, "-m", "gta_factory", "resume", job_id] + (["--until", args.until] if args.until else []), cwd=s.root, stdout=log, stderr=log, start_new_session=True)
@@ -579,7 +609,7 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
-    from ..core.pipeline import STEP_NAMES
+    from ..core.pipeline import ALL_STEP_NAMES as STEP_NAMES
 
     p = argparse.ArgumentParser(prog="python -m gta_factory", description="GTA 6 video factory: verified news videos from article URLs.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -616,6 +646,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--detach", action="store_true", help="run in the background")
     job_opts(sp)
     sp.set_defaults(fn=cmd_new)
+
+    sp = sub.add_parser("details", help='a "details you missed" video made from the footage library')
+    sp.add_argument("videos", nargs="*", help='which footage: part of a file name or a tag (e.g. "Trailer 2", gameplay); default: every video')
+    sp.add_argument("--format", "-f", default="short", choices=("short", "details"), help="short = vertical Short (default), details = 16:9 video")
+    sp.add_argument("--count", "-n", type=int, help="how many details (default: details.count_short / count_long)")
+    sp.add_argument("--scan-only", action="store_true", help="only look for details and list the best ones (no video)")
+    sp.add_argument("--model", help="Ollama vision model (default footage.vision_model)")
+    sp.add_argument("--limit", type=int, help="--scan-only: look at most this many new frames")
+    sp.add_argument("--detach", action="store_true", help="run in the background")
+    job_opts(sp)
+    sp.set_defaults(fn=cmd_details)
 
     sp = sub.add_parser("resume", help="continue a job, or redo it from a step")
     sp.add_argument("job")
