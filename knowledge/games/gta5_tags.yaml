@@ -1,0 +1,42 @@
+# Footage concepts of the Grand Theft Auto V library (assets/game_footage/gta5), merged over the
+# built-in ones. GTA 6 characters and places are switched off here, so the vision tagger never calls
+# Michael "Jason". Same format as knowledge/footage_tags.yaml.
+lucia: {enabled: false}
+jason: {enabled: false}
+duo: {enabled: false}
+cal_hampton: {enabled: false}
+boobie_ike: {enabled: false}
+drequan_priest: {enabled: false}
+real_dimez: {enabled: false}
+raul_bautista: {enabled: false}
+brian_heder: {enabled: false}
+vice_city: {enabled: false}
+leonida: {enabled: false}
+leonida_keys: {enabled: false}
+grassrivers: {enabled: false}
+port_gellhorn: {enabled: false}
+ambrosia: {enabled: false}
+mount_kalaga: {enabled: false}
+trailer_1: {enabled: false}
+trailer_2: {enabled: false}
+trailer_3: {enabled: false}
+michael:
+  say: ["michael", "michael de santa"]
+  look: "Michael De Santa: a white man in his forties with slicked-back hair, often in a suit"
+franklin:
+  say: ["franklin", "franklin clinton"]
+  look: "Franklin Clinton: a young Black man in casual streetwear"
+trevor:
+  say: ["trevor", "trevor philips"]
+  look: "Trevor Philips: a balding, scruffy white man in his forties, often in a dirty t-shirt"
+trio:
+  say: ["three characters", "three protagonists", "the trio", "character switching", "switch between"]
+  look: "two or three of the GTA V leads in the same shot"
+  also: [michael, franklin, trevor]
+los_santos:
+  say: ["los santos", "the city", "vinewood", "san andreas"]
+  look: "Los Santos: a Los Angeles-like city, downtown towers, the Vinewood sign, freeways"
+  also: [skyline, highway]
+blaine_county:
+  say: ["blaine county", "sandy shores", "paleto bay", "the desert", "countryside"]
+  look: "Blaine County: desert, trailer parks, mountains and small towns"

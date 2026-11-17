@@ -42,3 +42,6 @@ assets/sound_effects/LIBRARY.json
 # real GTA 6 footage (official trailers / screenshots, downloaded by `python -m gta_factory footage fetch`)
 assets/gta6_footage/*
 !assets/gta6_footage/README.md
+# other games' footage for comparisons (`python -m gta_factory footage update --game rdr2`)
+assets/game_footage/*
+!assets/game_footage/README.md

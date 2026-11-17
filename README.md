@@ -113,6 +113,33 @@ Ou dans le dashboard : page **Footage GTA 6** → « Vidéo Details you missed �
 
 La recherche est faite **une seule fois** par vidéo (cache `assets/gta6_footage/details.json`) ; la première fois sur un trailer peut prendre 20 à 60 min selon la machine. Le `REVIEW.md` liste chaque détail avec son timestamp : vérifie-les avant de publier, le modèle peut se tromper (surtout sur les petits textes). Un modèle de vision plus gros (`footage.vision_model: qwen2.5vl:32b`) trouve et lit mieux, si ta machine a la mémoire.
 
+## Comparaisons et top listes
+
+Deux formats très demandés, faits **item par item** à partir de plusieurs sources :
+
+- **Comparaison** : « GTA 6 vs Red Dead 2 », « GTA 6 vs GTA 5 »… Un système par item (limite d'armes, wanted, focus, salle de sport…). Chaque item s'ouvre sur un **écran partagé** : l'autre jeu à gauche, GTA 6 à droite, le numéro et le titre au-dessus, « avant / maintenant » sous chaque côté. Ensuite, ce qui est dit sur l'autre jeu passe **sur ses images**, ce qui est dit sur GTA 6 sur celles de GTA 6, et une phrase qui parle des deux revient à l'écran partagé.
+- **Top liste** : « 12 things to do on day one », « 10 features… ». Chaque entrée s'ouvre sur une carte numérotée (« #4 / 12 STEAL A CLASSIC CAR ») sur les images de GTA 6.
+
+```bash
+python -m gta_factory footage update --game rdr2      # une fois : trailers officiels de Red Dead 2 (ou --game gta5)
+
+python -m gta_factory topic "Red Dead 2 systems inside GTA 6" --vs rdr2 --source https://www.ign.com/... --source https://...
+python -m gta_factory topic "GTA 6 vs GTA 5: what changes" --vs gta5 -n 15
+python -m gta_factory topic "12 things to do on day one in GTA 6" -n 12
+python -m gta_factory topic "5 GTA 6 systems from Red Dead 2" --vs rdr2 --format short    # un Short vertical
+python -m gta_factory games                            # les jeux comparables, leurs faits et leur footage
+```
+
+Ou dans le dashboard : carte **Comparaison ou top liste** (et, page **Footage GTA 6**, la carte « Footage des autres jeux »).
+
+Les étapes : `research` (tes sources `--source` + les meilleurs articles trouvés par la recherche d'actu, sauf `--no-search`) → `analyze` (toutes les affirmations sur GTA 6 utiles au sujet, preuve mot pour mot) → `fact_check` (chaque source vérifie les autres, jamais elle-même) → `outline` (les items, dans l'ordre, chacun appuyé sur des affirmations vérifiées) → `script` (même discipline que les news : attribution, audit, révision) → `scenes`, puis les mêmes étapes de production que les autres vidéos. Les chapitres YouTube sont les titres des items, comme dans les vidéos de référence.
+
+**Ce qui est dit sur l'autre jeu** vient uniquement de `knowledge/games/<jeu>.yaml` (le jeu sorti : Red Dead 2 et GTA 5 sont fournis, ~20 faits chacun). Un fait absent du fichier ne peut pas être dit : ajoute, corrige ou supprime des lignes librement, une phrase courte par fait. Ce qui est dit sur GTA 6 garde son statut à l'écran (CONFIRMED, REPORTED…), comme dans les news.
+
+**Le footage de l'autre jeu** a sa propre bibliothèque (`assets/game_footage/<jeu>/`), avec les mêmes outils : `footage update|add|tag|autotag|list --game rdr2`. Tes propres captures de gameplay y ont leur place (`footage add ~/Captures/rdr2 --game rdr2 --tags horse,camp`). Une bibliothèque vide n'emprunte jamais les images de GTA 6 : ses scènes restent graphiques et le contrôle qualité le signale.
+
+**Ajouter un jeu** (GTA IV, San Andreas…) : une entrée dans la section `games` de `config.yaml` (nom, mots qui le désignent dans la narration, dossier, trailers officiels), un fichier `knowledge/games/<id>.yaml` avec ses faits, et du footage. Réglages : section `topic` (nombre d'items, durée par item, sources lues).
+
 ## Utilisation
 
 ```bash
@@ -136,7 +163,7 @@ python -m gta_factory log <job> -f    # suivre le journal
 python -m gta_factory dashboard       # interface web : http://127.0.0.1:8600
 ```
 
-Formats : `long` (~8 min), `breaking` (~4 min), `announcement`, `recap`, `analysis`, `guide` (~8-9 min), `short` (45 s). Et `details` (« details you missed », fait depuis le footage avec la commande `details`).
+Formats : `long` (~8 min), `breaking` (~4 min), `announcement`, `recap`, `analysis`, `guide` (~8-9 min), `short` (45 s). Et `details` (« details you missed », fait depuis le footage avec la commande `details`), `versus` et `toplist` (comparaisons et top listes, avec la commande `topic` ; leur durée suit le nombre d'items).
 
 ## Les 16 étapes
 

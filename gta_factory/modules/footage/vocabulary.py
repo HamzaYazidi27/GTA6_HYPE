@@ -173,7 +173,10 @@ def tags_file(settings: Any) -> Path:
 def load_vocabulary(settings: Any) -> Vocabulary:
     """Built-in concepts merged with ``knowledge/footage_tags.yaml`` (new concepts, extra words, or ``enabled: false``)."""
     concepts: dict[str, dict[str, Any]] = {}
-    for source in (_load_yaml(HERE / "default_tags.yaml"), _load_yaml(tags_file(settings))):
+    # another game's library (games.py) adds its own concepts and switches GTA 6 ones off
+    extra = [Path(str(x)) for x in settings.get("footage.extra_tags_files") or []]
+    extra = [x if x.is_absolute() else settings.root / x for x in extra]
+    for source in (_load_yaml(HERE / "default_tags.yaml"), _load_yaml(tags_file(settings)), *(_load_yaml(x) for x in extra)):
         for raw_id, c in source.items():
             cid = concept_id(str(raw_id))
             if not cid:

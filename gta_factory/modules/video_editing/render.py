@@ -83,19 +83,26 @@ def stage_footage(settings: Any, job_id: str, scenes: list[dict[str, Any]]) -> d
 
     Returns scene number -> {"src": path for ``staticFile``, "kind": "video"|"photo", "credit": ...}.
     """
-    out: dict[int, dict[str, str]] = {}
+    out: dict[int, dict[str, Any]] = {}
     target = bundle_dir(settings) / "public" / "job_media" / job_id
-    for sc in scenes:
-        fo = sc.get("footage") or {}
+
+    def stage(fo: dict[str, Any], name: str) -> dict[str, Any] | None:
         src = fo.get("clip") if fo.get("kind") in ("video", "detail") else fo.get("file") if fo.get("kind") == "photo" else None
         if not src or not Path(src).exists():
-            continue
+            return None
         p = Path(src)
         target.mkdir(parents=True, exist_ok=True)
-        dest = target / f"footage_{sc['scene_number']:03d}{p.suffix.lower()}"
+        dest = target / f"{name}{p.suffix.lower()}"
         if not dest.exists() or dest.stat().st_size != p.stat().st_size:
             shutil.copyfile(p, dest)
-        out[sc["scene_number"]] = {"src": f"job_media/{job_id}/{dest.name}", "kind": "photo" if fo["kind"] == "photo" else "video", "credit": fo.get("credit") or ""}
+        return {"src": f"job_media/{job_id}/{dest.name}", "kind": "photo" if fo["kind"] == "photo" else "video", "credit": fo.get("credit") or ""}
+
+    for sc in scenes:
+        n = sc["scene_number"]
+        main = stage(sc.get("footage") or {}, f"footage_{n:03d}")
+        second = stage(sc.get("footage_b") or {}, f"footage_{n:03d}_b")  # left panel of a split screen
+        if main or second:
+            out[n] = {**(main or {"src": "", "kind": "video", "credit": second["credit"] if second else ""}), **({"b": second} if second else {})}
     return out
 
 
@@ -218,6 +225,7 @@ def render_video(
     for c in chunks:
         media = {s["n"]: hashlib.sha1((public / s["media"]).read_bytes()).hexdigest() for s in c["scenes"] if s.get("media") and (public / s["media"]).exists()}
         media.update({f"f{s['n']}": hashlib.sha1((public / s["footage"]["src"]).read_bytes()).hexdigest() for s in c["scenes"] if s.get("footage") and (public / s["footage"]["src"]).exists()})
+        media.update({f"b{s['n']}": hashlib.sha1((public / s["footageB"]["src"]).read_bytes()).hexdigest() for s in c["scenes"] if s.get("footageB") and (public / s["footageB"]["src"]).exists()})
         key = stable_hash({"t": thash, "shared": shared, "scenes": c["scenes"], "media": media, "range": c["frameRange"], "comp": composition, "crf": crf})
         path = chunk_dir / f"chunk_{key}.mp4"
         files.append(path)

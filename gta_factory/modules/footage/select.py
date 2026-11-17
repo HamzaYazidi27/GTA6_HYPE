@@ -163,83 +163,68 @@ def best_item(want: dict[str, float], pool: list[dict[str, Any]], used: dict[str
     return it, s
 
 
-def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None) -> dict[str, Any]:
-    """Mutates ``scenes`` (adds ``footage``) and returns {"ledger": [...], "summary": {...}}.
+class _Library:
+    """One footage library (GTA 6, or another game of a comparison) while footage is assigned to the scenes."""
 
-    Scenes that already carry a fixed piece of footage (``kind: detail``, the "details you missed"
-    freeze frames) keep it and count as footage time; the others are planned as usual.
-    """
-    for sc in scenes:
-        if (sc.get("footage") or {}).get("kind") != "detail":
-            sc.pop("footage", None)
-    fixed = {sc["scene_number"] for sc in scenes if sc.get("footage")}
-    cfg = settings.get("footage", {}) or {}
-    if not cfg.get("enabled", True):
-        return {"ledger": [], "summary": {"enabled": False}}
-    items = load_items(settings)
-    items["known"] = set(load_vocabulary(settings).concepts)
-    lib = library_summary(items["index"])
-    shots, photos = items["shots"], items["photos"]
-    if not shots and not photos:
-        log("footage: the GTA 6 footage library is empty - run `python -m gta_factory footage update` to use real trailer footage")
-        return {"ledger": [], "summary": {"enabled": True, "library": {k: v for k, v in lib.items() if k != "skipped"}, "share": 0.0}}
-    ratio, lo, hi = ratio_band(settings)
-    photo_share = max(0.0, min(1.0, float(cfg.get("photo_share", 0.25))))
-    max_clip = float(cfg.get("max_clip_seconds") or settings.get("rights_review.max_seconds_per_official_clip", 6))
-    min_piece = float(cfg.get("min_piece_seconds", 1.2))
-    wpm = float(settings.get("script.words_per_minute", 165))
-    match_on = bool(cfg.get("match_spoken", True))
+    def __init__(self, settings: Any, gid: str, *, ledger: dict[str, dict[str, Any]], cfg: dict[str, Any], max_clip: float, min_piece: float, photo_share: float):
+        self.settings = settings
+        self.gid = gid
+        self.items = load_items(settings)
+        self.items["known"] = set(load_vocabulary(settings).concepts)
+        self.summary = library_summary(self.items["index"])
+        self.shots, self.photos = self.items["shots"], self.items["photos"]
+        self.root = footage_dir(settings)
+        self.beat_pool = [it for it in self.shots if it["e"] - it["s"] >= min_piece] + self.photos
+        self.fill_shots = [it for it in self.shots if it["e"] - it["s"] >= min_piece]
+        self.by_video: dict[str, list[dict[str, Any]]] = {}
+        for it in self.fill_shots:
+            self.by_video.setdefault(it["file"], []).append(it)
+        self.used: dict[str, int] = {}
+        self.ledger = ledger
+        self.cfg = cfg
+        self.max_clip, self.min_piece, self.photo_share = max_clip, min_piece, photo_share
+        self.name = str(settings.get("footage.game_name") or "GTA 6")
 
-    plans: dict[int, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
-    for sc in scenes:
-        plans[sc["scene_number"]] = plan_beats(sc.get("narration", ""), items, min_piece=min_piece) if match_on and sc["scene_number"] not in fixed else ([], [])
-    free = [sc for sc in scenes if sc["scene_number"] not in fixed]
-    chosen = _pick_scenes(free, ratio, wpm, lo=lo, hi=hi, matched={n for n, (b, _) in plans.items() if b}) if free else set()
+    @property
+    def empty(self) -> bool:
+        return not self.shots and not self.photos
 
-    root = footage_dir(settings)
-    beat_pool = [it for it in shots if it["e"] - it["s"] >= min_piece] + photos
-    fill_shots = [it for it in shots if it["e"] - it["s"] >= min_piece]
-    by_video: dict[str, list[dict[str, Any]]] = {}
-    for it in fill_shots:
-        by_video.setdefault(it["file"], []).append(it)
-    used: dict[str, int] = {}
-    ledger: dict[str, dict[str, Any]] = {}
-    time_total = sum(_est_seconds(sc, wpm) for sc in scenes) or 1.0
-    time_footage = 0.0
-    n_photo = n_video = 0
-    matched: list[dict[str, Any]] = []
-    missing: list[dict[str, Any]] = []
+    def plan(self, text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        return plan_beats(text, self.items, min_piece=self.min_piece)
 
-    def ledger_add(it: dict[str, Any], scene_n: int) -> str:
+    def ledger_add(self, it: dict[str, Any], scene_n: int) -> str:
         file_rel = it["file"]
-        aid = "gta6-" + hashlib.sha1(file_rel.encode()).hexdigest()[:10]
-        e = ledger.setdefault(aid, {
+        aid = ("gta6-" if self.gid == "gta6" else f"{self.gid}-") + hashlib.sha1(file_rel.encode()).hexdigest()[:10]
+        what = "Real GTA 6 footage (footage.ratio)" if self.gid == "gta6" else f"Real {self.name} footage, shown while the comparison talks about it"
+        e = self.ledger.setdefault(aid, {
             "asset_id": aid,
             "kind": "official_screenshot" if it["kind"] == "photo" else "official_trailer",
-            "file_path": str(root / file_rel),
+            "file_path": str(self.root / file_rel),
             "origin_url": (it.get("source_url") if it["kind"] == "photo" else it["video"].get("source_url")) or "",
             "license": "Official Rockstar Games promotional material, used for news commentary (short excerpts, transformed with graphics, credited)",
             "commercial_use": True,
             "attribution_required": True,
             "attribution": (it.get("credit") if it["kind"] == "photo" else it["video"].get("credit")) or DEFAULT_CREDIT,
             "review_status": "approved",
-            "reason": f"Real GTA 6 footage (footage.ratio). Excerpts <= {max_clip:g}s, credited on screen and in the description. YouTube Content ID may still claim the video for Rockstar/Take-Two.",
+            "reason": f"{what}. Excerpts <= {self.max_clip:g}s, credited on screen and in the description. YouTube Content ID may still claim the video for Rockstar/Take-Two.",
             "scenes": [],
+            **({"game": self.gid} if self.gid != "gta6" else {}),
         })
         if scene_n not in e["scenes"]:
             e["scenes"].append(scene_n)
         return aid
 
-    def fill_for(sc: dict[str, Any], need: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def fill_for(self, sc: dict[str, Any], need: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Filler pieces: follow one trailer's own edit from a shot that fits the scene's words, least used first."""
         n = sc["scene_number"]
+        used = self.used
         words = {t for t, _ in word_tokens(" ".join([sc.get("narration", ""), sc.get("on_screen_text", ""), sc.get("emphasis", "")]))}
         pieces: list[dict[str, Any]] = []
         its: list[dict[str, Any]] = []
         got = 0.0
-        if fill_shots:
-            start = min(fill_shots, key=lambda s: (-len(words & set(s["tags"])), used.get(s["key"], 0), _h(n, s["key"])))
-            seq = by_video[start["file"]]
+        if self.fill_shots:
+            start = min(self.fill_shots, key=lambda s: (-len(words & set(s["tags"])), used.get(s["key"], 0), _h(n, s["key"])))
+            seq = self.by_video[start["file"]]
             j = seq.index(start)
             k = 0
             while got < need and k < len(seq) * 2:
@@ -247,41 +232,30 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
                 k += 1
                 if k > 1 and used.get(s["key"], 0) > used.get(start["key"], 0):
                     continue
-                p = _piece(s, max_clip)
+                p = _piece(s, self.max_clip)
                 pieces.append(p)
                 its.append(s)
                 used[s["key"]] = used.get(s["key"], 0) + 1
                 got += p["end"] - p["start"]
         else:  # screenshots only: a slow slideshow
-            for ph in sorted(photos, key=lambda p: (used.get(p["key"], 0), _h(n, p["key"]))):
+            for ph in sorted(self.photos, key=lambda p: (used.get(p["key"], 0), _h(n, p["key"]))):
                 if got >= need:
                     break
-                pieces.append(_piece(ph, max_clip))
+                pieces.append(_piece(ph, self.max_clip))
                 its.append(ph)
                 used[ph["key"]] = used.get(ph["key"], 0) + 1
-                got += float(cfg.get("photo_hold_seconds", 3.5))
+                got += float(self.cfg.get("photo_hold_seconds", 3.5))
         return pieces, its
 
-    for sc in scenes:
+    def assign(self, sc: dict[str, Any], est: float, beats_plan: list[dict[str, Any]], matched: list[dict[str, Any]], *, allow_photo: bool = True) -> dict[str, Any] | None:
+        """The footage of one scene (a whole screenshot, or a clip of beats + filler), or None when the library has nothing."""
         n = sc["scene_number"]
-        if n in fixed:
-            fo = sc["footage"]
-            rel = Path(fo["file"]).resolve().relative_to(root.resolve()).as_posix() if str(Path(fo["file"]).resolve()).startswith(str(root.resolve())) else Path(fo["file"]).name
-            v = next((x for x in items["index"].get("videos", []) if x["file"] == rel), {})
-            fo["asset_ids"] = [ledger_add({"kind": "shot", "file": rel, "video": {"credit": fo.get("credit") or v.get("credit"), "source_url": v.get("source_url", "")}}, n)]
-            time_footage += _est_seconds(sc, wpm)
-            n_video += 1
-            continue
-        beats_plan, miss = plans[n]
-        missing += [{"scene": n, **m} for m in miss]
-        if n not in chosen:
-            continue
-        est = _est_seconds(sc, wpm)
-        prefer = "shot"
+        used = self.used
         beats: list[dict[str, Any]] = []
         its: list[dict[str, Any]] = []
+        extra = {"game": self.gid} if self.gid != "gta6" else {}
         for b in beats_plan:
-            it, score = best_item(_wanted(b["concepts"], items["vocab"]), beat_pool, used, f"{n}:{b['word']}", prefer)
+            it, score = best_item(_wanted(b["concepts"], self.items["vocab"]), self.beat_pool, used, f"{n}:{b['word']}", "shot")
             if it is None:
                 continue
             if its and its[-1]["key"] == it["key"]:  # same picture again: keep it on screen, no new cut
@@ -290,32 +264,139 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
                 matched[-1].update(said=beats[-1]["said"], concepts=beats[-1]["concepts"])
                 continue
             used[it["key"]] = used.get(it["key"], 0) + 1
-            beats.append({"word": b["word"], "said": b["said"], "concepts": b["concepts"], "piece": _piece(it, max_clip), "score": round(score, 2)})
+            beats.append({"word": b["word"], "said": b["said"], "concepts": b["concepts"], "piece": _piece(it, self.max_clip), "score": round(score, 2)})
             its.append(it)
-            matched.append({"scene": n, "said": b["said"], "concepts": b["concepts"], "file": it["file"], "kind": it["kind"], **({"at": it["s"]} if it["kind"] == "shot" else {})})
+            matched.append({"scene": n, "said": b["said"], "concepts": b["concepts"], "file": it["file"], "kind": it["kind"], **({"at": it["s"]} if it["kind"] == "shot" else {}), **extra})
         whole_photo = None
-        if not beats:
-            want_photo = bool(photos) and (not fill_shots or (n * 0.6180339 % 1.0) < photo_share)
-            if want_photo:
-                whole_photo = min(photos, key=lambda p: (used.get(p["key"], 0), _h(n, p["key"])))
-                used[whole_photo["key"]] = used.get(whole_photo["key"], 0) + 1
-        elif len(beats) == 1 and beats[0]["piece"]["type"] == "photo" and beats[0]["word"] <= 2 and est <= 8.0:
-            whole_photo = its[0]  # one screenshot named right at the start of a short scene: show it the whole time
+        if allow_photo:
+            if not beats:
+                want_photo = bool(self.photos) and (not self.fill_shots or (n * 0.6180339 % 1.0) < self.photo_share)
+                if want_photo:
+                    whole_photo = min(self.photos, key=lambda p: (used.get(p["key"], 0), _h(n, p["key"])))
+                    used[whole_photo["key"]] = used.get(whole_photo["key"], 0) + 1
+            elif len(beats) == 1 and beats[0]["piece"]["type"] == "photo" and beats[0]["word"] <= 2 and est <= 8.0:
+                whole_photo = its[0]  # one screenshot named right at the start of a short scene: show it the whole time
         if whole_photo is not None:
-            aid = ledger_add(whole_photo, n)
-            sc["footage"] = {"kind": "photo", "file": whole_photo["path"], "credit": whole_photo.get("credit") or DEFAULT_CREDIT, "asset_ids": [aid], "beats": beats}
+            aid = self.ledger_add(whole_photo, n)
+            return {"kind": "photo", "file": whole_photo["path"], "credit": whole_photo.get("credit") or DEFAULT_CREDIT, "asset_ids": [aid], "beats": beats, **extra}
+        fill, fill_its = self.fill_for(sc, est * 1.5 + 2.0)
+        if not fill and not beats:
+            return None
+        all_its = its + fill_its
+        aids = list(dict.fromkeys(self.ledger_add(it, n) for it in all_its))
+        first = all_its[0]
+        credit = (first.get("credit") if first["kind"] == "photo" else first["video"].get("credit")) or DEFAULT_CREDIT
+        return {"kind": "video", "beats": beats, "fill": fill, "credit": credit, "asset_ids": aids, **extra}
+
+
+def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None) -> dict[str, Any]:
+    """Mutates ``scenes`` (adds ``footage``) and returns {"ledger": [...], "summary": {...}}.
+
+    Scenes that already carry a fixed piece of footage (``kind: detail``, the "details you missed"
+    freeze frames) keep it and count as footage time; the others are planned as usual.
+
+    Comparison scenes (``modules/topic``) say which library they need: ``footage_game`` (a full-screen
+    scene of GTA 6 or of the other game) or ``footage_pair`` (a split screen: ``footage_b`` is the left
+    panel, from the other game, and ``footage`` the right one, from GTA 6). Those videos are made of
+    real footage from start to end, so the 80-90 % band does not apply to them.
+    """
+    from .games import game_settings
+
+    for sc in scenes:
+        if (sc.get("footage") or {}).get("kind") != "detail":
+            sc.pop("footage", None)
+        sc.pop("footage_b", None)
+    fixed = {sc["scene_number"] for sc in scenes if sc.get("footage")}
+    cfg = settings.get("footage", {}) or {}
+    if not cfg.get("enabled", True):
+        return {"ledger": [], "summary": {"enabled": False}}
+    topic = any(sc.get("footage_game") or sc.get("footage_pair") for sc in scenes)
+    ledger: dict[str, dict[str, Any]] = {}
+    opts = {
+        "ledger": ledger,
+        "cfg": cfg,
+        "max_clip": float(cfg.get("max_clip_seconds") or settings.get("rights_review.max_seconds_per_official_clip", 6)),
+        "min_piece": float(cfg.get("min_piece_seconds", 1.2)),
+        "photo_share": max(0.0, min(1.0, float(cfg.get("photo_share", 0.25)))),
+    }
+    main = _Library(settings, "gta6", **opts)
+    libs: dict[str, _Library] = {"gta6": main}
+    for gid in sorted({g for sc in scenes for g in [sc.get("footage_game"), *(sc.get("footage_pair") or [])] if g and g != "gta6"}):
+        libs[gid] = _Library(game_settings(settings, gid), gid, **opts)
+    lib = main.summary
+    if all(x.empty for x in libs.values()):
+        log("footage: the GTA 6 footage library is empty - run `python -m gta_factory footage update` to use real trailer footage")
+        return {"ledger": [], "summary": {"enabled": True, "library": {k: v for k, v in lib.items() if k != "skipped"}, "share": 0.0}}
+    for gid, x in libs.items():
+        if x.empty and gid != "gta6":
+            log(f"footage: the {x.name} library is empty - run `python -m gta_factory footage update --game {gid}` (its scenes stay graphics-only until then)")
+    ratio, lo, hi = ratio_band(settings)
+    wpm = float(settings.get("script.words_per_minute", 165))
+    match_on = bool(cfg.get("match_spoken", True))
+
+    def lib_of(gid: str | None) -> _Library:
+        # never another game's pictures for GTA 6 (or the reverse): an empty library leaves its scenes graphics-only
+        return libs.get(gid or "gta6") or main
+
+    plans: dict[int, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
+    for sc in scenes:
+        n = sc["scene_number"]
+        plans[n] = lib_of(sc.get("footage_game")).plan(sc.get("narration", "")) if match_on and n not in fixed and not sc.get("footage_pair") else ([], [])
+    free = [sc for sc in scenes if sc["scene_number"] not in fixed]
+    if topic:
+        chosen = {sc["scene_number"] for sc in free}
+    else:
+        chosen = _pick_scenes(free, ratio, wpm, lo=lo, hi=hi, matched={n for n, (b, _) in plans.items() if b}) if free else set()
+
+    time_total = sum(_est_seconds(sc, wpm) for sc in scenes) or 1.0
+    time_footage = 0.0
+    n_photo = n_video = n_split = 0
+    matched: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    per_game: dict[str, int] = {}
+
+    for sc in scenes:
+        n = sc["scene_number"]
+        if n in fixed:
+            fo = sc["footage"]
+            root = main.root
+            rel = Path(fo["file"]).resolve().relative_to(root.resolve()).as_posix() if str(Path(fo["file"]).resolve()).startswith(str(root.resolve())) else Path(fo["file"]).name
+            v = next((x for x in main.items["index"].get("videos", []) if x["file"] == rel), {})
+            fo["asset_ids"] = [main.ledger_add({"kind": "shot", "file": rel, "video": {"credit": fo.get("credit") or v.get("credit"), "source_url": v.get("source_url", "")}}, n)]
+            time_footage += _est_seconds(sc, wpm)
+            n_video += 1
+            continue
+        beats_plan, miss = plans[n]
+        x = lib_of(sc.get("footage_game"))
+        missing += [{"scene": n, **m, **({"game": x.gid} if x.gid != "gta6" else {})} for m in miss]
+        if n not in chosen:
+            continue
+        est = _est_seconds(sc, wpm)
+        if sc.get("footage_pair"):  # split screen: one clip per panel, from each game's library
+            left, right = (lib_of(g) for g in sc["footage_pair"])
+            text = " ".join([sc.get("narration", ""), (sc.get("data") or {}).get("title") or ""])
+            fo_r = right.assign(sc, est, right.plan(text)[0] if match_on else [], matched, allow_photo=False)
+            fo_l = left.assign(sc, est, left.plan(text)[0] if match_on else [], matched, allow_photo=False)
+            if fo_r:
+                sc["footage"] = fo_r
+            if fo_l:
+                sc["footage_b"] = fo_l
+            if fo_r or fo_l:
+                n_split += 1
+                time_footage += est
+                for g in {right.gid, left.gid}:
+                    per_game[g] = per_game.get(g, 0) + 1
+            continue
+        fo = x.assign(sc, est, beats_plan, matched)
+        if fo is None:
+            continue
+        sc["footage"] = fo
+        per_game[x.gid] = per_game.get(x.gid, 0) + 1
+        if fo["kind"] == "photo":
             n_photo += 1
         else:
-            fill, fill_its = fill_for(sc, est * 1.5 + 2.0)
-            if not fill and not beats:
-                continue
-            all_its = its + fill_its
-            aids = list(dict.fromkeys(ledger_add(it, n) for it in all_its))
-            first = all_its[0]
-            credit = (first.get("credit") if first["kind"] == "photo" else first["video"].get("credit")) or DEFAULT_CREDIT
-            sc["footage"] = {"kind": "video", "beats": beats, "fill": fill, "credit": credit, "asset_ids": aids}
             n_video += 1
-        time_footage += _est_seconds(sc, wpm)
+        time_footage += est
     share = round(time_footage / time_total, 3)
     summary = {
         "enabled": True,
@@ -326,12 +407,14 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
         "share": share,
         "video_scenes": n_video,
         "photo_scenes": n_photo,
-        "graphics_only_scenes": len(scenes) - n_video - n_photo,
+        "graphics_only_scenes": len(scenes) - n_video - n_photo - n_split,
         "matched": matched,
         "missing": missing,
         **({"fixed_scenes": len(fixed), "mode": "details"} if fixed else {}),
+        **({"mode": "topic", "split_scenes": n_split, "games": {g: {"name": libs[g].name, "scenes": per_game.get(g, 0), "library": {k: v for k, v in libs[g].summary.items() if k != "skipped"}} for g in libs}} if topic else {}),
     }
-    log(f"footage: {share:.0%} of the narration on real GTA 6 footage ({n_video} trailer scene(s), {n_photo} screenshot scene(s), {summary['graphics_only_scenes']} graphics-only), {len(matched)} spoken mention(s) shown")
+    others = ", ".join(f"{libs[g].name} on {per_game.get(g, 0)}" for g in libs if g != "gta6")
+    log(f"footage: {share:.0%} of the narration on real footage ({n_video} trailer scene(s), {n_photo} screenshot scene(s){f', {n_split} split screen(s)' if n_split else ''}, {summary['graphics_only_scenes']} graphics-only){f'; {others} scene(s)' if others else ''}, {len(matched)} spoken mention(s) shown")
     if missing:
         names = sorted({m["said"] for m in missing})
         log(f"footage: said but not in the library yet: {', '.join(names[:12])} (add footage with `python -m gta_factory footage add ... --tags ...`)")
@@ -487,45 +570,58 @@ def cut_scene_clips(
                 dest.write_bytes(cached.read_bytes())
             fo["clip"] = str(dest)
             continue
-        if not fo or fo.get("kind") != "video":
-            continue
         need = durations.get(sc["scene_number"], 0.0) + 0.2
-        segs = build_segments(fo, words.get(sc["scene_number"]) or [], need, lead=lead, min_piece=min_piece, max_hold=max_hold, photo_hold=photo_hold)
-        if not segs:
-            continue
-        # whole frames: each cut lands on a frame boundary and the clip has exactly the frames it needs
-        bounds = [round(s["t"] * fps) for s in segs] + [round(need * fps)]
-        frames = [max(1, b - a) for a, b in zip(bounds, bounds[1:])]
-        fo["segments"] = segs
-        key = stable_hash({"s": segs, "f": frames, "w": width, "h": height, "fps": fps, "v": 2})
-        cached = cache_dir / f"clip_{key}.mp4"
-        if not (cached.exists() and cached.stat().st_size > 0):
-            cmd = ["ffmpeg", "-y", "-v", "error"]
-            chains = []
-            for i, (s, nf) in enumerate(zip(segs, frames)):
-                secs = nf / fps + 0.25  # a little extra input; trim cuts at the exact frame
-                if s["type"] == "photo":
-                    cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{secs:.3f}", "-i", s["file"]]
-                    vf = _pan_filter(width, height, fps, nf, i + sc["scene_number"])
-                else:
-                    cmd += ["-ss", f"{s['start']:.3f}", "-t", f"{secs:.3f}", "-i", s["file"]]
-                    vf = _cover_filter(width, height, fps)
-                chains.append(f"[{i}:v]{vf},trim=end_frame={nf},setpts=PTS-STARTPTS[v{i}];")
-            graph = "".join(chains) + "".join(f"[v{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0[out]"
-            tmp = cached.with_suffix(".part.mp4")
-            cmd += ["-filter_complex", graph, "-map", "[out]", "-frames:v", str(sum(frames)), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-g", str(fps), "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(tmp)]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
-            if proc.returncode != 0 or not tmp.exists():
-                raise RenderError(f"Could not cut the GTA 6 footage for scene {sc['scene_number']}: {proc.stderr.strip()[-500:]}", hint="Check the files in assets/gta6_footage (`python -m gta_factory footage list`).")
-            tmp.rename(cached)
-            cut += 1
-        dest = out_dir / f"footage_scene_{sc['scene_number']:03d}.mp4"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        if not dest.exists() or dest.stat().st_size != cached.stat().st_size:
-            dest.write_bytes(cached.read_bytes())
-        fo["clip"] = str(dest)
+        panels = (sc.get("data") or {}).get("panels") if sc.get("template") == "compare" else None
+        # a split screen has one clip per panel (left = footage_b, the other game; right = footage, GTA 6)
+        jobs = [("footage", "", width, height)] if not panels else [("footage", "", panels["right"][2], panels["right"][3]), ("footage_b", "_b", panels["left"][2], panels["left"][3])]
+        for key, suffix, w, h in jobs:
+            fo = sc.get(key)
+            if not fo or fo.get("kind") != "video":
+                continue
+            if _cut_clip(sc, fo, need, words.get(sc["scene_number"]) or [], out_dir=out_dir, suffix=suffix, width=w, height=h, fps=fps, cache_dir=cache_dir, lead=lead, min_piece=min_piece, max_hold=max_hold, photo_hold=photo_hold):
+                cut += 1
     if cut:
         log(f"footage: {cut} scene clip(s) cut from the trailers and screenshots")
+    return cut
+
+
+def _cut_clip(sc: dict[str, Any], fo: dict[str, Any], need: float, words: list[dict[str, Any]], *, out_dir: Path, suffix: str, width: int, height: int, fps: int, cache_dir: Path, lead: float, min_piece: float, max_hold: float, photo_hold: float) -> bool:
+    """Cut one scene clip (cached by content) and set ``fo["clip"]``. Returns True when ffmpeg had to run."""
+    cut = False
+    segs = build_segments(fo, words, need, lead=lead, min_piece=min_piece, max_hold=max_hold, photo_hold=photo_hold)
+    if not segs:
+        return False
+    # whole frames: each cut lands on a frame boundary and the clip has exactly the frames it needs
+    bounds = [round(s["t"] * fps) for s in segs] + [round(need * fps)]
+    frames = [max(1, b - a) for a, b in zip(bounds, bounds[1:])]
+    fo["segments"] = segs
+    key = stable_hash({"s": segs, "f": frames, "w": width, "h": height, "fps": fps, "v": 2})
+    cached = cache_dir / f"clip_{key}.mp4"
+    if not (cached.exists() and cached.stat().st_size > 0):
+        cmd = ["ffmpeg", "-y", "-v", "error"]
+        chains = []
+        for i, (s, nf) in enumerate(zip(segs, frames)):
+            secs = nf / fps + 0.25  # a little extra input; trim cuts at the exact frame
+            if s["type"] == "photo":
+                cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{secs:.3f}", "-i", s["file"]]
+                vf = _pan_filter(width, height, fps, nf, i + sc["scene_number"])
+            else:
+                cmd += ["-ss", f"{s['start']:.3f}", "-t", f"{secs:.3f}", "-i", s["file"]]
+                vf = _cover_filter(width, height, fps)
+            chains.append(f"[{i}:v]{vf},trim=end_frame={nf},setpts=PTS-STARTPTS[v{i}];")
+        graph = "".join(chains) + "".join(f"[v{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0[out]"
+        tmp = cached.with_suffix(".part.mp4")
+        cmd += ["-filter_complex", graph, "-map", "[out]", "-frames:v", str(sum(frames)), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-g", str(fps), "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(tmp)]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0 or not tmp.exists():
+            raise RenderError(f"Could not cut the footage for scene {sc['scene_number']}: {proc.stderr.strip()[-500:]}", hint="Check the files of the footage library (`python -m gta_factory footage list`, or `--game ...`).")
+        tmp.rename(cached)
+        cut = True
+    dest = out_dir / f"footage_scene_{sc['scene_number']:03d}{suffix}.mp4"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not dest.exists() or dest.stat().st_size != cached.stat().st_size:
+        dest.write_bytes(cached.read_bytes())
+    fo["clip"] = str(dest)
     return cut
 
 

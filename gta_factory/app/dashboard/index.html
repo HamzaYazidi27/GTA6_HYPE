@@ -87,6 +87,16 @@
       <label class="chk"><input type="checkbox" id="opt-nobroll"> Graphiques originaux uniquement (pas de photos)</label>
       <div class="row" style="margin-top:8px"><button id="go">Lancer</button><span id="go-msg" class="muted"></span></div>
     </div>
+    <div class="card">
+      <h2>Comparaison ou top liste</h2>
+      <input id="t-topic" placeholder="Sujet en anglais, ex. « Red Dead 2 systems inside GTA 6 » ou « 12 things to do on day one »">
+      <div class="row" style="margin-top:8px;flex-wrap:nowrap"><select id="t-vs"><option value="">Top liste numérotée</option></select><input id="t-count" type="number" min="2" max="40" placeholder="items" style="width:90px"></div>
+      <div class="row" style="margin-top:8px"><select id="t-format"><option value="">Vidéo 16:9</option><option value="short">Short vertical</option></select></div>
+      <textarea id="t-sources" rows="3" style="margin-top:8px" placeholder="Sources (previews, interviews…), une URL par ligne - la recherche d'actu en ajoute d'autres"></textarea>
+      <label class="chk"><input type="checkbox" id="t-nosearch"> Seulement mes sources (pas de recherche)</label>
+      <p class="muted" style="margin:4px 0 0;font-size:12px">Comparaison : écran partagé (l'autre jeu à gauche, GTA 6 à droite), un système par item, avec ce que disent les sources sur GTA 6 et le fichier knowledge/games/&lt;jeu&gt;.yaml sur l'autre jeu. Ajoute le footage de l'autre jeu dans « Footage GTA 6 ».</p>
+      <div class="row" style="margin-top:8px"><button id="t-go">Lancer</button><span id="t-msg" class="muted"></span></div>
+    </div>
     <div id="jobs"></div>
   </aside>
   <section class="detail" id="detail"><div class="empty">Choisis un job ou colle une URL d'article pour commencer.</div></section>
@@ -109,15 +119,18 @@ async function api(method, path, body) {
   return data;
 }
 const STATUS_FR = {completed:'terminé', running:'en cours', queued:'en attente', failed:'échec', needs_review:'à relire', paused:'en pause', stopped:'arrêté'};
-const STEP_FR = {details:'Détails', details_script:'Script', details_scenes:'Storyboard', extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
+const STEP_FR = {research:'Sources', outline:'Items', details:'Détails', details_script:'Script', details_scenes:'Storyboard', extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
 const VERDICT_FR = {confirmed:'CONFIRMÉ', reported:'RAPPORTÉ', rumor:'RUMEUR', speculation:'SPÉCULATION'};
-let current = null, timer = null, formats = {};
+let current = null, timer = null, formats = {}, games = [];
 
 async function loadJobs() {
   const data = await api('GET', '/api/jobs');
   formats = data.formats;
+  games = data.games || [];
   const sel = $('#format');
   if (!sel.options.length) for (const [k, v] of Object.entries(formats)) sel.append(el('option', {value: k}, v + ' (' + k + ')'));
+  const vs = $('#t-vs');
+  if (vs.options.length === 1) for (const g of games) vs.append(el('option', {value: g.id}, 'Comparaison : GTA 6 vs ' + g.short));
   const c = data.counts;
   $('#counts').textContent = `${c.total || 0} jobs · ${c.completed || 0} terminés · ${c.running || 0} en cours · ${c.needs_review || 0} à relire`;
   const box = $('#jobs'); box.replaceChildren();
@@ -164,6 +177,18 @@ function factCard(fc) {
       el('tbody', {}, fc.map((c) => el('tr', {}, el('td', {class: 'v-' + c.classification}, VERDICT_FR[c.classification] + ' · ' + c.confidence), el('td', {}, c.claim, c.note ? el('div', {class: 'muted'}, c.note) : null), el('td', {class: 'muted'}, c.original_publisher + (c.corroborating_sources.length ? ' +' + c.corroborating_sources.length : '')))))));
 }
 
+function outlineCard(o) {
+  if (!o || !o.items) return null;
+  const vs = o.style === 'versus';
+  return el('div', {class: 'card'}, el('h2', {}, (vs ? 'Comparaison' : 'Top liste') + ` · ${o.items.length} items`),
+    el('p', {class: 'muted'}, o.thesis || ''),
+    el('table', {}, el('tbody', {}, o.items.map((it) => el('tr', {},
+      el('td', {style: 'width:34px'}, '#' + it.n),
+      el('td', {}, el('b', {}, it.title), vs ? el('div', {class: 'muted'}, (it.then || '') + ' → ' + (it.now || '')) : (it.kicker ? el('div', {class: 'muted'}, it.kicker) : null)),
+      el('td', {class: 'v-' + it.status}, VERDICT_FR[it.status] || it.status),
+      el('td', {class: 'muted'}, [...(it.claim_ids || []), ...(it.game_fact_ids || [])].join(' ')))))));
+}
+
 function scriptCard(d) {
   const sc = d.script;
   if (!sc) return null;
@@ -207,7 +232,7 @@ async function openJob(id) {
   try { d = await api('GET', '/api/jobs/' + id); } catch (e) { $('#detail').replaceChildren(el('div', {class: 'err'}, e.message)); return; }
   const log = await api('GET', `/api/jobs/${id}/log?lines=120`).catch(() => ({lines: []}));
   const view = el('div', {}, el('h2', {style: 'margin:0 0 14px;font:800 26px/1.1 "Barlow Condensed",sans-serif'}, d.job.title || id), stepsCard(d));
-  view.append(el('div', {class: 'grid2'}, el('div', {}, storyCard(d.story), factCard(d.fact_check)), el('div', {}, packageCard(d), qcCard(d.qc))));
+  view.append(el('div', {class: 'grid2'}, el('div', {}, storyCard(d.story), outlineCard(d.outline), factCard(d.fact_check)), el('div', {}, packageCard(d), qcCard(d.qc))));
   const sc = scriptCard(d); if (sc) view.append(sc);
   view.append(el('div', {class: 'card'}, el('h2', {}, 'Journal'), el('pre', {class: 'log'}, log.lines.join('\n'))));
   const keepScroll = window.scrollY;
@@ -237,15 +262,15 @@ async function footAct(fn) {
   try { await fn(); } catch (e) { alert(e.message); }
   setTimeout(() => { if (!current) openFootage(); }, 300);
 }
-async function uploadFiles(list, tags, msg) {
+async function uploadFiles(list, tags, msg, game) {
   let n = 0;
   for (const f of list) {
     n += 1; msg.textContent = `envoi ${n}/${list.length} : ${f.name}…`;
-    const r = await fetch('/api/footage/upload?name=' + encodeURIComponent(f.name) + '&tags=' + encodeURIComponent(tags), {method: 'POST', headers: {'X-Factory': '1'}, body: f});
+    const r = await fetch('/api/footage/upload?name=' + encodeURIComponent(f.name) + '&tags=' + encodeURIComponent(tags) + (game ? '&game=' + encodeURIComponent(game) : ''), {method: 'POST', headers: {'X-Factory': '1'}, body: f});
     if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(f.name + ' : ' + (d.error || r.statusText)); }
   }
   msg.textContent = `${n} fichier(s) ajouté(s)`;
-  await api('POST', '/api/footage/process', {}).catch(() => null);  // stills + auto tags in the background
+  await api('POST', '/api/footage/process', game ? {game} : {}).catch(() => null);  // stills + auto tags in the background
 }
 
 async function openFootage() {
@@ -287,6 +312,20 @@ async function openFootage() {
       el('p', {class: 'muted'}, "Le modèle de vision cherche les petits détails que personne ne voit (panneaux, textes, plaques, écrans, animaux, personnages au fond…), vérifie chacun en gros plan, puis la vidéo s'arrête sur chaque détail, zoome, l'entoure et le nomme, avec le timestamp. Le premier passage sur une vidéo prend du temps (une seule fois, c'est gardé en cache)."),
       el('div', {class: 'row'}, vsel, fsel, cnt,
         el('button', {disabled: !(d.vision && d.vision.ready), title: d.vision && d.vision.ready ? '' : 'il faut le modèle de vision (Ollama)', onclick: () => footAct(async () => { const r = await api('POST', '/api/footage/details', {video: vsel.value, format: fsel.value, count: parseInt(cnt.value) || null}); current = r.id; openJob(r.id); })}, 'Lancer'))));
+  }
+  if ((d.games || []).length) {
+    view.append(el('div', {class: 'card'}, el('h2', {}, 'Footage des autres jeux (pour les comparaisons)'),
+      el('p', {class: 'muted'}, "Pendant une comparaison, ce qui est dit sur l'autre jeu passe sur ses images, et les deux jeux côte à côte sur les écrans partagés. Trailers officiels en un clic, ou tes propres captures de gameplay."),
+      el('table', {}, el('tbody', {}, d.games.map((g) => {
+        const gf = el('input', {type: 'file', multiple: true, accept: 'video/*,image/*'}), gmsg = el('span', {class: 'muted'}), glink = el('input', {placeholder: 'URL vidéo ou image'});
+        const sm = g.summary;
+        return el('tr', {},
+          el('td', {}, el('b', {}, g.name), el('div', {class: sm.usable_shots || sm.photos ? 'muted' : 'qc-warning'}, sm.usable_shots || sm.photos ? `${sm.videos} vidéo(s) · ${sm.usable_shots} plans · ${sm.photos} photo(s)` : 'vide')),
+          el('td', {}, el('div', {class: 'row'},
+            el('button', {class: 'ghost small', disabled: running, onclick: () => footAct(() => api('POST', '/api/footage/update', {game: g.id}))}, 'Trailers officiels'),
+            gf, el('button', {class: 'ghost small', onclick: () => footAct(() => { if (!gf.files.length) throw new Error('Choisis au moins un fichier'); return uploadFiles([...gf.files], '', gmsg, g.id); })}, 'Envoyer'), gmsg),
+            el('div', {class: 'row', style: 'margin-top:6px;flex-wrap:nowrap'}, glink, el('button', {class: 'ghost small', disabled: running, onclick: () => footAct(() => api('POST', '/api/footage/add', {url: glink.value, game: g.id}))}, 'Télécharger'))));
+      })))));
   }
   const q = el('input', {placeholder: 'une phrase de narration, ex. « Lucia échappe à la police à Vice City »'});
   const out = el('div', {style: 'margin-top:8px'});
@@ -338,6 +377,17 @@ $('#go').addEventListener('click', () => act(async () => {
   if ($('#opt-nobroll').checked) options.allow_broll = false;
   const r = await api('POST', '/api/jobs', {urls, format: $('#format').value, options});
   $('#urls').value = ''; $('#go-msg').textContent = 'job lancé';
+  current = r.id;
+}));
+$('#t-go').addEventListener('click', () => act(async () => {
+  const topic = $('#t-topic').value.trim();
+  if (topic.length < 4) throw new Error('Décris la vidéo en quelques mots (en anglais), ex. « Red Dead 2 systems inside GTA 6 »');
+  const sources = $('#t-sources').value.split(/\s+/).filter((u) => /^https?:\/\//.test(u));
+  const options = {};
+  if ($('#t-nosearch').checked) options.no_search = true;
+  if (options.no_search && !sources.length) throw new Error('Sans recherche, colle au moins une source (URL)');
+  const r = await api('POST', '/api/topic', {topic, vs: $('#t-vs').value || null, sources, count: parseInt($('#t-count').value) || null, format: $('#t-format').value || null, options});
+  $('#t-topic').value = ''; $('#t-sources').value = ''; $('#t-msg').textContent = 'job lancé';
   current = r.id;
 }));
 loadJobs().then(() => { const first = document.querySelector('.job'); if (first) first.click(); });

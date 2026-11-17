@@ -112,7 +112,16 @@ def footage_payload(settings: Any) -> dict[str, Any]:
 
         ready, detail = vision_status(settings)
         vision = {"ready": ready, "detail": detail, "pending": len(pending(settings, index)) if (videos or photos) else 0}
+    from ...modules.footage.games import MAIN, game_settings, games
+
+    others = []
+    for gid, g in games(settings).items():
+        if gid == MAIN:
+            continue
+        summ = lib.library_summary(lib.build_index(game_settings(settings, gid)))
+        others.append({"id": gid, "name": g["name"], "short": g["short"], "dir": str(lib.footage_dir(game_settings(settings, gid))), "summary": {k: v for k, v in summ.items() if k != "skipped"}})
     return {
+        "games": others,
         "dir": str(lib.footage_dir(settings)),
         "summary": lib.library_summary(index),
         "videos": videos,
@@ -132,6 +141,7 @@ def job_payload(settings: Any, job_id: str) -> dict[str, Any] | None:
     root = settings.jobs_dir / job_id
     out_dir = settings.outputs_dir / job_id
     story = read_json(root / "story" / "story.json")
+    outline = read_json(root / "story" / "outline.json")
     metadata = read_json(root / "metadata" / "metadata.json")
     video = next(iter(sorted(out_dir.glob("*.mp4"))), None) if out_dir.exists() else None
     thumbs = sorted(p.name for p in (root / "thumbnails").glob("thumb_*.png")) if (root / "thumbnails").exists() else []
@@ -140,6 +150,7 @@ def job_payload(settings: Any, job_id: str) -> dict[str, Any] | None:
         "steps": db.get_steps(job_id),
         "story": story and {k: story.get(k) for k in ("novelty_score", "sub_scores", "decision", "decision_reason", "angle", "angles", "similar_stories", "open_questions", "working_title")},
         "fact_check": read_json(root / "research" / "fact_check.json"),
+        "outline": outline,
         "script": read_json(root / "script" / "script.json"),
         "scenes": read_json(root / "scenes" / "scene_breakdown.json"),
         "qc": read_json(root / "qc" / "qc_report.json"),
@@ -149,6 +160,19 @@ def job_payload(settings: Any, job_id: str) -> dict[str, Any] | None:
         "thumbnails": [f"/files/{job_id}/job/thumbnails/{t}" for t in thumbs],
         "review": (out_dir / "REVIEW.md").read_text(encoding="utf-8") if (out_dir / "REVIEW.md").exists() else None,
     }
+
+
+def write_script_md(settings: Any, job_id: str, script: dict[str, Any], facts: list[dict[str, Any]]) -> None:
+    root = settings.jobs_dir / job_id
+    if script.get("kind") == "topic":
+        from ...modules.topic.writer import script_markdown
+
+        text = script_markdown(script, facts)
+    else:
+        from ...modules.script_generation.writer import render_script_markdown
+
+        text = render_script_markdown(script, read_json(root / "story" / "story.json", {}), facts)
+    (root / "script" / "script.md").write_text(text, encoding="utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -302,7 +326,10 @@ class Handler(BaseHTTPRequestHandler):
         size = int(self.headers.get("Content-Length") or 0)
         if size <= 0 or size > UPLOAD_MAX:
             raise FactoryError("Empty or too large file (max 8 GB).")
-        folder = lib.footage_dir(self.settings) / ("videos" if ext in lib.VIDEO_EXT else "photos")
+        from ...modules.footage.games import game_settings
+
+        gs = game_settings(self.settings, (query.get("game") or [""])[0] or None)
+        folder = lib.footage_dir(gs) / ("videos" if ext in lib.VIDEO_EXT else "photos")
         folder.mkdir(parents=True, exist_ok=True)
         dest = folder / name
         k = 2
@@ -324,8 +351,8 @@ class Handler(BaseHTTPRequestHandler):
         tmp.rename(dest)
         tags = [x for x in (query.get("tags") or [""])[0].split(",") if x.strip()]
         if tags:
-            lib.set_tags(self.settings, dest, add=tags)
-        self._json({"file": dest.relative_to(lib.footage_dir(self.settings)).as_posix()}, 201)
+            lib.set_tags(gs, dest, add=tags)
+        self._json({"file": dest.relative_to(lib.footage_dir(gs)).as_posix()}, 201)
 
     # ------------------------------------------------------------------ routes
     def do_HEAD(self) -> None:
@@ -342,7 +369,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8", {"Content-Security-Policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"})
             elif parts == ["api", "jobs"]:
                 db = get_db(s.db_path)
-                self._json({"jobs": db.list_jobs(200), "counts": db.job_counts(), "formats": {k: v.get("label") for k, v in (s.get("formats") or {}).items() if not v.get("footage_only")}})
+                from ...modules.footage.games import MAIN, games
+
+                self._json({
+                    "jobs": db.list_jobs(200),
+                    "counts": db.job_counts(),
+                    "formats": {k: v.get("label") for k, v in (s.get("formats") or {}).items() if not v.get("footage_only") and not v.get("topic_only")},
+                    "games": [{"id": gid, "name": g["name"], "short": g["short"]} for gid, g in games(s).items() if gid != MAIN],
+                })
             elif len(parts) == 3 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]):
                 payload = job_payload(s, parts[2])
                 self._json(payload) if payload else self._error(404, "unknown job")
@@ -380,17 +414,23 @@ class Handler(BaseHTTPRequestHandler):
             if parts[:2] == ["api", "footage"] and len(parts) == 3:
                 tags = body.get("tags") or ""
                 tags = ",".join(tags) if isinstance(tags, list) else str(tags)
+                game_arg: list[str] = []
+                if body.get("game"):
+                    from ...modules.footage.games import MAIN, resolve
+
+                    gid = resolve(s, str(body["game"]))
+                    game_arg = [] if gid == MAIN else ["--game", gid]
                 if parts[2] == "add":
                     link = str(body.get("url") or "").strip()
                     if not re.match(r"^https?://\S+$", link):
                         raise FactoryError("Give a video or picture URL (http...).")
-                    spawn_footage_task(s, ["add", link] + (["--tags", tags] if tags.strip() else []))
+                    spawn_footage_task(s, ["add", link] + (["--tags", tags] if tags.strip() else []) + game_arg)
                 elif parts[2] == "update":
-                    spawn_footage_task(s, ["update"])
+                    spawn_footage_task(s, ["update"] + game_arg)
                 elif parts[2] == "autotag":
-                    spawn_footage_task(s, ["autotag"])
+                    spawn_footage_task(s, ["autotag"] + game_arg)
                 elif parts[2] == "process":  # after uploads: stills from new videos, then auto-tags
-                    spawn_footage_task(s, ["stills"])
+                    spawn_footage_task(s, ["stills"] + game_arg)
                 elif parts[2] == "details":  # a "details you missed" video from this footage
                     from ..core.pipeline import create_details_job
 
@@ -411,6 +451,18 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._json({"ok": True, "task": footage_task(s)}, 202)
                 return
+            if parts == ["api", "topic"]:  # a comparison or a top list
+                from ..core.pipeline import create_topic_job
+
+                sources = [u for u in (body.get("sources") or []) if isinstance(u, str) and re.match(r"^https?://", u.strip())]
+                options = {k: v for k, v in (body.get("options") or {}).items() if k in ("no_search", "audit", "whisper", "target_seconds", "voice", "today")}
+                fmt = str(body.get("format") or "") or None
+                if fmt not in (None, "versus", "toplist", "short"):
+                    raise FactoryError(f"unknown format '{fmt}'")
+                job_id = create_topic_job(s, str(body.get("topic") or ""), vs=str(body.get("vs") or "") or None, sources=sources, fmt=fmt, count=int(body.get("count") or 0) or None, options=options)
+                spawn_runner(s, job_id)
+                self._json({"id": job_id}, 201)
+                return
             if parts == ["api", "jobs"]:
                 from ..core.pipeline import create_job
 
@@ -430,7 +482,7 @@ class Handler(BaseHTTPRequestHandler):
                 spawn_runner(s, parts[2], from_step=step, force=bool(body.get("force")))
                 self._json({"ok": True})
             elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "rewrite":
-                from ...modules.script_generation.writer import render_script_markdown, rewrite_section
+                from ...modules.script_generation.writer import rewrite_section
                 from ...providers.llm import get_llm
 
                 root = s.jobs_dir / parts[2]
@@ -438,10 +490,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not script:
                     raise FactoryError("This job has no script yet.")
                 fc = read_json(root / "research" / "fact_check.json", [])
+                if script.get("kind") == "topic":
+                    from ...modules.topic.produce import job_facts
+
+                    fc = job_facts(s, parts[2], fc)
                 quotes = (read_json(root / "research" / "analysis.json", {}) or {}).get("quotes") or []
                 script = rewrite_section(get_llm(s), script=script, section_id=str(body.get("section")), instruction=str(body.get("instruction") or ""), fact_check=fc, quotes=quotes)
                 write_json(root / "script" / "script.json", script)
-                (root / "script" / "script.md").write_text(render_script_markdown(script, read_json(root / "story" / "story.json", {}), fc), encoding="utf-8")
+                write_script_md(s, parts[2], script, fc)
                 self._json({"script": script})
             else:
                 self._error(404, "not found")
@@ -470,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
                 side = lib.set_tags(s, path, replace=[str(x) for x in tags], at=at)
                 self._json({"ok": True, "sidecar": side})
             elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "script":
-                from ...modules.script_generation.writer import render_script_markdown, word_count
+                from ...modules.script_generation.writer import word_count
 
                 root = s.jobs_dir / parts[2]
                 script = read_json(root / "script" / "script.json")
@@ -485,7 +541,11 @@ class Handler(BaseHTTPRequestHandler):
                 script["word_budget"]["actual"] = sum(x["words"] for x in script["sections"])
                 write_json(root / "script" / "script.json", script)
                 fc = read_json(root / "research" / "fact_check.json", [])
-                (root / "script" / "script.md").write_text(render_script_markdown(script, read_json(root / "story" / "story.json", {}), fc), encoding="utf-8")
+                if script.get("kind") == "topic":
+                    from ...modules.topic.produce import job_facts
+
+                    fc = job_facts(s, parts[2], fc)
+                write_script_md(s, parts[2], script, fc)
                 self._json({"script": script})
             else:
                 self._error(404, "not found")

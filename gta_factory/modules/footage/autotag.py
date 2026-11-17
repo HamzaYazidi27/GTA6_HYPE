@@ -29,7 +29,7 @@ from .vocabulary import GENERIC_OBJECTS, Vocabulary, load_vocabulary, phrase_tok
 # open-weight vision models served by Ollama for free (best first by machine memory)
 VISION_LADDER = [(15, "qwen2.5vl:7b", "6 GB"), (0, "qwen2.5vl:3b", "3.2 GB")]
 
-PROMPT = """This picture is a frame from an official Grand Theft Auto VI trailer or an official screenshot.
+PROMPT = """This picture is a frame from an official {game} trailer, a gameplay video or a screenshot.
 Choose every label below that clearly applies to what is VISIBLE in the picture (not what might be implied).
 Use a character label only when you are confident it is that character.
 
@@ -184,7 +184,7 @@ def autotag(
     vocab = load_vocabulary(settings)
     tag_model = model or vision_model(settings)
     call = tagger or ollama_tagger(settings, tag_model)
-    prompt = PROMPT.format(labels=labels_prompt(vocab))
+    prompt = PROMPT.format(game=settings.get("footage.game_name") or "Grand Theft Auto VI", labels=labels_prompt(vocab))
     path = autotags_path(settings)
     data = read_json(path, {}) or {}
     data.setdefault("items", {})

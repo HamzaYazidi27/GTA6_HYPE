@@ -1,0 +1,46 @@
+# Footage concepts of the Red Dead Redemption 2 library (assets/game_footage/rdr2), merged over the
+# built-in ones. GTA 6 characters and places are switched off here, so the vision tagger never calls
+# Arthur "Jason". Same format as knowledge/footage_tags.yaml.
+lucia: {enabled: false}
+jason: {enabled: false}
+duo: {enabled: false}
+cal_hampton: {enabled: false}
+boobie_ike: {enabled: false}
+drequan_priest: {enabled: false}
+real_dimez: {enabled: false}
+raul_bautista: {enabled: false}
+brian_heder: {enabled: false}
+vice_city: {enabled: false}
+leonida: {enabled: false}
+leonida_keys: {enabled: false}
+grassrivers: {enabled: false}
+port_gellhorn: {enabled: false}
+ambrosia: {enabled: false}
+mount_kalaga: {enabled: false}
+trailer_1: {enabled: false}
+trailer_2: {enabled: false}
+trailer_3: {enabled: false}
+arthur:
+  say: ["arthur", "arthur morgan", "morgan"]
+  look: "Arthur Morgan: a rugged cowboy in his thirties with a hat, stubble and a satchel"
+horse:
+  say: ["horse", "horses", "saddle", "riding", "ride", "stallion", "mare"]
+  look: "a horse, or someone riding a horse"
+camp:
+  say: ["camp", "the gang's camp", "campfire", "the gang"]
+  look: "the gang's camp: tents, wagons and a campfire"
+town:
+  say: ["town", "towns", "saloon", "valentine", "saint denis", "main street"]
+  look: "a western town: wooden buildings, saloon, muddy main street"
+wilderness:
+  say: ["wilderness", "frontier", "mountains", "forest", "plains", "the west"]
+  look: "wild landscapes: mountains, forests, plains, rivers"
+train:
+  say: ["train", "trains", "railroad", "stagecoach", "wagon", "wagons", "coach"]
+  look: "a steam train, a stagecoach or a wagon"
+hunting:
+  say: ["hunting", "hunt", "legendary animal", "legendary animals", "compendium", "wildlife"]
+  look: "hunting wild animals: deer, bears, wolves, bison"
+lawmen:
+  say: ["lawmen", "sheriff", "the law", "bounty", "bounty hunters", "marshal", "pinkertons"]
+  look: "lawmen or bounty hunters on horseback with rifles"

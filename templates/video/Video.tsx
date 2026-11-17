@@ -12,6 +12,7 @@ import {C, STATUS, Status, accentFor, hexA} from '../motion_graphics/theme';
 import {BarsScene, ClaimScene, HeadlineScene, KineticScene, QuoteScene, StatScene, TitleScene} from './scenesA';
 import {BrollScene, BulletsScene, ChapterScene, CountdownScene, OutroScene, SourcesScene, TakeawayScene, TimelineScene, VersusScene} from './scenesB';
 import {DetailScene} from './DetailScene';
+import {CompareScene, FootageScene, ItemScene} from './TopicScenes';
 import type {SceneData, SceneProps, Timeline} from './shared';
 
 ensureFonts();
@@ -34,10 +35,13 @@ export const SCENES: Record<string, React.FC<SceneProps>> = {
   outro: OutroScene,
   broll: BrollScene,
   detail: DetailScene,
+  compare: CompareScene,
+  footage: FootageScene,
+  item: ItemScene,
 };
 
 /** How much real footage is pushed back behind each template (big type reads on bright footage, dense panels need more). */
-const FOOTAGE_DIM: Record<string, number> = {kinetic: 0.28, title: 0.38, chapter: 0.3, outro: 0.45, broll: 0.2, quote: 0.55, claim: 0.5, headline: 0.52, stat: 0.5, bullets: 0.55, countdown: 0.5, takeaway: 0.6, timeline: 0.62, versus: 0.62, sources: 0.62, bars: 0.64};
+const FOOTAGE_DIM: Record<string, number> = {footage: 0.06, item: 0.42, kinetic: 0.28, title: 0.38, chapter: 0.3, outro: 0.45, broll: 0.2, quote: 0.55, claim: 0.5, headline: 0.52, stat: 0.5, bullets: 0.55, countdown: 0.5, takeaway: 0.6, timeline: 0.62, versus: 0.62, sources: 0.62, bars: 0.64};
 
 const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, timeline}) => {
   const Comp = SCENES[scene.template] ?? KineticScene;
@@ -45,6 +49,24 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
   const accent = scene.template === 'claim' ? accentFor(scene.section, scene.data?.status) : accentFor(scene.section, null);
   const status = scene.status && scene.status in STATUS ? (scene.status as Status) : null;
   const showStatus = status && scene.template !== 'claim' && scene.template !== 'title' && scene.template !== 'chapter' && scene.template !== 'outro';
+  if (scene.template === 'compare') {
+    // split screen: the scene places both games' clips itself, over the channel background
+    return (
+      <AbsoluteFill style={{background: C.ink}}>
+        <CameraDrift durationInFrames={scene.durationFrames} seed={scene.seed} amount={0.05}>
+          <Background kind={scene.background} accent={accent} seed={scene.seed} />
+        </CameraDrift>
+        <AbsoluteFill style={{background: hexA(C.ink, 0.45)}} />
+        <Comp scene={scene} accent={accent} today={timeline.today} />
+        <Atmosphere />
+        <BrandBug name={timeline.brand.name} />
+        {scene.footage || scene.footageB ? <FootageCredit credit={(scene.footage ?? scene.footageB)!.credit} /> : null}
+        {timeline.burnCaptions ? <Captions phrases={scene.phrases} accent={accent} emphasis={scene.emphasisText} /> : null}
+        <SceneOut durationInFrames={scene.durationFrames} />
+        <TransitionIn kind={scene.transition} accent={accent} />
+      </AbsoluteFill>
+    );
+  }
   if (scene.template === 'detail') {
     // the detail scene drives the footage itself (freeze, zoom, ring): no backdrop, no drift
     return (

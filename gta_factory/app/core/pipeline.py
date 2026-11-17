@@ -68,7 +68,14 @@ DETAIL_STEPS: list[tuple[str, str]] = [
     ("details_scenes", "Storyboard"),
 ]
 DETAIL_STEP_NAMES = [s for s, _ in DETAIL_STEPS] + STEP_NAMES[STEP_NAMES.index("rights") :]
-STEP_TITLES = dict(STEPS + DETAIL_STEPS)
+
+# Comparisons and top lists start from several sources and an outline of items (modules/topic)
+TOPIC_STEPS: list[tuple[str, str]] = [
+    ("research", "Gather the sources"),
+    ("outline", "Choose and order the items"),
+]
+TOPIC_STEP_NAMES = ["research", "analyze", "fact_check", "outline", "script", "scenes"] + STEP_NAMES[STEP_NAMES.index("rights") :]
+STEP_TITLES = dict(STEPS + DETAIL_STEPS + TOPIC_STEPS)
 ALL_STEP_NAMES = list(STEP_TITLES)
 
 
@@ -90,6 +97,8 @@ class JobPaths:
     script = property(lambda self: self.root / "script" / "script.json")
     script_md = property(lambda self: self.root / "script" / "script.md")
     details = property(lambda self: self.root / "research" / "details.json")
+    game_facts = property(lambda self: self.root / "research" / "game_facts.json")
+    outline = property(lambda self: self.root / "story" / "outline.json")
     scenes = property(lambda self: self.root / "scenes" / "scene_breakdown.json")
     rights = property(lambda self: self.root / "assets" / "rights_review.json")
     media = property(lambda self: self.root / "assets" / "media")
@@ -229,6 +238,25 @@ class JobContext:
         data = read_json(self.paths.corroboration, {}) or {}
         return [Article(**a) for a in data.get("articles", [])]
 
+    # ---- comparisons and top lists
+    @property
+    def other_game(self) -> dict[str, Any] | None:
+        """The game a comparison puts next to GTA 6 (None for a top list)."""
+        from ...modules.footage.games import game
+
+        vs = self.options.get("vs")
+        return game(self.settings, vs) if vs else None
+
+    def topic_facts(self) -> list[dict[str, Any]]:
+        """The fact-check plus the other game's facts (as established claims): what the script may use."""
+        from ...modules.topic.writer import game_claims
+
+        facts = read_json(self.paths.fact_check, []) or []
+        other = self.other_game
+        if other and self.paths.game_facts.exists():
+            facts = facts + game_claims(read_json(self.paths.game_facts, []) or [], other)
+        return facts
+
     def need(self, path: Path) -> Any:
         data = read_json(path)
         if data is None:
@@ -273,8 +301,42 @@ def step_extract(ctx: JobContext) -> dict[str, Any]:
     return {"articles": len(articles), "words": sum(a.word_count for a in articles), "failed": failures, "seen_before": seen_before}
 
 
+def step_research(ctx: JobContext) -> dict[str, Any]:
+    """Topic videos: the operator's sources, plus the best articles the news search finds."""
+    from ...modules.topic.research import find_sources
+
+    o = ctx.options
+    urls = [u for u in ctx.job.get("urls") or [] if re.match(r"^https?://", u)]
+    res = find_sources(ctx.settings, topic=o["topic"], style=o["style"], urls=urls, text_files=o.get("text_files"), other=ctx.other_game, search=not o.get("no_search"), log=ctx.log)
+    if not res["articles"]:
+        first = res["failures"][0] if res["failures"] else None
+        raise ExtractionError(
+            "No source could be read for this topic." + (f" First error: {first['error']}" if first else ""),
+            hint="Give sources with --source URL (previews, interviews, the Rockstar Newswire), or --text-file URL=PATH for a page that cannot be fetched.",
+        )
+    write_json(ctx.paths.articles, [a.to_dict() for a in res["articles"]])
+    write_json(ctx.paths.corroboration, {"queries": res["queries"], "providers": [], "candidates_found": res["found_by_search"], "articles": [], "extraction_failures": res["failures"], "coverage_signals": [], "topic": True})
+    ctx.db.update_job(ctx.job_id, title=o["topic"][:140])
+    return {"articles": len(res["articles"]), "found_by_search": res["found_by_search"], "failed": len(res["failures"]), "words": sum(a.word_count for a in res["articles"])}
+
+
+def topic_count(ctx: JobContext) -> int:
+    vertical = ctx.settings.format(ctx.fmt).get("aspect") == "9:16"
+    return int(ctx.options.get("count") or ctx.settings.get("topic.count_short" if vertical else "topic.count_long", 4 if vertical else 10))
+
+
 def step_analyze(ctx: JobContext) -> dict[str, Any]:
     from ...modules.news_research.research import analyze_sources
+
+    if ctx.kind == "topic":
+        from ...modules.topic.research import analyze_topic
+
+        analysis = analyze_topic(ctx.llm, ctx.articles(), topic=ctx.options["topic"], style=ctx.options["style"], other=ctx.other_game, count=topic_count(ctx), today=ctx.today)
+        write_json(ctx.paths.analysis, analysis)
+        unverified = sum(1 for c in analysis["claims"] if not c["evidence_verified"])
+        if unverified:
+            ctx.warn(f"{unverified} claim(s) have no verbatim evidence in the source text")
+        return {"claims": len(analysis["claims"]), "quotes": len(analysis.get("quotes") or []), "unverified_evidence": unverified}
 
     analysis = analyze_sources(ctx.llm, ctx.articles(), ctx.today)
     write_json(ctx.paths.analysis, analysis)
@@ -304,7 +366,14 @@ def step_fact_check(ctx: JobContext) -> dict[str, Any]:
 
     analysis = ctx.need(ctx.paths.analysis)
     corroborating = ctx.corroborating()
-    verification = verify_claims(ctx.llm, analysis, corroborating, load_timeline(ctx.settings), ctx.today)
+    if ctx.kind == "topic":  # several sources on one topic: each one corroborates the others, never itself
+        from ...modules.topic.research import drop_self_support
+
+        articles = ctx.articles()
+        verification = verify_claims(ctx.llm, analysis, articles if len(articles) > 1 else [], load_timeline(ctx.settings), ctx.today)
+        verification = drop_self_support(verification, analysis["claims"])
+    else:
+        verification = verify_claims(ctx.llm, analysis, corroborating, load_timeline(ctx.settings), ctx.today)
     fact_check = build_fact_check(analysis, verification)
     write_json(ctx.paths.verification, verification)
     write_json(ctx.paths.fact_check, fact_check)
@@ -339,8 +408,51 @@ def step_select(ctx: JobContext) -> dict[str, Any]:
     return detail
 
 
+def step_outline(ctx: JobContext) -> dict[str, Any]:
+    """Topic videos: which items, in which order, each resting on fact-checked claims (and the other game's facts)."""
+    from ...modules.footage.games import load_facts
+    from ...modules.topic.outline import plan_items
+
+    other = ctx.other_game
+    game_facts = load_facts(ctx.settings, other["id"]) if other else []
+    write_json(ctx.paths.game_facts, game_facts)
+    outline = plan_items(ctx.llm, topic=ctx.options["topic"], style=ctx.options["style"], count=topic_count(ctx), fact_check=ctx.need(ctx.paths.fact_check), game_facts=game_facts, other=other, today=ctx.today, log=ctx.log)
+    write_json(ctx.paths.outline, outline)
+    ctx.db.update_job(ctx.job_id, title=outline["working_title"][:140])
+    ctx.db.merge_summary(ctx.job_id, items=len(outline["items"]))
+    for it in outline["items"]:
+        ctx.log(f"outline: #{it['n']} {it['title']} [{it['status']}] " + ", ".join(it["claim_ids"] + it.get("game_fact_ids", [])))
+    return {"items": len(outline["items"]), "titles": " | ".join(it["title"] for it in outline["items"])[:300]}
+
+
 def step_script(ctx: JobContext) -> dict[str, Any]:
     from ...modules.script_generation.writer import render_script_markdown, write_script
+
+    if ctx.kind == "topic":
+        from ...modules.topic.writer import script_markdown, write_topic_script
+
+        outline = ctx.need(ctx.paths.outline)
+        script = write_topic_script(
+            ctx.llm,
+            ctx.settings,
+            fmt=ctx.fmt,
+            outline=outline,
+            fact_check=ctx.need(ctx.paths.fact_check),
+            game_facts=read_json(ctx.paths.game_facts, []) or [],
+            other=ctx.other_game,
+            quotes=(ctx.need(ctx.paths.analysis).get("quotes") or []),
+            timeline=load_timeline(ctx.settings),
+            today=ctx.today,
+            target=float(ctx.options["target_seconds"]) if ctx.options.get("target_seconds") else None,
+            audit=ctx.options.get("audit", True),
+            log=ctx.log,
+        )
+        write_json(ctx.paths.script, script)
+        write_text(ctx.paths.script_md, script_markdown(script, ctx.topic_facts()))
+        ctx.db.update_job(ctx.job_id, title=script["title"][:140])
+        q = script["quality"]
+        ctx.log(f"script: '{script['title']}' - {script['word_budget']['actual']} words (~{script['estimated_seconds']:.0f}s), {len(script['items'])} items, audit {q['audit_verdict']}")
+        return {"title": script["title"], "words": script["word_budget"]["actual"], "estimated_seconds": script["estimated_seconds"], "audit": q["audit_verdict"], "remaining_issues": len(q["remaining_lint_issues"]) + len(q["remaining_audit_issues"])}
 
     story = ctx.need(ctx.paths.story)
     fact_check = ctx.need(ctx.paths.fact_check)
@@ -375,6 +487,15 @@ def _broll_possible(settings: Any) -> bool:
 
 def step_scenes(ctx: JobContext) -> dict[str, Any]:
     from ...modules.script_generation.scenes import plan_scenes
+
+    if ctx.kind == "topic":  # built from the script: item cards, split screens, footage of the game being talked about
+        from ...modules.topic.scenes import build_topic_scenes
+
+        scenes = build_topic_scenes(ctx.settings, ctx.need(ctx.paths.script), fmt=ctx.fmt, facts=ctx.topic_facts(), today=ctx.today)
+        write_json(ctx.paths.scenes, scenes)
+        templates = [s["template"] for s in scenes]
+        games = [s.get("footage_game") for s in scenes if s["template"] == "footage"]
+        return {"scenes": len(scenes), "templates": {t: templates.count(t) for t in sorted(set(templates))}, "other_game_scenes": sum(1 for g in games if g != "gta6")}
 
     articles = [a.to_dict() for a in ctx.articles()] + [a.to_dict() for a in ctx.corroborating()]
     allow_broll = bool(ctx.options.get("allow_broll", _broll_possible(ctx.settings)))
@@ -455,8 +576,9 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
     if footage["ledger"]:
         review["assets"] = footage["ledger"] + review["assets"]
         review["credits"] = sorted(set(review["credits"]) | {e["attribution"] for e in footage["ledger"] if e.get("attribution")})
-        review["decisions"] += [{"scene_number": sc["scene_number"], "outcome": f"gta6_{sc['footage']['kind']}", "asset_ids": sc["footage"]["asset_ids"]} for sc in scenes if sc.get("footage")]
-        review["summary"] += f" Real GTA 6 footage on {footage['summary']['share']:.0%} of the narration ({len(footage['summary'].get('matched') or [])} spoken mention(s) shown)."
+        review["decisions"] += [{"scene_number": sc["scene_number"], "outcome": f"{sc[key].get('game', 'gta6')}_{sc[key]['kind']}", "asset_ids": sc[key]["asset_ids"]} for sc in scenes for key in ("footage", "footage_b") if sc.get(key)]
+        what = "Real footage" if footage["summary"].get("mode") == "topic" else "Real GTA 6 footage"
+        review["summary"] += f" {what} on {footage['summary']['share']:.0%} of the narration ({len(footage['summary'].get('matched') or [])} spoken mention(s) shown)."
     review["footage"] = footage["summary"]
     write_json(ctx.paths.scenes, scenes)  # b-roll scenes may have been resolved or converted, footage assigned
     write_json(ctx.paths.rights, review)
@@ -573,6 +695,11 @@ def step_thumbnail(ctx: JobContext) -> dict[str, Any]:
 
         concepts = thumbnail_concepts(ctx.settings, script, ctx.need(ctx.paths.details)["details"], out_dir=ctx.paths.thumbnails / "photos")
         pics = [Path(c["photo_file"]) for c in concepts]
+    elif ctx.kind == "topic":  # "GTA 6 vs ..." with a picture of each game, or the number of entries
+        from ...modules.topic.produce import thumbnail_concepts as topic_thumbnails
+
+        concepts = topic_thumbnails(ctx.llm, ctx.settings, script=script, fact_check=ctx.need(ctx.paths.fact_check), other=ctx.other_game, out_dir=ctx.paths.thumbnails / "photos", log=ctx.log)
+        pics = [Path(c.get("photo_file") or ctx.paths.thumbnails / "photos" / "none") for c in concepts]
     else:
         concepts = design_thumbnails(ctx.llm, ctx.settings, script=script, story=ctx.need(ctx.paths.story), fact_check=ctx.need(ctx.paths.fact_check), log=ctx.log)
         # real GTA 6 pictures behind the thumbnail text (from the footage library), one per concept
@@ -586,6 +713,11 @@ def step_thumbnail(ctx: JobContext) -> dict[str, Any]:
         shutil.copyfile(pic, dest)
         c["props"]["photo"] = f"job_media/{ctx.job_id}/{dest.name}"
         c["photo_file"] = str(pic)
+        second = Path(c.get("photo2_file") or "")
+        if c.get("photo2_file") and second.exists():  # the other game's picture of a "GTA 6 vs ..." thumbnail
+            dest2 = public / f"thumb_photo_{i}_b{second.suffix.lower()}"
+            shutil.copyfile(second, dest2)
+            c["props"]["photo2"] = f"job_media/{ctx.job_id}/{dest2.name}"
     stills = [{"composition": "Thumbnail", "props": c["props"], "out": ctx.paths.thumbnails / f"thumb_{i}_{c['props']['concept']}.png"} for i, c in enumerate(concepts, 1)]
     render_stills(ctx.settings, stills, work_dir=ctx.paths.thumbnails, log=ctx.log)
     for c, st in zip(concepts, stills):
@@ -612,6 +744,11 @@ def step_metadata(ctx: JobContext) -> dict[str, Any]:
     placed = {p["scene_number"]: p for p in master["scenes"]}
     script = ctx.need(ctx.paths.script)
     details_extra: dict[str, Any] = {}
+    if ctx.kind == "topic":
+        from ...modules.topic.produce import description_sections, extra_tags
+
+        sections, how = description_sections(script, ctx.other_game)
+        details_extra = {"extra_sections": sections, "how": how, "extra_tags": extra_tags(script, ctx.other_game)}
     if ctx.kind == "details":
         from ...modules.details.produce import description_block
 
@@ -625,7 +762,7 @@ def step_metadata(ctx: JobContext) -> dict[str, Any]:
         fmt=ctx.fmt,
         script=script,
         story=ctx.need(ctx.paths.story) if ctx.kind == "news" else {"working_title": script["title"], "angle": script.get("angle") or {}},
-        fact_check=ctx.need(ctx.paths.fact_check) if ctx.kind == "news" else [],
+        fact_check=ctx.need(ctx.paths.fact_check) if ctx.kind in ("news", "topic") else [],
         chapters=build_chapters(scenes, placed),
         total_seconds=master["total_seconds"],
         sources=_sources(ctx),
@@ -697,17 +834,27 @@ def _footage_point(ctx: JobContext) -> str:
     fo = (read_json(ctx.paths.rights, {}) or {}).get("footage") or {}
     if not fo.get("share"):
         return ""
+    games = fo.get("games") or {}
+    others = "".join(f", {g['name']} sur {g['scenes']} scène(s)" for gid, g in games.items() if gid != "gta6")
+    split = f", {fo['split_scenes']} écran(s) partagé(s)" if fo.get("split_scenes") else ""
     point = (
-        f"\n- [ ] Images réelles de GTA 6 sur {fo['share']:.0%} de la vidéo ({fo.get('video_scenes', 0)} scènes trailer, {fo.get('photo_scenes', 0)} screenshots) :"
-        " vérifier qu'aucun plan ne contredit la narration. Une revendication Content ID de Rockstar/Take-Two est possible après l'upload (regarder l'onglet Droits d'auteur dans YouTube Studio)."
+        f"\n- [ ] Images réelles{'' if games else ' de GTA 6'} sur {fo['share']:.0%} de la vidéo ({fo.get('video_scenes', 0)} scènes trailer, {fo.get('photo_scenes', 0)} screenshots{split}{others}) :"
+        " vérifier qu'aucun plan ne contredit la narration (et que chaque jeu montre bien ses propres images). Une revendication Content ID de Rockstar/Take-Two est possible après l'upload (regarder l'onglet Droits d'auteur dans YouTube Studio)."
     )
+    empty = [f"{g['name']} (`python -m gta_factory footage update --game {gid}`)" for gid, g in games.items() if not (g.get("library") or {}).get("usable_shots") and not (g.get("library") or {}).get("photos")]
+    if empty:
+        point += "\n- [ ] Bibliothèque vide, ses scènes n'ont pas d'images : " + ", ".join(empty) + ", puis « refaire depuis : Droits »."
     matched = fo.get("matched") or []
     if matched:
         lines = [f"    - scène {m['scene']} : « {m['said']} » → `{m['file']}`" + (f" à {m['at']:.1f}s" if m.get("at") is not None else "") for m in matched[:40]]
         point += f"\n- [ ] Ce qui est dit est montré ({len(matched)} passages) : vérifier que chaque image montre bien ce qui est dit (sinon corrige ses tags avec `python -m gta_factory footage tag`).\n" + "\n".join(lines)
-    missing = sorted({m["said"] for m in fo.get("missing") or []})
-    if missing:
-        point += "\n- [ ] Dit dans la vidéo mais absent de la bibliothèque (une image au hasard a été montrée) : " + ", ".join(f"« {x} »" for x in missing[:20]) + ". Ajoute des images avec `python -m gta_factory footage add <fichier ou URL> --tags ...`."
+    by_game: dict[str, set[str]] = {}
+    for m in fo.get("missing") or []:
+        by_game.setdefault(m.get("game") or "gta6", set()).add(m["said"])
+    for gid, said in sorted(by_game.items()):
+        more = "" if gid == "gta6" else f" --game {gid}"
+        name = "" if gid == "gta6" else f" ({(games.get(gid) or {}).get('name', gid)})"
+        point += f"\n- [ ] Dit dans la vidéo mais absent de la bibliothèque{name} (une image au hasard a été montrée) : " + ", ".join(f"« {x} »" for x in sorted(said)[:20]) + f". Ajoute des images avec `python -m gta_factory footage add <fichier ou URL> --tags ...{more}`."
     return point
 
 
@@ -758,6 +905,25 @@ def step_package(ctx: JobContext) -> dict[str, Any]:
             qc_points="\n".join(points) or "Aucun point bloquant ni avertissement.",
         ).replace("- [ ] Vérifier les points du contrôle qualité ci-dessous", "- [ ] Vérifier les points du contrôle qualité ci-dessous" + _footage_point(ctx), 1),
     )
+    if ctx.kind == "topic":
+        from ...modules.footage.games import facts_path
+        from ...modules.topic.produce import review_points as topic_review
+
+        script = ctx.need(ctx.paths.script)
+        other = ctx.other_game
+        for src, name in ((ctx.paths.outline, "outline.json"), (ctx.paths.game_facts, "game_facts.json")):
+            if src.exists():
+                shutil.copyfile(src, out / name)
+        rel = ""
+        if other:
+            fp = facts_path(s, other["id"])
+            rel = fp.relative_to(s.root).as_posix() if str(fp).startswith(str(s.root)) else str(fp)
+        review = (out / "REVIEW.md").read_text(encoding="utf-8")
+        review = review.replace("- [ ] Relire `fact_check_report.md` : rien de présenté comme CONFIRMÉ qui ne le soit pas", "- [ ] Relire `fact_check_report.md` : rien de présenté comme CONFIRMÉ qui ne le soit pas" + topic_review(script, ctx.topic_facts(), other, rel), 1)
+        write_text(out / "REVIEW.md", review)
+        ctx.db.merge_summary(ctx.job_id, duration=master["total_seconds"], video=str(out / video_name), package=str(out))
+        ctx.log(f"package ready: {out}")
+        return {"package": str(out), "video": video_name, "items": len(script.get("items") or [])}
     if ctx.kind == "details":  # the next details video shows other ones
         from ...modules.details.find import remember_shown
         from ...modules.details.produce import review_points
@@ -783,6 +949,8 @@ def step_package(ctx: JobContext) -> dict[str, Any]:
 
 
 STEP_FUNCS: dict[str, Callable[[JobContext], dict[str, Any]]] = {
+    "research": step_research,
+    "outline": step_outline,
     "details": step_details,
     "details_script": step_details_script,
     "details_scenes": step_details_scenes,
@@ -810,20 +978,69 @@ def create_job(settings: Any, urls: list[str], *, fmt: str = "long", options: di
     fmt_cfg = settings.format(fmt)  # validates the format name
     options = dict(options or {})
     details = options.get("kind") == "details"
+    topic = options.get("kind") == "topic"
     if fmt_cfg.get("footage_only") and not details:
         raise ConfigError(f"The '{fmt}' format is made from the footage library, not from articles.", hint="Use `python -m gta_factory details ...`.")
+    if fmt_cfg.get("topic_only") and not topic:
+        raise ConfigError(f"The '{fmt}' format is a comparison or a top list made from several sources.", hint='Use `python -m gta_factory topic "..."`.')
     urls = [u.strip() for u in urls if u and u.strip()]
     if not urls:
         raise ConfigError("Give at least one article URL.")
     db = get_db(settings.db_path)
-    job_id = new_job_id(("details-" if details else "") + urls[0].rstrip("/").rsplit("/", 1)[-1])
+    if topic:
+        job_id = new_job_id(("vs-" if options.get("style") == "versus" else "top-") + str(options.get("topic") or "topic"))
+    else:
+        job_id = new_job_id(("details-" if details else "") + urls[0].rstrip("/").rsplit("/", 1)[-1])
     while db.get_job(job_id):
         job_id += "-b"
     paths = JobPaths(settings.jobs_dir / job_id)
     paths.root.mkdir(parents=True, exist_ok=True)
     write_json(paths.job_json, {"id": job_id, "created_at": now_iso(), "urls": urls, "format": fmt, "options": options})
-    db.create_job(job_id, urls=urls, fmt=fmt, language=settings.get("channel.language", "en"), options=options, steps=DETAIL_STEP_NAMES if details else STEP_NAMES, output_dir=str(settings.outputs_dir / job_id))
+    steps = DETAIL_STEP_NAMES if details else TOPIC_STEP_NAMES if topic else STEP_NAMES
+    db.create_job(job_id, urls=urls, fmt=fmt, language=settings.get("channel.language", "en"), options=options, steps=steps, output_dir=str(settings.outputs_dir / job_id))
     return job_id
+
+
+def create_topic_job(
+    settings: Any,
+    topic: str,
+    *,
+    vs: str | None = None,
+    sources: list[str] | None = None,
+    fmt: str | None = None,
+    count: int | None = None,
+    options: dict[str, Any] | None = None,
+) -> str:
+    """A comparison with another game (``vs``: rdr2, gta5 ...) or, without ``vs``, a numbered top list.
+
+    ``sources`` are article URLs (previews, interviews); the news search adds more unless ``no_search``.
+    ``fmt``: ``versus`` / ``toplist`` (16:9, the default for each kind) or ``short`` (9:16).
+    """
+    from ...modules.footage.games import MAIN, load_facts, resolve
+
+    topic = re.sub(r"\s+", " ", str(topic or "")).strip()
+    if len(topic) < 4:
+        raise ConfigError("Describe the video in a few words, e.g. \"Red Dead 2 systems inside GTA 6\" or \"12 things to do on day one in GTA 6\".")
+    style = "versus" if vs else "list"
+    opts = {**(options or {}), "kind": "topic", "topic": topic[:200], "style": style}
+    if vs:
+        gid = resolve(settings, vs)
+        if gid == MAIN:
+            raise ConfigError("Compare GTA 6 with another game (--vs rdr2, --vs gta5 ...).")
+        load_facts(settings, gid)  # fails now, not after the research, when the facts file is missing
+        opts["vs"] = gid
+    fmt = fmt or ("versus" if vs else "toplist")
+    if fmt in ("versus", "toplist"):
+        fmt = "versus" if vs else "toplist"
+    elif settings.format(fmt).get("aspect") != "9:16":
+        raise ConfigError(f"A comparison or a top list uses the 'versus' / 'toplist' format (16:9) or 'short' (9:16), not '{fmt}'.")
+    if count:
+        opts["count"] = max(2, min(40, int(count)))
+    urls = [u.strip() for u in sources or [] if u and u.strip()]
+    if opts.get("text_files"):
+        urls += [u for u in opts["text_files"] if u not in urls]
+    label = f"topic:{slugify(topic)[:40] or 'topic'}" + (f"-vs-{opts['vs']}" if vs else "")
+    return create_job(settings, urls or [label], fmt=fmt, options=opts)
 
 
 def create_details_job(settings: Any, *, videos: list[str] | None = None, fmt: str = "short", count: int | None = None, options: dict[str, Any] | None = None) -> str:

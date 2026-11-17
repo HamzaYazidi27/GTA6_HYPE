@@ -130,6 +130,7 @@ def build_metadata(
     log=lambda m: None,
     extra_sections: list[tuple[str, list[str]]] | None = None,
     how: str | None = None,
+    extra_tags: list[str] | None = None,
 ) -> dict[str, Any]:
     fmt_cfg = settings.format(fmt)
     hook = script["sections"][0]["narration"] if script.get("sections") else ""
@@ -173,7 +174,7 @@ def build_metadata(
         how=how,
     )
     base_tags = ["gta 6", "gta vi", "grand theft auto 6", "gta 6 news", "rockstar games"]
-    tags = _clip_tags(base_tags + [str(t) for t in data.get("tags") or []])
+    tags = _clip_tags(base_tags + list(extra_tags or []) + [str(t) for t in data.get("tags") or []])
     is_short = fmt_cfg.get("aspect") == "9:16"
     return {
         "title": chosen[:100],

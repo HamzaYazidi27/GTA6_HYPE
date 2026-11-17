@@ -27,6 +27,8 @@ export type SceneData = {
   mediaCredit?: string;
   /** real GTA 6 footage behind the graphics (pre-cut clip or official screenshot) */
   footage?: {src: string; kind: 'video' | 'photo'; credit: string};
+  /** left panel of a split screen (comparisons): the other game's footage */
+  footageB?: {src: string; kind: 'video' | 'photo'; credit: string};
 };
 
 export type Timeline = {

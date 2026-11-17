@@ -4,12 +4,14 @@
     doctor                     check every tool and provider
     new URL [URL ...]          create a job from article URL(s) and run it
     details [VIDEO ...]        a "details you missed" video from the footage library (freeze, zoom, ring, label)
+    topic "..." [--vs GAME]    a comparison (GTA 6 vs Red Dead 2 / GTA 5, split screen) or a numbered top list
+    games                      the games a comparison can use: facts file and footage library of each
     resume JOB [--from STEP]   continue (or redo from a step)
     list | status JOB | log JOB | delete JOB
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
     voices                     list the voices of the TTS provider
-    footage [list|update|add|tag|autotag|find|concepts|remove|fetch|stills]
-                               real GTA 6 footage library: add new footage any time, tag it, see what a sentence shows
+    footage [list|update|add|tag|autotag|find|concepts|remove|fetch|stills] [--game rdr2]
+                               real GTA 6 footage library (or another game's, for comparisons): add footage, tag it, see what a sentence shows
     competitors CHANNEL_URL    refresh the competitor reference database
     youtube auth|whoami|logout|status JOB    connect the channel (OAuth, one time)
     publish JOB                upload a reviewed package (private by default, resumable)
@@ -161,6 +163,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             rows.append((True, "footage tagger", detail + (f" - {left} shot(s)/photo(s) not tagged yet: `python -m gta_factory footage autotag`" if ready and left else "")))
     except FactoryError as exc:
         rows.append((True, "GTA 6 footage", f"not indexed ({exc.message})"))
+    try:  # the games a comparison can put next to GTA 6 (python -m gta_factory topic ... --vs GAME)
+        from ...modules.footage.games import MAIN, game_settings, games, load_facts
+        from ...modules.footage.library import build_index, library_summary
+
+        parts = []
+        for gid in (g for g in games(s) if g != MAIN):
+            fs = library_summary(build_index(game_settings(s, gid)))
+            try:
+                facts = f"{len(load_facts(s, gid))} facts"
+            except FactoryError:
+                facts = "no facts file"
+            parts.append(f"{gid}: {facts}, " + (f"{fs['videos']} video(s)" if fs["usable_shots"] or fs["photos"] else f"no footage (footage update --game {gid})"))
+        rows.append((True, "comparisons", "; ".join(parts) or "no other game in config.yaml (games)"))
+    except FactoryError as exc:
+        rows.append((True, "comparisons", exc.describe()))
     paid = [x for x, on in (("Claude subscription", s.get("providers.llm.default") == "claude_code"), ("Anthropic API", s.get("providers.llm.default") == "anthropic"), ("OpenAI API", s.get("providers.llm.default") == "openai" or s.get("providers.tts.default") == "openai"), ("ElevenLabs", s.get("providers.tts.default") == "elevenlabs")) if on]
     rows.append((True, "cost", "0 $ - everything runs locally, no account or subscription" if not paid else "uses " + ", ".join(paid)))
     rows.append((True, "youtube upload", "enabled" if s.get("youtube.upload_enabled") else "off (packages are produced for review)"))
@@ -251,6 +268,41 @@ def cmd_details(args: argparse.Namespace) -> int:
         _print(f"running in the background; follow with `python -m gta_factory log {job_id} -f`")
         return 0
     return _run(job_id, until=args.until)
+
+
+def cmd_topic(args: argparse.Namespace) -> int:
+    from ..core.pipeline import create_topic_job
+
+    s = get_settings()
+    job_id = create_topic_job(s, args.topic, vs=args.vs, sources=list(args.source or []), fmt=args.format, count=args.count, options=_options(args))
+    _print(f"job {job_id} created ({'comparison with ' + args.vs if args.vs else 'top list'})")
+    if args.detach:
+        log = open(s.jobs_dir / job_id / "pipeline.out", "ab")
+        subprocess.Popen([sys.executable, "-m", "gta_factory", "resume", job_id] + (["--until", args.until] if args.until else []), cwd=s.root, stdout=log, stderr=log, start_new_session=True)
+        _print(f"running in the background; follow with `python -m gta_factory log {job_id} -f`")
+        return 0
+    return _run(job_id, until=args.until)
+
+
+def cmd_games(args: argparse.Namespace) -> int:
+    from ...modules.footage import library as lib
+    from ...modules.footage.games import MAIN, facts_path, game_settings, games, load_facts
+
+    s = get_settings()
+    for gid, g in games(s).items():
+        gs = game_settings(s, gid)
+        summ = lib.library_summary(lib.build_index(gs))
+        foot = f"{summ['videos']} video(s), {summ['usable_shots']} shots, {summ['photos']} photo(s)" if summ["usable_shots"] or summ["photos"] else f"empty: python -m gta_factory footage update{'' if gid == MAIN else ' --game ' + gid}"
+        if gid == MAIN:
+            _print(f"  {gid:<6} {g['name']:<26} footage: {foot}")
+            continue
+        try:
+            facts = f"{len(load_facts(s, gid))} facts ({facts_path(s, gid).relative_to(s.root) if str(facts_path(s, gid)).startswith(str(s.root)) else facts_path(s, gid)})"
+        except FactoryError as exc:
+            facts = f"no facts file ({exc.message})"
+        _print(f"  {gid:<6} {g['name']:<26} {facts}; footage: {foot}")
+    _print('\ncompare: python -m gta_factory topic "Red Dead 2 systems inside GTA 6" --vs rdr2 --source <preview URL>')
+    return 0
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -348,10 +400,19 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
         raise FactoryError("This job has no script yet.")
     fact_check = read_json(root / "research" / "fact_check.json", [])
     analysis = read_json(root / "research" / "analysis.json", {})
+    if script.get("kind") == "topic":  # the other game's facts may be used too
+        from ...modules.topic.produce import job_facts
+
+        fact_check = job_facts(s, args.job, fact_check)
     llm = get_llm(s)
     script = rewrite_section(llm, script=script, section_id=args.section, instruction=args.instruction, fact_check=fact_check, quotes=analysis.get("quotes") or [])
     write_json(root / "script" / "script.json", script)
-    (root / "script" / "script.md").write_text(render_script_markdown(script, read_json(root / "story" / "story.json", {}), fact_check), encoding="utf-8")
+    if script.get("kind") == "topic":
+        from ...modules.topic.writer import script_markdown
+
+        (root / "script" / "script.md").write_text(script_markdown(script, fact_check), encoding="utf-8")
+    else:
+        (root / "script" / "script.md").write_text(render_script_markdown(script, read_json(root / "story" / "story.json", {}), fact_check), encoding="utf-8")
     sec = next(x for x in script["sections"] if x["id"] == args.section)
     _print(f"[{args.section}] {sec['narration']}\n")
     _print(f"next: python -m gta_factory resume {args.job} --from scenes")
@@ -389,7 +450,9 @@ def _footage_listing(s: Any, index: dict[str, Any]) -> None:
 
     items = lib.load_items(s, index)
     summ = lib.library_summary(index)
-    _print(f"\nGTA 6 footage library: {lib.footage_dir(s)}")
+    from ...modules.footage.games import footage_label
+
+    _print(f"\n{footage_label(s)} footage library: {lib.footage_dir(s)}")
     tagged = lambda its, base=(): sum(1 for it in its if set(it["tags"]) - set(base))  # noqa: E731
     for v in index["videos"]:
         its = [it for it in items["shots"] if it["file"] == v["file"]]
@@ -400,7 +463,9 @@ def _footage_listing(s: Any, index: dict[str, Any]) -> None:
         _print(f"  skipped {sk['file']}: {sk['reason']}")
     _print(f"total: {summ['videos']} video(s), {summ['usable_shots']} usable shots ({summ['usable_seconds']:.0f}s), {summ['photos']} photo(s)")
     if not summ["usable_shots"] and not summ["photos"]:
-        _print("the library is empty: run `python -m gta_factory footage update` (official trailers) or `footage add <files, folder or URL>`")
+        gid = getattr(s, "game_id", "gta6")
+        more = f" --game {gid}" if gid != "gta6" else ""
+        _print(f"the library is empty: run `python -m gta_factory footage update{more}` (official trailers) or `footage add <files, folder or URL>{more}`")
         return
     cov = lib.concept_coverage(s, items)
     have = [f"{r['concept']} ({r['shots'] + r['photos']})" for r in cov if r["shots"] + r["photos"]]
@@ -411,8 +476,9 @@ def _footage_listing(s: Any, index: dict[str, Any]) -> None:
 
 def cmd_footage(args: argparse.Namespace) -> int:
     from ...modules.footage import library as lib
+    from ...modules.footage.games import game_settings
 
-    s = get_settings()
+    s = game_settings(get_settings(), args.game)  # --game rdr2: that game's library, for comparisons
     tags = _tag_list(args.tags)
     act = args.action
     if act == "update":
@@ -658,6 +724,19 @@ def build_parser() -> argparse.ArgumentParser:
     job_opts(sp)
     sp.set_defaults(fn=cmd_details)
 
+    sp = sub.add_parser("topic", help="a comparison (GTA 6 vs another game, split screen) or a numbered top list, from several sources")
+    sp.add_argument("topic", help='what the video is about, e.g. "Red Dead 2 systems inside GTA 6" or "12 things to do on day one in GTA 6"')
+    sp.add_argument("--vs", help="compare GTA 6 with this game: rdr2, gta5 ... (`python -m gta_factory games`); without --vs: a numbered top list")
+    sp.add_argument("--source", "-s", action="append", metavar="URL", help="an article to use: preview, interview, Rockstar Newswire ... (repeatable; the news search adds more unless --no-search)")
+    sp.add_argument("--count", "-n", type=int, help="number of items (default: topic.count_long / count_short)")
+    sp.add_argument("--format", "-f", choices=("versus", "toplist", "short"), help="16:9 video (default) or short = vertical Short")
+    sp.add_argument("--detach", action="store_true", help="run in the background")
+    job_opts(sp)
+    sp.set_defaults(fn=cmd_topic)
+
+    sp = sub.add_parser("games", help="the games a comparison can use (facts file and footage library of each)")
+    sp.set_defaults(fn=cmd_games)
+
     sp = sub.add_parser("resume", help="continue a job, or redo it from a step")
     sp.add_argument("job")
     sp.add_argument("--from", dest="from_step", choices=STEP_NAMES, help="redo from this step (later steps are redone too)")
@@ -714,6 +793,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--model", help="autotag: Ollama vision model (default footage.vision_model)")
     sp.add_argument("--reindex", action="store_true", help="re-detect the shots of every video")
     sp.add_argument("-y", "--yes", action="store_true", help="remove: do not ask for confirmation")
+    sp.add_argument("--game", help="another game's library, for comparisons: rdr2, gta5 ... (default: GTA 6)")
     sp.set_defaults(fn=cmd_footage)
 
     sp = sub.add_parser("competitors", help="refresh the competitor reference database from public channel metadata")

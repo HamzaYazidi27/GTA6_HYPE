@@ -101,7 +101,8 @@ def build_chapters(scenes: list[dict[str, Any]], placed: dict[int, dict[str, Any
             continue
         if sec != prev:
             p = placed[sc["scene_number"]]
-            chapters.append({"title": CHAPTER_TITLES.get(sec, sec.replace("_", " ").title()), "startFrame": p["start_frame"], "start_time": p["start_time"], "section": sec})
+            title = sc.get("chapter_title") or CHAPTER_TITLES.get(sec, sec.replace("_", " ").title())
+            chapters.append({"title": title, "startFrame": p["start_frame"], "start_time": p["start_time"], "section": sec})
             prev = sec
     return chapters
 
@@ -109,7 +110,7 @@ def build_chapters(scenes: list[dict[str, Any]], placed: dict[int, dict[str, Any
 def _source_label(sc: dict[str, Any]) -> str:
     ref = sc.get("source_reference") or ""
     pub = ref.split(" - ", 1)[0].strip()
-    return f"SOURCE: {pub.upper()}" if pub else ""
+    return pub.upper()  # the strip itself reads "SOURCE · <publisher>"
 
 
 def build_render_props(
@@ -158,7 +159,12 @@ def build_render_props(
             item["media"] = media_urls[sc["scene_number"]]
             item["mediaCredit"] = sc.get("media_credit") or ""
         elif sc["scene_number"] in footage:
-            item["footage"] = footage[sc["scene_number"]]
+            fo = dict(footage[sc["scene_number"]])
+            second = fo.pop("b", None)
+            if fo.get("src"):
+                item["footage"] = fo
+            if second:  # left panel of a split screen (the other game of a comparison)
+                item["footageB"] = second
         out_scenes.append(item)
     chapters = [] if vertical else build_chapters(scenes, placed)
     return {

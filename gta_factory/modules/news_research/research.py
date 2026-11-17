@@ -91,7 +91,11 @@ def analyze_sources(llm: LLMProvider, articles: list[Article], today: str) -> di
         required_keys=("story_headline", "summary", "claims", "entities", "search_queries"),
         validate=validate,
     )
+    return verify_evidence(data, articles)
 
+
+def verify_evidence(data: dict[str, Any], articles: list[Article]) -> dict[str, Any]:
+    """Number the claims and keep only evidence and quotes found verbatim in their article."""
     claims = []
     for n, c in enumerate(data["claims"], 1):
         art = articles[c["source_index"] - 1]
@@ -115,6 +119,7 @@ def analyze_sources(llm: LLMProvider, articles: list[Article], today: str) -> di
                 "basis": c.get("basis") or "relayed_report",
                 "event_date": c.get("event_date"),
                 "importance": int(c.get("importance") or 3),
+                **({"subject": normalize_ws(str(c["subject"]))[:60]} if c.get("subject") else {}),
             }
         )
     quotes = []

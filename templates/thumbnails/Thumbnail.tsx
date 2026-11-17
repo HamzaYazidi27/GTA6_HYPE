@@ -4,6 +4,7 @@
  *   stamp  - headline block + verification stamp + illustrated motif   (news with a clear verdict)
  *   number - one giant figure or date as the hero                      (stories driven by a number)
  *   split  - diagonal two-tone split with motif                        (analysis / "what it means")
+ *   versus - two games side by side, a picture of each and a VS badge  (comparisons: "GTA 6 vs Red Dead 2")
  *
  * Original identity: ink background, neon signal colours, heavy italic condensed type,
  * a verification stamp instead of shock faces or arrows. No third-party artwork.
@@ -17,7 +18,7 @@ import {C, F, STATUS, Status, hexA} from '../motion_graphics/theme';
 ensureFonts();
 
 export type ThumbProps = {
-  concept: 'stamp' | 'number' | 'split';
+  concept: 'stamp' | 'number' | 'split' | 'versus';
   lines: string[];
   accent: string;
   status: Status | null;
@@ -29,6 +30,8 @@ export type ThumbProps = {
   calendar: {month: string; day: string} | null;
   /** optional real GTA 6 screenshot / trailer still (public path); replaces the drawn motif */
   photo?: string | null;
+  /** "versus": the other game's picture (left half); `photo` is GTA 6 (right half) */
+  photo2?: string | null;
   /** "details you missed": a neon ring around this part of the photo (fractions of the frame) */
   ring?: {x: number; y: number; w: number; h: number} | null;
 };
@@ -245,6 +248,28 @@ const ThumbnailBody: React.FC<ThumbProps> = (p) => {
             <Motif kind={p.motif} color={color} size={300} calendar={p.calendar} />
           </div>
         )}
+      </Frame>
+    );
+  }
+  if (p.concept === 'versus') {
+    const left = p.label || p.lines[1]?.replace(/^VS\s+/i, '') || 'THEN';
+    const half = (src: string | null | undefined, clip: string, tint: string, fallback: string) => (
+      <AbsoluteFill style={{clipPath: clip}}>
+        {src ? <Photo src={src} color={tint} side="none" /> : <AbsoluteFill style={{background: `radial-gradient(80% 90% at 50% 40%, ${hexA(tint, 0.5)} 0%, ${C.ink} 85%)`}} />}
+        {src ? null : <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: F.display, fontWeight: 900, fontStyle: 'italic', fontSize: 120, color: hexA(C.paper, 0.18)}}>{fallback}</div>}
+      </AbsoluteFill>
+    );
+    const chip = (text: string, bg: string, style: React.CSSProperties) => (
+      <div style={{position: 'absolute', ...style, padding: '10px 26px 4px', background: bg, color: C.ink, fontFamily: F.display, fontWeight: 900, fontStyle: 'italic', fontSize: Math.min(110, 1100 / Math.max(6, text.length)), lineHeight: 1, transform: 'rotate(-3deg)', textTransform: 'uppercase', whiteSpace: 'nowrap', boxShadow: `0 10px 0 ${C.ink}`}}>{text}</div>
+    );
+    return (
+      <Frame color={color} brand={p.brand}>
+        {half(p.photo2, 'polygon(0 0, 57% 0, 43% 100%, 0 100%)', C.cyan, left)}
+        {half(p.photo, 'polygon(57% 0, 100% 0, 100% 100%, 43% 100%)', C.coral, 'GTA 6')}
+        <div style={{position: 'absolute', left: 625, top: -60, width: 22, height: 860, background: C.sun, transform: 'rotate(10.6deg)', boxShadow: `0 0 40px ${hexA(C.sun, 0.8)}`}} />
+        {chip(left, C.cyan, {left: 46, bottom: 64})}
+        {chip('GTA 6', C.coral, {right: 46, bottom: 64})}
+        <div style={{position: 'absolute', left: 640 - 118, top: 360 - 150, width: 236, height: 236, borderRadius: '50%', background: C.ink, border: `12px solid ${C.sun}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: F.display, fontWeight: 900, fontStyle: 'italic', fontSize: 132, color: C.sun, boxShadow: `0 0 70px ${hexA(C.sun, 0.7)}, 0 16px 0 ${C.ink}`}}>VS</div>
       </Frame>
     );
   }

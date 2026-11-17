@@ -3,7 +3,7 @@
 #
 #   bash install.sh               install what is missing, then open the dashboard
 #   bash install.sh --no-start    install only
-#   bash install.sh --no-footage  skip downloading the official GTA 6 trailers
+#   bash install.sh --no-footage  skip downloading the official trailers (GTA 6, and Red Dead 2 / GTA V for comparisons)
 #
 # Safe to run again at any time: what is already installed is kept, only what is
 # missing or broken is (re)installed. macOS (Homebrew) or Linux (apt). Free tools only.
@@ -98,6 +98,10 @@ $PY -m gta_factory setup || warn "setup reported a problem (see above). Fix it a
 if [ "$FOOTAGE" = 1 ]; then
   say "Real GTA 6 footage (official trailers + any new one, tagged automatically)"
   $PY -m gta_factory footage update || warn "the footage could not be downloaded now; run later: $PY -m gta_factory footage update"
+  say "Footage of the games GTA 6 is compared with (official Red Dead 2 and GTA V trailers)"
+  for game in rdr2 gta5; do
+    $PY -m gta_factory footage update --game "$game" --no-new || warn "the $game footage could not be downloaded now; run later: $PY -m gta_factory footage update --game $game"
+  done
 fi
 
 # ------------------------------------------------------------------ 5. check, start

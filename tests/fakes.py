@@ -52,6 +52,9 @@ class ScriptedLLM(LLMProvider):
     def complete(self, system: str, prompt: str, *, max_tokens: int = 8000) -> str:
         if "DETAILS (id | where in the footage" in prompt:
             return details_answer(prompt)
+        topic = topic_answer(prompt)
+        if topic is not None:
+            return topic
         if "NARRATION - numbered sentences" in prompt:
             n = len(re.findall(r"^\d+\. \[", prompt, re.M))
             return json.dumps({"scenes": self._scenes(n)})
@@ -154,3 +157,83 @@ def details_answer(prompt: str) -> str:
         "outro_question": "Which of these details had you missed?",
         "thumb_lines": [f"{len(ids)} DETAILS", "YOU MISSED"],
     })
+
+
+# ----------------------------------------------------------------------------- comparisons and top lists
+# TEST FIXTURE: two fictional preview articles, used only by the automated tests.
+TOPIC_URLS = ["https://www.ign.com/articles/test-fixture-gta-6-preview", "https://www.gamesradar.com/test-fixture-gta-6-hands-on"]
+TOPIC_TEXTS = [
+    """TEST FIXTURE - fictional preview used by the automated tests.
+
+In our hands-on preview, Jason carries two long guns and a sidearm, and every other weapon goes in the trunk of his car.
+
+Rockstar's Rob Nelson told us that the focus ability slows time and highlights the weak points of enemies.
+
+Leonida is home to more than 170 animal species, from alligators to flamingos.
+
+Nelson said that a crime now needs a witness or an alarm before the police come after you.""",
+    """TEST FIXTURE - fictional hands-on report used by the automated tests.
+
+Rockstar says a crime now needs a witness or an alarm before the police come after you, and the game tracks what the police know.
+
+A gym membership lets Jason and Lucia build visible muscle with timing-based workouts.
+
+Focus also works on cars, marking the engine, the fuel tank and the tires.""",
+]
+TOPIC_CLAIMS = [
+    {"id": "C1", "subject": "weapon limit", "claim": "Jason carries two long guns and a sidearm, the rest goes in the car trunk.", "type": "fact", "source_index": 1, "evidence": "Jason carries two long guns and a sidearm, and every other weapon goes in the trunk of his car.", "attributed_to": "IGN preview", "basis": "named_source", "event_date": None, "importance": 5},
+    {"id": "C2", "subject": "focus mode", "claim": "The focus ability slows time and highlights enemy weak points.", "type": "fact", "source_index": 1, "evidence": "the focus ability slows time and highlights the weak points of enemies", "attributed_to": "Rob Nelson, Rockstar", "basis": "official", "event_date": None, "importance": 5},
+    {"id": "C3", "subject": "witnesses", "claim": "A crime needs a witness or an alarm before the police respond.", "type": "fact", "source_index": 2, "evidence": "a crime now needs a witness or an alarm before the police come after you", "attributed_to": "Rockstar", "basis": "official", "event_date": None, "importance": 4},
+    {"id": "C4", "subject": "gym", "claim": "A gym membership lets Jason and Lucia build visible muscle.", "type": "fact", "source_index": 2, "evidence": "A gym membership lets Jason and Lucia build visible muscle with timing-based workouts.", "attributed_to": "GamesRadar hands-on", "basis": "named_source", "event_date": None, "importance": 3},
+    {"id": "C5", "subject": "animals", "claim": "Leonida has more than 170 animal species.", "type": "number", "source_index": 1, "evidence": "Leonida is home to more than 170 animal species", "attributed_to": "IGN preview", "basis": "named_source", "event_date": None, "importance": 3},
+]
+VERSUS_SCRIPT = {
+    "hook": "Leonida is home to more than 170 animal species, and that is not the only thing GTA 6 shares with Red Dead 2. Put the two games side by side, system by system.",
+    "item_01": "Start with what you can carry. In Red Dead 2, Arthur carries at most two sidearms and two long guns, and every other gun stays on his horse. In GTA 6, IGN's preview says Jason carries two long guns and a sidearm, and the rest goes in the trunk. Red Dead 2 and GTA 6 both keep you light on foot.",
+    "item_02": "Then there is how you aim. In Red Dead 2, Dead Eye slows time so you can mark several targets before firing. In GTA 6, Rockstar's Rob Nelson says focus slows time and highlights enemy weak points.",
+    "item_03": "Finally, the law. Red Dead 2 had witnesses report crimes, and stopping one in time prevented the report. A bandana in Red Dead 2 could keep Arthur from being recognised. Crimes in Red Dead 2 put a bounty on Arthur's head in each state, and bounty hunters came after him until it was paid. In GTA 6, according to Rockstar, a crime needs a witness or an alarm before the police respond.",
+    "verdict": "Red Dead 2 and GTA 6 clearly share a lot. GTA 6 keeps the weight of Red Dead and adds cars and phones. How far it goes is still to be seen.",
+    "cta": "Which Red Dead system are you most glad to see in GTA 6?",
+}
+LIST_SCRIPT = {
+    "hook": "Leonida is home to more than 170 animal species, and day one is the time to start. Here is the plan.",
+    "item_01": "Get a gym membership. According to the GamesRadar hands-on, it lets Jason and Lucia build visible muscle.",
+    "item_02": "Learn to use focus. Rockstar's Rob Nelson says it slows time and highlights enemy weak points.",
+    "item_03": "Pick your spot before any crime. According to Rockstar, a crime needs a witness or an alarm before the police respond.",
+    "verdict": "Three habits, one good first day in Leonida.",
+    "cta": "What will you do first in GTA 6?",
+}
+
+
+def topic_answer(prompt: str) -> str | None:
+    """The scripted answers of a comparison / top list job (None for any other prompt)."""
+    if "VIDEO TOPIC:" in prompt and "SOURCE ARTICLES" in prompt:
+        return json.dumps({"headline": "What the previews say about GTA 6 systems", "claims": TOPIC_CLAIMS, "quotes": [{"text": "a crime now needs a witness or an alarm before the police come after you", "speaker": "Rockstar", "source_index": 2}]})
+    if "CLAIMS TO CHECK" in prompt and "fictional hands-on report" in prompt:
+        # C3 is "supported" by its own article (must be ignored) and by the other one (counts)
+        return json.dumps({"checks": [
+            {"id": "C3", "sources": [
+                {"source_index": 2, "verdict": "supports", "evidence": "Rockstar says a crime now needs a witness or an alarm before the police come after you", "independent": True, "cites_official": False},
+                {"source_index": 1, "verdict": "supports", "evidence": "Nelson said that a crime now needs a witness or an alarm before the police come after you.", "independent": True, "cites_official": False},
+            ], "is_old_news": False, "first_known_date": None, "note": ""},
+        ], "contradictions": [], "additional_facts": []})
+    if "Plan exactly" in prompt and "GTA 6 FACT SHEET" in prompt:
+        versus = "game_fact_ids" in prompt
+        if versus:
+            ids = {f: re.search(rf"^(G\d+) \[{f}\]", prompt, re.M).group(1) for f in ("weapon limit", "dead eye and aiming", "witnesses and the law")}
+            items = [
+                {"title": "Weapon limit", "claim_ids": ["C1"], "game_fact_ids": [ids["weapon limit"]], "then": "Two guns, rest on the horse", "now": "Two guns, rest in the trunk"},
+                {"title": "Focus mode", "claim_ids": ["C2"], "game_fact_ids": [ids["dead eye and aiming"]], "then": "Dead Eye", "now": "Focus"},
+                {"title": "Witnesses", "claim_ids": ["C3"], "game_fact_ids": [ids["witnesses and the law"]], "then": "Witnesses report crimes", "now": "Witness or alarm"},
+                {"title": "Made up", "claim_ids": ["C99"], "game_fact_ids": [ids["weapon limit"]]},
+            ]
+        else:
+            items = [{"title": "Join a gym", "claim_ids": ["C4"], "kicker": "Visible muscle"}, {"title": "Master focus", "claim_ids": ["C2"], "kicker": "Slow time"}, {"title": "Pick your spot", "claim_ids": ["C3"], "kicker": "No witness, no cops"}]
+        return json.dumps({"working_title": "GTA 6 vs Red Dead 2" if versus else "3 things to do on day one", "thesis": "What GTA 6 takes from Red Dead 2." if versus else "A first day plan.", "hook_idea": "170 species [C5]", "items": items, "verdict_idea": "A lot is shared.", "thumb_lines": ["GTA 6", "VS RED DEAD"] if versus else ["3 THINGS", "TO DO FIRST"]})
+    if "How to write an item section" in prompt:
+        ids = re.findall(r"^- (\w+) \[\d+ words\]:", prompt, re.M)
+        versus = "Red Dead" in prompt
+        text = VERSUS_SCRIPT if versus else LIST_SCRIPT
+        claims = {"hook": ["C5"], "item_01": ["C1"] if versus else ["C4"], "item_02": ["C2"], "item_03": ["C3"], "verdict": [], "cta": []}
+        return json.dumps({"title": "GTA 6 vs Red Dead 2, system by system" if versus else "3 things to do on day one in GTA 6", "sections": [{"id": i, "narration": text[i], "claim_ids": claims.get(i, [])} for i in ids]})
+    return None

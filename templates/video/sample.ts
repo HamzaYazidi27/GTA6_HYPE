@@ -39,6 +39,10 @@ const scenes: SceneData[] = [
   base(13, 'countdown', 'community', {target_date: '2030-01-20', label: 'Sample milestone', sublabel: 'Optional detail line'}, {background: 'waves', status: 'confirmed', transition: 'glitch'}),
   base(14, 'chapter', 'conclusion', {title: 'THE TAKEAWAY', index: 4, kicker: 'Final section'}, {background: 'grid', durationFrames: 70, transition: 'glitch'}),
   base(15, 'outro', 'cta', {question: 'The closing question for the comments goes here?', cta: 'Tell us below'}, {background: 'rays', durationFrames: 150, transition: 'slice'}),
+  // comparisons and top lists (python -m gta_factory topic ...)
+  base(16, 'compare', 'item_03', {n: 3, total: 12, title: 'SAMPLE SYSTEM', left: {game: 'OTHER GAME', caption: 'How it used to work'}, right: {game: 'GTA 6', caption: 'How it works now', status: 'reported'}}, {transition: 'slice'}),
+  base(17, 'footage', 'item_03', {game: 'GTA 6', side: 'gta6', tag: '03 · SAMPLE SYSTEM'}, {status: 'reported'}),
+  base(18, 'item', 'item_04', {n: 4, total: 12, title: 'A sample entry', kicker: 'What it gives you'}, {transition: 'slice', status: 'confirmed'}),
 ];
 
 let cursor = 0;

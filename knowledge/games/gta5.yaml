@@ -1,0 +1,31 @@
+# What a comparison video may say about Grand Theft Auto V (python -m gta_factory topic "..." --vs gta5).
+#
+# These are facts about the RELEASED game (story mode unless a fact says otherwise). The script writer
+# can only use the facts listed here for GTA 5 (and only fact-checked sources for GTA 6), so a fact that
+# is missing here simply cannot be said. Add, fix or remove lines freely: one short, plain sentence per
+# fact. "about" is the system it describes. Numbers you add here can be said in the video: double-check them.
+game: gta5
+source: "Grand Theft Auto V (Rockstar Games, 2013), the released game"
+facts:
+  - {id: release, about: release, fact: "Grand Theft Auto V came out on September 17, 2013, on PlayStation 3 and Xbox 360, then on PlayStation 4, Xbox One and PC."}
+  - {id: online, about: online, fact: "GTA Online launched on October 1, 2013."}
+  - {id: heroes, about: character switching, fact: "The story follows three playable characters, Michael, Franklin and Trevor, and outside missions the player can switch between them at almost any time."}
+  - {id: specials, about: special abilities, fact: "Each character has a special ability: Michael slows time in gunfights, Franklin slows time while driving, and Trevor's rage makes him deal more damage and take less."}
+  - {id: skills, about: stats and skills, fact: "Characters have eight skills that improve with practice: special, stamina, shooting, strength, stealth, flying, driving and lung capacity."}
+  - {id: weapon_wheel, about: weapon limit, fact: "The weapon wheel lets a character carry every weapon he owns at once."}
+  - {id: wanted, about: wanted level, fact: "The wanted level goes up to five stars, and the player loses the police by leaving their search area."}
+  - {id: minimap_cops, about: wanted level, fact: "During a chase, police officers and their cones of vision are shown on the minimap."}
+  - {id: forget, about: police memory, fact: "Once the wanted level is gone, the police do not keep a description of the character, his clothes or his car."}
+  - {id: heists, about: heists and robberies, fact: "Story heists let the player pick an approach and hire a crew before the job."}
+  - {id: holdups, about: heists and robberies, fact: "Shop clerks can be held up at gunpoint for the money in the register."}
+  - {id: fuel, about: fuel and cars, fact: "Cars never need to be refuelled."}
+  - {id: car_theft, about: stealing cars, fact: "Any car can be stolen by pulling the driver out or by breaking a window of a parked car."}
+  - {id: snacks, about: food and health, fact: "Snacks bought in stores restore health, and the characters never get hungry or change weight."}
+  - {id: looks, about: haircuts and outfits, fact: "Characters can buy new clothes, get haircuts at barbers and get tattoos."}
+  - {id: hospital, about: money, fact: "Each character has his own money, and getting killed costs a hospital bill."}
+  - {id: stocks, about: money, fact: "A stock market rises and falls with world events, including the results of Lester's assassination missions."}
+  - {id: animals, about: animals, fact: "Animals include deer, cougars, coyotes and sharks, and Franklin's dog Chop can be walked and played with."}
+  - {id: random_events, about: random events, fact: "Random events, such as a robbery in progress, can happen while exploring."}
+  - {id: phone, about: phone, fact: "The in-game phone handles calls, texts, the internet and a camera."}
+  - {id: map, about: map, fact: "The map covers the city of Los Santos and the countryside of Blaine County."}
+  - {id: activities, about: activities, fact: "Side activities include golf, tennis, yoga, triathlons and street races."}

@@ -103,7 +103,8 @@ export const ProgressRail: React.FC<{frame: number; total: number; chapters: {ti
         ))}
       </div>
       {current && !vertical && (
-        <div style={{position: 'absolute', right: 60 * u, bottom: 34 * u, fontFamily: F.mono, fontWeight: 500, fontSize: 19 * u, letterSpacing: '0.12em', color: C.mute}}>
+        // above the footage credit (bottom-right, 34u), below the captions box (78u)
+        <div style={{position: 'absolute', right: 60 * u, bottom: 56 * u, fontFamily: F.mono, fontWeight: 500, fontSize: 19 * u, letterSpacing: '0.12em', color: C.mute}}>
           {String(chapters.indexOf(current) + 1).padStart(2, '0')} / {String(chapters.length).padStart(2, '0')} <span style={{color: C.paper}}>{'·'} {current.title.toUpperCase()}</span>
         </div>
       )}

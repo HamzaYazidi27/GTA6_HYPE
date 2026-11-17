@@ -1,0 +1,34 @@
+# What a comparison video may say about Red Dead Redemption 2 (python -m gta_factory topic "..." --vs rdr2).
+#
+# These are facts about the RELEASED game, as anyone can check by playing it. The script writer can
+# only use the facts listed here for Red Dead 2 (and only fact-checked sources for GTA 6), so a fact
+# that is missing here simply cannot be said. Add, fix or remove lines freely: one short, plain
+# sentence per fact. "about" is the system it describes (it helps pair it with a GTA 6 system).
+# Numbers you add here can be said in the video: double-check them.
+game: rdr2
+source: "Red Dead Redemption 2 (Rockstar Games, 2018), the released game"
+facts:
+  - {id: release, about: release, fact: "Red Dead Redemption 2 came out on October 26, 2018, on PlayStation 4 and Xbox One, and on PC in November 2019."}
+  - {id: hero, about: main character, fact: "The player controls one outlaw, Arthur Morgan, and John Marston in the epilogue."}
+  - {id: chapters, about: story structure, fact: "The story is told in six chapters followed by two epilogues."}
+  - {id: camp, about: camp and safehouse, fact: "Arthur's gang lives in a camp that moves to a new place as the story goes on, and the camp can be upgraded with donations."}
+  - {id: weapons, about: weapon limit, fact: "Arthur carries at most two sidearms and two long guns on him; every other gun stays on his horse."}
+  - {id: whistle, about: calling your ride, fact: "Arthur calls his horse with a whistle, and a stronger bond lets the horse hear it from farther away."}
+  - {id: bonding, about: horse bonding, fact: "The bond with a horse has four levels; it grows by riding, feeding, brushing and patting the horse, and each level unlocks new moves."}
+  - {id: deadeye, about: dead eye and aiming, fact: "Dead Eye slows time so the player can mark several targets before firing, and its later levels show critical and fatal spots on enemies."}
+  - {id: eagleeye, about: eagle eye and scanning, fact: "Eagle Eye highlights tracks, plants, animals and items in the world."}
+  - {id: cores, about: health and stamina, fact: "Arthur has three cores, for health, stamina and Dead Eye; they drain over time and are refilled by eating, drinking, sleeping and items such as tonics."}
+  - {id: tobacco, about: health and stamina, fact: "Tobacco refills Arthur's Dead Eye core."}
+  - {id: weight, about: weight and food, fact: "Arthur's weight changes with what he eats: a heavier Arthur takes less damage but tires faster, a lighter Arthur tires less but takes more damage."}
+  - {id: hair, about: hair and grooming, fact: "Arthur's hair and beard grow over time; he can trim them at camp or visit a barber."}
+  - {id: greet, about: talking to strangers, fact: "Focusing on a stranger lets the player greet them, antagonize them, or defuse a tense situation."}
+  - {id: drawn_gun, about: npc reactions, fact: "Townspeople react to a drawn weapon as a threat, and they comment when Arthur's clothes are covered in blood or mud."}
+  - {id: honor, about: honor and reputation, fact: "An honor system rises or falls with Arthur's choices; high honor brings discounts in shops and changes some dialogue and how parts of the story end."}
+  - {id: witnesses, about: witnesses and the law, fact: "Crimes are reported by witnesses; stopping a witness before they reach the law prevents the report, and a bandana can keep Arthur from being recognised."}
+  - {id: bounty, about: wanted and bounties, fact: "Crimes put a bounty on Arthur's head in each state, and bounty hunters can come after him until it is paid."}
+  - {id: fences, about: fences and stolen goods, fact: "Fences buy stolen valuables such as jewelry, and some fences take stolen wagons or stolen horses."}
+  - {id: encounters, about: random events, fact: "Random encounters fill the world, such as a stranger bitten by a snake or a man caught in a bear trap."}
+  - {id: animals, about: animals and hunting, fact: "The compendium lists 178 animal species, and the game has 16 legendary animals to hunt."}
+  - {id: fish, about: fishing, fact: "Fishing is a full activity, with 13 legendary fish to catch."}
+  - {id: travel, about: travel and transport, fact: "Players can buy a train ticket or hire a stagecoach, and the trip plays out as a short cinematic."}
+  - {id: new_austin, about: map, fact: "New Austin, the region of the first Red Dead Redemption, only opens up for exploring in the epilogue."}

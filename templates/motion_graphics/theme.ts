@@ -51,8 +51,14 @@ export const SECTION_ACCENT: Record<string, string> = {
   cta: C.coral,
 };
 
+/** Items of a comparison or a top list (sections item_01, item_02 ...) take turns through the palette. */
+const ITEM_ACCENTS = [C.sun, C.cyan, C.lime, C.violet, C.coral, C.amber];
+
 export const accentFor = (section?: string, status?: string | null): string => {
   if (status && status in STATUS) return STATUS[status as Status].color;
+  const item = /^item_(\d+)$/.exec(section ?? '');
+  if (item) return ITEM_ACCENTS[(parseInt(item[1], 10) - 1) % ITEM_ACCENTS.length];
+  if (section === 'verdict') return C.sun;
   return SECTION_ACCENT[section ?? ''] ?? C.coral;
 };
 

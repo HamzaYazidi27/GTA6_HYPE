@@ -130,6 +130,10 @@ formats:
   # "Details you missed" (python -m gta_factory details): made from the footage library, not from articles.
   # The vertical version uses the "short" format: python -m gta_factory details "Trailer 2" --format short
   details:   {label: "Details you missed", aspect: "16:9", target_seconds: 240, min_seconds: 90, max_seconds: 720, footage_only: true}
+  # Comparisons and top lists (python -m gta_factory topic ...): made from several sources, one item at a time.
+  # The vertical version uses the "short" format: python -m gta_factory topic "..." --format short
+  versus:    {label: "GTA 6 vs another game", aspect: "16:9", target_seconds: 600, min_seconds: 240, max_seconds: 1800, topic_only: true}
+  toplist:   {label: "Top list", aspect: "16:9", target_seconds: 480, min_seconds: 180, max_seconds: 1200, topic_only: true}
 
 script:
   words_per_minute: 165            # used to turn a target duration into a word budget; re-measured after TTS
@@ -226,6 +230,55 @@ details:
   count_short: 5                   # details in a Short
   count_long: 12                   # details in a 16:9 video
   min_shot_seconds: 1.5            # shorter shots are not scanned
+
+# ---------------------------------------------------------------------------
+# Comparisons ("GTA 6 vs Red Dead 2", "GTA 6 vs GTA 5") and top lists ("12 things to do on day 1"):
+# python -m gta_factory topic "..." [--vs rdr2]. Every GTA 6 fact is fact-checked against the sources;
+# facts about the other game come from knowledge/games/<game>.yaml (the released game, edit it freely).
+# ---------------------------------------------------------------------------
+topic:
+  count_long: 10                   # items in a 16:9 video (systems compared, or entries of the list)
+  count_short: 4                   # items in a Short
+  seconds_per_item_long: 42        # narration per item; the length of the video follows the number of items
+  seconds_per_item_short: 9
+  intro_seconds_long: 50           # hook + verdict + closing question
+  intro_seconds_short: 12
+  max_articles: 8                  # sources read: yours (--source) plus the best ones the news search finds
+  scene_words: 24                  # about one picture change per this many spoken words
+
+# Games a comparison can put next to GTA 6. Each one has its own footage library (official trailers
+# and your own gameplay captures: `python -m gta_factory footage update --game rdr2`) and a facts file.
+# Add a game by adding an entry here, a facts file in knowledge/games/, and footage.
+games:
+  gta6:
+    name: "Grand Theft Auto VI"
+    short: "GTA 6"
+    say: [gta 6, gta vi, gta six, grand theft auto 6, grand theft auto vi, jason, lucia, leonida, vice city, port gellhorn, grassrivers, ambrosia, leonida keys, mount kalaga]
+  gta5:
+    name: "Grand Theft Auto V"
+    short: "GTA 5"
+    released: "2013-09-17"
+    footage_dir: "assets/game_footage/gta5"
+    facts: "knowledge/games/gta5.yaml"
+    tags_file: "knowledge/games/gta5_tags.yaml"
+    sources:
+      - "https://www.youtube.com/watch?v=QkkoHAzjnUs"   # Grand Theft Auto V Trailer (Rockstar Games)
+      - "https://www.youtube.com/watch?v=N-xHcvug3WI"   # Grand Theft Auto V: Official Gameplay Video
+    title_filter: "Grand Theft Auto V\\b|GTA V\\b|GTA 5\\b"
+    say: [gta 5, gta v, gta five, grand theft auto 5, grand theft auto v, los santos, blaine county, michael, franklin, trevor]
+  rdr2:
+    name: "Red Dead Redemption 2"
+    short: "Red Dead 2"
+    released: "2018-10-26"
+    footage_dir: "assets/game_footage/rdr2"
+    facts: "knowledge/games/rdr2.yaml"
+    tags_file: "knowledge/games/rdr2_tags.yaml"
+    sources:
+      - "https://www.youtube.com/watch?v=gmA6MrX81z4"   # Red Dead Redemption 2 Trailer (Rockstar Games)
+      - "https://www.youtube.com/watch?v=eaW0tYpxyp0"   # Red Dead Redemption 2: Official Trailer #3
+      - "https://www.youtube.com/watch?v=Dw_oH5oiUSE"   # Red Dead Redemption 2: Official Gameplay Video
+    title_filter: "Red Dead Redemption 2|RDR2\\b|RDR 2\\b"
+    say: [red dead, red dead 2, red dead redemption, red dead redemption 2, rdr2, rdr 2, rdr, arthur, arthur morgan, dutch, dutch van der linde, john marston, saint denis, valentine, new austin]
 
 quality_control:
   max_black_seconds: 0.6
