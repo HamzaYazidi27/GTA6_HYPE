@@ -49,13 +49,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         proc = subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=s.root)
         if proc.returncode != 0:
             return proc.returncode
+    lib = build_library(s.assets_dir, force=args.force_audio, log=_print)
+    _print(f"audio library: {len(lib['generated'])} generated, {len(lib['kept'])} already present")
     if not args.skip_models and s.get("providers.tts.default") == "kokoro":
         ensure_kokoro(s, log=_print)
     llm_ok = True
     if not args.skip_models and s.get("providers.llm.default", "ollama") == "ollama":
         llm_ok = _setup_local_llm(s, args.model)
-    lib = build_library(s.assets_dir, force=args.force_audio, log=_print)
-    _print(f"audio library: {len(lib['generated'])} generated, {len(lib['kept'])} already present")
     (s.root / "knowledge").mkdir(exist_ok=True)
     if not (s.root / ".env").exists() and (s.root / ".env.example").exists():
         _print("tip: copy .env.example to .env only if you use API-key providers (the defaults need no key)")

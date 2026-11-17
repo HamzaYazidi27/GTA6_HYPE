@@ -92,3 +92,16 @@ def test_full_pipeline_with_render(project):
     meta = read_json(out / "metadata.json")
     assert meta["title"] == "GTA 6 pre-orders open December 4"
     assert get_db(s.db_path).list_stories()  # story memory updated
+
+
+def test_missing_audio_library_is_generated_by_the_job(project):
+    """A skipped or interrupted `setup` must not stop a job: the music beds and sound effects are made on the spot."""
+    from gta_factory.modules.asset_management.audio_library import library_ready
+
+    s = project["settings"]
+    for f in (project["root"] / "assets" / "music").glob("*.wav"):
+        f.unlink()
+    assert library_ready(s.assets_dir)
+    job = create_job(s, [project["url"]], fmt="short", options=job_options(project))
+    assert run_job(s, job, until="rights") == "paused", get_db(s.db_path).get_job(job)["error"]
+    assert not library_ready(s.assets_dir)

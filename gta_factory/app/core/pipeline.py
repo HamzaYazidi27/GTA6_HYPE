@@ -382,11 +382,15 @@ def step_scenes(ctx: JobContext) -> dict[str, Any]:
 
 
 def step_rights(ctx: JobContext) -> dict[str, Any]:
-    from ...modules.asset_management.audio_library import library_ready
+    from ...modules.asset_management.audio_library import build_library, library_ready
     from ...modules.asset_management.rights import review_assets
     from ...modules.footage.select import assign_footage
 
     missing = library_ready(ctx.settings.assets_dir)
+    if missing:  # the music beds and sound effects are synthesised locally: make them now (about 20 s, one time)
+        ctx.log(f"audio library incomplete ({', '.join(missing[:4])}): generating the original music beds and sound effects (one time) ...")
+        build_library(ctx.settings.assets_dir, log=ctx.log)
+        missing = library_ready(ctx.settings.assets_dir)
     if missing:
         raise ConfigError(f"The audio library is incomplete ({', '.join(missing[:4])}).", hint="Run `python -m gta_factory setup` once to generate the original music beds and sound effects.")
     scenes = ctx.need(ctx.paths.scenes)
@@ -410,6 +414,10 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
 def step_voice(ctx: JobContext) -> dict[str, Any]:
     from ...modules.voice_generation.engine import generate_voiceover
 
+    if ctx.tts_name == "kokoro":  # the free local voice: download it here if `setup` was skipped (one time, ~350 MB)
+        from ...modules.asset_management.models import ensure_kokoro
+
+        ensure_kokoro(ctx.settings, log=ctx.log)
     scenes = ctx.need(ctx.paths.scenes)
     force = set(ctx.options.get("force_voice_scenes") or [])
     voice = generate_voiceover(
