@@ -266,16 +266,16 @@ def thumbnail_concepts(settings: Any, script: dict[str, Any], details: list[dict
 
 
 def _closeup(d: dict[str, Any], dest: Path) -> tuple[Path, dict[str, float]]:
-    """A 1280x720 crop of the detail's frame: the detail right of centre, about a quarter of the width."""
+    """A 1280x720 crop of the detail's frame: the detail right of centre, about a fifth of the width."""
     W, H = d.get("src_w") or 1920, d.get("src_h") or 1080
     x1, y1, x2, y2 = (d["box"][0] * W, d["box"][1] * H, d["box"][2] * W, d["box"][3] * H)
     bw = max(8.0, x2 - x1)
-    cw = min(float(W), max(bw / 0.26, W / 2.6))
+    cw = min(float(W), max(bw / 0.22, W / 2.6))
     ch = cw * 9 / 16
     if ch > H:
         ch, cw = float(H), H * 16 / 9
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-    x0 = max(0.0, min(W - cw, cx - 0.68 * cw))
+    x0 = max(0.0, min(W - cw, cx - 0.72 * cw))  # right of centre: the text sits on the left
     y0 = max(0.0, min(H - ch, cy - 0.5 * ch))
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{d['t']:.3f}", "-i", d["path"], "-frames:v", "1", "-vf", f"crop={int(cw)}:{int(ch)}:{int(x0)}:{int(y0)},scale=1280:720", "-q:v", "2", str(dest)], capture_output=True)
     ring = {"x": round((x1 - x0) / cw, 4), "y": round((y1 - y0) / ch, 4), "w": round(bw / cw, 4), "h": round(max(8.0, y2 - y1) / ch, 4)}

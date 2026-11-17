@@ -6,17 +6,35 @@ Chaîne : **NEON DISPATCH**, « GTA 6 news, verified. » Chaque affirmation à l
 
 Coût : **0 $, sans aucun abonnement ni clé API.** Tout tourne sur ta machine : le LLM est un modèle open-source servi par [Ollama](https://ollama.com) (gratuit), la voix (Kokoro) et l'alignement des sous-titres (Whisper) sont locaux, et la musique et les effets sont synthétisés par le projet. Un abonnement Claude ou une clé API restent possibles en option, jamais nécessaires.
 
-## Installation (une fois)
+## Installation et lancement : une seule commande
 
-Prérequis : macOS ou Linux, Python 3.11+, Node 18+, ffmpeg et Ollama, tous gratuits :
+Dans le dossier du projet :
 
 ```bash
-brew install ffmpeg node ollama      # Linux : paquets ffmpeg/node + curl -fsSL https://ollama.com/install.sh | sh
+bash install.sh
+```
+
+Le script installe **tout ce qui manque** (Homebrew, ffmpeg, Node.js, Ollama, uv, Python 3.12 dans `.venv`, Remotion, les modèles d'IA, la voix, la musique, les vrais trailers de GTA 6), vérifie le tout (`doctor`) puis **ouvre le dashboard** dans le navigateur. Il peut être relancé à tout moment : il ne refait que ce qui manque ou est cassé. La première fois, compte 10 à 30 Go de téléchargements selon la RAM de ta machine (modèles d’IA et trailers).
+
+Ensuite, pour lancer l'usine :
+
+```bash
+bash start.sh
+```
+
+ou **double-clic sur `GTA6 Factory.command`** (macOS ; la première fois : clic droit > Ouvrir). `start.sh` met le code à jour (`git pull`), installe ce qui manquerait, démarre Ollama et ouvre le dashboard (http://127.0.0.1:8600). Les étapes qui dépendent d'une installation incomplète se réparent aussi toutes seules pendant un job (musique, voix, Remotion).
+
+### Installation à la main (si tu préfères)
+
+Prérequis : macOS ou Linux, Python 3.11-3.13, Node 18+, ffmpeg et Ollama, tous gratuits :
+
+```bash
+brew install ffmpeg node ollama uv      # Linux : paquets ffmpeg/node + curl -fsSL https://ollama.com/install.sh | sh
 ```
 
 ```bash
 cd ~/GTA6_HYPE
-uv venv && uv pip install -e ".[align,footage,dev]"   # ou : python -m venv .venv && .venv/bin/pip install -e ".[align,footage,dev]"
+uv venv --python 3.12 .venv && uv pip install -e ".[align,footage,dev]"
 source .venv/bin/activate
 python -m gta_factory setup     # npm install, LLM local (Ollama), voix Kokoro (~350 Mo), musiques et effets
 python -m gta_factory doctor --ping

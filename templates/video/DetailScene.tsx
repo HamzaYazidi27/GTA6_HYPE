@@ -52,6 +52,19 @@ export const DetailScene: React.FC<SceneProps> = ({scene, accent}) => {
   const spot = interpolate(frame, [zoomStart, zoomStart + zoomLen], [0, 0.6], clamp);
   const cardIn = zoomStart + zoomLen - 4;
 
+  // where the ring ends up once zoomed (p = 1): the card goes where it does not cover the detail
+  const dxEnd = Math.min(0, Math.max(W - W * Z, tx - bx * Z));
+  const dyEnd = Math.min(0, Math.max(H - H * Z, ty - by * Z));
+  const ringTop = ((box[1] * H * Z + dyEnd + box[3] * H * Z + dyEnd) / 2) - Math.max(56 * u, ((box[3] - box[1]) * H * Z) / 2 * 1.3 + 22 * u);
+  const ringBottom = 2 * (((box[1] + box[3]) / 2) * H * Z + dyEnd) - ringTop;
+  const ringLeft = ((box[0] + box[2]) / 2) * W * Z + dxEnd - Math.max(70 * u, ((box[2] - box[0]) * W * Z) / 2 * 1.3 + 22 * u);
+  const cardH = (vertical ? 300 : 270) * u;
+  const cardW = vertical ? W : pad + 1020 * u;
+  const topY = safeTop - (vertical ? 20 : 10) * u;
+  const lowY = vertical ? H * 0.69 - cardH - 30 * u : H - 200 * u - cardH; // above the captions
+  const overlaps = (y: number) => !(ringBottom < y || ringTop > y + cardH) && ringLeft < cardW;
+  const cardY = overlaps(topY) && !overlaps(lowY) ? lowY : topY;
+
   const src = scene.footage?.src;
   const url = src ? (src.startsWith('http') ? src : staticFile(src)) : null;
   const n = d.n ?? 1;
@@ -101,7 +114,7 @@ export const DetailScene: React.FC<SceneProps> = ({scene, accent}) => {
           transform={`rotate(-6 ${cx} ${cy})`}
         />
       </svg>
-      <div style={{position: 'absolute', left: pad, right: vertical ? pad : undefined, top: safeTop - (vertical ? 20 : 10) * u, maxWidth: vertical ? undefined : 1020 * u}}>
+      <div style={{position: 'absolute', left: pad, right: vertical ? pad : undefined, top: cardY, maxWidth: vertical ? undefined : 1020 * u}}>
         <Panel accent={accent} delay={cardIn} style={{padding: `${22 * u}px ${34 * u}px ${24 * u}px ${46 * u}px`}}>
           <div style={{display: 'flex', alignItems: 'baseline', gap: 16 * u}}>
             <div style={{fontFamily: F.display, fontWeight: 900, fontStyle: 'italic', fontSize: (vertical ? 96 : 84) * u, lineHeight: 0.9, color: accent, textShadow: `0 0 ${30 * u}px ${hexA(accent, 0.6)}`}}>#{n}</div>

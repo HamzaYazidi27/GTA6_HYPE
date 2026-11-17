@@ -765,6 +765,7 @@ def step_package(ctx: JobContext) -> dict[str, Any]:
         details = ctx.need(ctx.paths.details)["details"]
         review = (out / "REVIEW.md").read_text(encoding="utf-8")
         review = review.replace("- [ ] Relire `fact_check_report.md` : rien de présenté comme CONFIRMÉ qui ne le soit pas", "- [ ] Relire `script.md` : la narration ne dit que ce qui se voit" + review_points(details), 1)
+        review = review.replace("- `script.md`, `fact_check_report.md` : le script et la vérification de chaque affirmation", "- `script.md` : le script, avec ce que le modèle de vision a vu pour chaque détail", 1)
         write_text(out / "REVIEW.md", review)
         remember_shown(s, details, ctx.job_id)
         ctx.db.merge_summary(ctx.job_id, duration=master["total_seconds"], video=str(out / video_name), package=str(out))

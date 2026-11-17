@@ -234,5 +234,5 @@ def render_video(
 
 def render_stills(settings: Any, stills: list[dict[str, Any]], *, work_dir: Path, log: Callable[[str], None] = lambda m: None) -> None:
     """``stills``: [{"composition": "Thumbnail", "props": {...}, "out": path}]"""
-    tasks = [{"kind": "still", "composition": s["composition"], "props": s["props"], "frame": 0, "out": str(s["out"]), "scale": s.get("scale", 1)} for s in stills]
+    tasks = [{"kind": "still", "composition": s["composition"], "props": s["props"], "frame": int(s.get("frame", 0)), "out": str(s["out"]), "scale": s.get("scale", 1)} for s in stills]
     run_renderer(settings, tasks, work_dir=work_dir, log=log)
