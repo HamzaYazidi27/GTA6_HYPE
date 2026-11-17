@@ -143,3 +143,29 @@ def test_dashboard_guards(project):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_renderer_installs_remotion_when_setup_was_skipped(tmp_path, monkeypatch):
+    """A skipped `setup` must not fail the render: `npm install` runs once, by itself."""
+    import subprocess as sp
+    from types import SimpleNamespace
+
+    from gta_factory.modules.video_editing import render
+
+    calls = []
+
+    def fake_run(cmd, cwd=None, **kw):
+        calls.append((cmd, cwd))
+        (tmp_path / "node_modules" / "@remotion" / "renderer").mkdir(parents=True)
+        return sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(render, "which", lambda b: f"/usr/bin/{b}")
+    monkeypatch.setattr(render.subprocess, "run", fake_run)
+    logs = []
+    render.check_renderer(SimpleNamespace(root=tmp_path), log=logs.append)
+    assert calls == [(["npm", "install", "--no-audit", "--no-fund"], tmp_path)] and "Remotion installed" in logs
+    render.check_renderer(SimpleNamespace(root=tmp_path), log=logs.append)
+    assert len(calls) == 1  # already there: nothing to do
+    monkeypatch.setattr(render, "which", lambda b: None)
+    with pytest.raises(Exception, match="Node.js is not installed"):
+        render.check_renderer(SimpleNamespace(root=tmp_path))

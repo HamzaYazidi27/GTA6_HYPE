@@ -46,11 +46,16 @@ def template_hash(settings: Any) -> str:
     return h.hexdigest()[:16]
 
 
-def check_renderer(settings: Any) -> None:
-    if not which("node"):
-        raise RenderError("Node.js is not installed.", hint="Install Node 18+ (https://nodejs.org) and run `npm install` in the project folder.")
+def check_renderer(settings: Any, log: Callable[[str], None] = lambda m: None) -> None:
+    if not which("node") or not which("npm"):
+        raise RenderError("Node.js is not installed (node / npm not found).", hint="macOS: `brew install node`, then resume the job (it installs Remotion by itself).")
     if not (settings.root / "node_modules" / "@remotion" / "renderer").exists():
-        raise RenderError("Remotion is not installed.", hint="Run `npm install` in the project folder (or `python -m gta_factory setup`).")
+        # `setup` was skipped or interrupted: install the renderer now (one time, ~1-3 min)
+        log("Remotion is not installed: running `npm install` in the project folder (one time) ...")
+        proc = subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=settings.root, capture_output=True, text=True)
+        if proc.returncode != 0 or not (settings.root / "node_modules" / "@remotion" / "renderer").exists():
+            raise RenderError(f"Remotion could not be installed: {(proc.stderr or proc.stdout).strip()[-400:]}", hint="Run `npm install` in the project folder yourself and read its error (internet needed once).")
+        log("Remotion installed")
     if not which("ffmpeg") or not which("ffprobe"):
         raise RenderError("ffmpeg / ffprobe are not installed.", hint="macOS: `brew install ffmpeg`.")
 
@@ -125,7 +130,7 @@ def run_renderer(
     progress: Callable[[float, str], None] = lambda p, m: None,
 ) -> list[dict[str, Any]]:
     """Run render.mjs on ``tasks``. Raises :class:`RenderError` with the renderer's message on failure."""
-    check_renderer(settings)
+    check_renderer(settings, log=log)
     job = {
         "bundleDir": str(bundle_dir(settings)),
         "concurrency": int(settings.get("video.render_concurrency", 0) or 0),
