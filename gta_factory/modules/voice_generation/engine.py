@@ -3,8 +3,10 @@
 * One WAV per scene (``scene_001.wav`` ...) plus ``final_voiceover.wav``.
 * Scenes are cached by a hash of (provider signature, spoken text), so changing
   one scene re-synthesises only that scene.
-* Each sentence is synthesised on its own: this gives natural pauses and exact
-  sentence boundaries that the subtitle aligner uses as anchors.
+* Local voices (Kokoro) synthesise each sentence on its own: this gives exact
+  sentence boundaries that the subtitle aligner uses as anchors. Premium voices
+  (ElevenLabs, OpenAI) read the whole scene in one go, so the intonation flows
+  from one sentence to the next like a human narrator (``audio.synthesis``).
 * Missing audio is always an error. Nothing is ever replaced by silence.
 """
 from __future__ import annotations
@@ -128,29 +130,53 @@ def measure_loudness(path: Path) -> dict[str, float]:
     return {"lufs": float(data["input_i"]), "true_peak_db": float(data["input_tp"]), "lra": float(data["input_lra"])}
 
 
-def synthesize_scene(tts: TTSProvider, narration: str, lexicon: list[tuple[re.Pattern[str], str]], *, sentence_pause: float = 0.16) -> dict[str, Any]:
-    """Synthesise one scene sentence by sentence. Returns samples (48 kHz) and sentence spans."""
+def _clean(res: Any, text: str) -> tuple[np.ndarray, float]:
+    """Trimmed, faded 48 kHz samples of one synthesis, and the leading silence removed (for provider timings)."""
+    raw = res.samples
+    lead = 0.0
+    if len(raw):
+        win = max(1, int(res.sample_rate * 0.01))
+        n = len(raw) // win
+        if n >= 3:
+            r = np.sqrt(np.mean(raw[: n * win].reshape(n, win) ** 2, axis=1) + 1e-12)
+            loud = np.where(20 * np.log10(r) > -42.0)[0]
+            if len(loud):
+                lead = max(0.0, loud[0] * win / res.sample_rate - 0.045)
+    x = fade(resample(trim_silence(raw, res.sample_rate), res.sample_rate), WORK_SR)
+    if len(x) < WORK_SR * 0.12:
+        raise ProviderError(f"The voice provider returned almost no audio for: {text[:80]!r}")
+    return x, lead
+
+
+def whole_scene(settings: Any, tts: TTSProvider) -> bool:
+    """``audio.synthesis``: auto (premium voices read the whole scene, local ones sentence by sentence), scene or sentence."""
+    mode = str(settings.get("audio.synthesis", "auto")).lower()
+    return mode == "scene" or (mode == "auto" and tts.name in ("elevenlabs", "openai"))
+
+
+def synthesize_scene(tts: TTSProvider, narration: str, lexicon: list[tuple[re.Pattern[str], str]], *, sentence_pause: float = 0.24, whole: bool = False) -> dict[str, Any]:
+    """Synthesise one scene (sentence by sentence, or in one go with ``whole``). Returns samples (48 kHz) and sentence spans."""
     sentences = split_sentences(narration) or [narration]
+    if whole and len(sentences) > 1:  # one reading: the voice keeps its melody across sentences
+        res = tts.synthesize(spoken_text(narration, lexicon))
+        x, lead = _clean(res, narration)
+        dur = len(x) / WORK_SR
+        weights = [max(1, len(s)) for s in sentences]
+        spans, at = [], 0.0
+        for s, w in zip(sentences, weights):  # sentence spans in proportion to their length (the aligner refines them)
+            d = dur * w / sum(weights)
+            spans.append({"text": s, "start": round(at, 3), "end": round(at + d, 3)})
+            at += d
+        words = [{"w": w["w"], "s": round(max(0.0, w["s"] - lead), 3), "e": round(max(0.0, w["e"] - lead), 3)} for w in res.words]
+        audio = match_level(x)
+        return {"samples": audio, "duration": len(audio) / WORK_SR, "sentences": spans, "provider_words": words}
     pieces: list[np.ndarray] = []
-    spans: list[dict[str, Any]] = []
+    spans = []
     provider_words: list[dict[str, Any]] = []
     cursor = 0.0
     for i, sent in enumerate(sentences):
         res = tts.synthesize(spoken_text(sent, lexicon))
-        raw = res.samples
-        # offset removed by trimming, so provider timings stay correct
-        lead = 0.0
-        if len(raw):
-            win = max(1, int(res.sample_rate * 0.01))
-            n = len(raw) // win
-            if n >= 3:
-                r = np.sqrt(np.mean(raw[: n * win].reshape(n, win) ** 2, axis=1) + 1e-12)
-                loud = np.where(20 * np.log10(r) > -42.0)[0]
-                if len(loud):
-                    lead = max(0.0, loud[0] * win / res.sample_rate - 0.045)
-        x = fade(resample(trim_silence(raw, res.sample_rate), res.sample_rate), WORK_SR)
-        if len(x) < WORK_SR * 0.12:
-            raise ProviderError(f"The voice provider returned almost no audio for: {sent[:80]!r}")
+        x, lead = _clean(res, sent)  # offset removed by trimming, so provider timings stay correct
         dur = len(x) / WORK_SR
         spans.append({"text": sent, "start": round(cursor, 3), "end": round(cursor + dur, 3)})
         for w in res.words:
@@ -158,9 +184,10 @@ def synthesize_scene(tts: TTSProvider, narration: str, lexicon: list[tuple[re.Pa
         pieces.append(x)
         cursor += dur
         if i < len(sentences) - 1:
-            gap = np.zeros(int(sentence_pause * WORK_SR), dtype=np.float32)
-            pieces.append(gap)
-            cursor += sentence_pause
+            # a question or an exclamation takes a slightly longer breath than a full stop
+            pause = sentence_pause * (1.25 if sent.rstrip("\"'”’ ").endswith(("?", "!")) else 1.0)
+            pieces.append(np.zeros(int(pause * WORK_SR), dtype=np.float32))
+            cursor += pause
     audio = match_level(np.concatenate(pieces))
     return {"samples": audio, "duration": len(audio) / WORK_SR, "sentences": spans, "provider_words": provider_words}
 
@@ -179,13 +206,15 @@ def generate_voiceover(
     """Create scene WAVs and the manifest. ``force_scenes`` bypasses the cache for those scene numbers."""
     tts.check()
     lexicon = load_lexicon(settings)
+    whole = whole_scene(settings, tts)
+    pause = float(settings.get("audio.sentence_pause_seconds", 0.24))
     cache_dir.mkdir(parents=True, exist_ok=True)
     audio_dir.mkdir(parents=True, exist_ok=True)
     manifest = []
     reused = 0
     for i, sc in enumerate(scenes, 1):
         n = sc["scene_number"]
-        key = stable_hash({"sig": tts.signature(), "text": sc["narration"], "lex": [r.pattern for r, _ in lexicon]})
+        key = stable_hash({"sig": tts.signature(), "text": sc["narration"], "lex": [r.pattern for r, _ in lexicon], "read": "scene" if whole else f"sentence/{pause:g}"})
         wav_cache, meta_cache = cache_dir / f"{key}.wav", cache_dir / f"{key}.json"
         use_cache = wav_cache.exists() and meta_cache.exists() and not (force_scenes and n in force_scenes)
         if only_scenes and n not in only_scenes and not use_cache:
@@ -194,7 +223,7 @@ def generate_voiceover(
             meta = read_json(meta_cache)
             reused += 1
         else:
-            result = synthesize_scene(tts, sc["narration"], lexicon)
+            result = synthesize_scene(tts, sc["narration"], lexicon, sentence_pause=pause, whole=whole)
             write_wav(wav_cache, result["samples"])
             meta = {"duration": round(result["duration"], 3), "sentences": result["sentences"], "provider_words": result["provider_words"]}
             write_json(meta_cache, meta)

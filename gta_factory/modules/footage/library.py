@@ -143,6 +143,106 @@ def split_long_shots(shots: list[dict[str, Any]], max_len: float) -> list[dict[s
     return out
 
 
+# ----------------------------------------------------------------------------- letterbox (black bars)
+LB_WIDTH = 160  # detection works on small grey frames
+
+
+def _gray_frames(path: Path, *, fps: float | None) -> tuple[list[float], Any]:
+    """Small grey frames of a video (``fps`` per second) or of a picture (``fps=None``): (times, uint8 array [n, h, w])."""
+    import numpy as np
+
+    vf = (f"fps={fps}," if fps else "") + f"scale={LB_WIDTH}:-2,format=gray"
+    proc = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-an", "-vf", vf, *([] if fps else ["-frames:v", "1"]), "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"], capture_output=True)
+    if proc.returncode != 0 or not proc.stdout:
+        return [], np.zeros((0, 1, 1), dtype=np.uint8)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    try:
+        w, h = (int(x) for x in probe.stdout.strip().split(",")[:2])
+    except ValueError:
+        return [], np.zeros((0, 1, 1), dtype=np.uint8)
+    sh = int(round(LB_WIDTH * h / w / 2)) * 2
+    n = len(proc.stdout) // (LB_WIDTH * sh)
+    frames = np.frombuffer(proc.stdout[: n * LB_WIDTH * sh], dtype=np.uint8).reshape(n, sh, LB_WIDTH)
+    times = [(i + 0.5) / fps for i in range(n)] if fps else [0.0]
+    return times, frames
+
+
+def bars_of(frame: Any) -> tuple[int, int] | None:
+    """(top, bottom) rows of letterbox bars in one grey frame; None when there are none (or the frame is too dark to tell).
+
+    Letterbox bars are near-black, at the top AND the bottom, of about the same height: a dark sky
+    or a night street is never symmetrical with the ground, so it is not taken for bars.
+    """
+    import numpy as np
+
+    h = frame.shape[0]
+    dark = (frame.mean(axis=1) < 18) & (np.percentile(frame, 95, axis=1) < 36)
+    if dark.all() or not dark[0] or not dark[-1]:
+        return None
+    top = int(np.argmin(dark))
+    bottom = int(np.argmin(dark[::-1]))
+    if min(top, bottom) < 0.04 * h or abs(top - bottom) > max(2, 0.025 * h) or h - top - bottom < 0.5 * h:
+        return None
+    return top, bottom
+
+
+def _crop_from(bars: list[tuple[int, int] | None], small_h: int, w: int, h: int) -> list[int] | None:
+    """The crop [w, h, x, y] (source pixels) when most informative frames show the same bars."""
+    from collections import Counter
+
+    seen = [b for b in bars if b is not None]
+    if not seen or len(seen) < 0.6 * len(bars):
+        return None
+    import math
+
+    (top, bottom), _ = Counter(seen).most_common(1)[0]
+    # the first non-black row of the small frame may still hold a few black pixel rows: cut it too, never a dark line
+    y0 = math.ceil((top + 1) * h / small_h / 2) * 2
+    y1 = h - math.ceil((bottom + 1) * h / small_h / 2) * 2
+    return [int(w), max(2, (y1 - y0) // 2 * 2), 0, y0]
+
+
+def detect_letterbox(path: Path, shots: list[dict[str, Any]], width: int, height: int, *, fps: float = 2.0) -> None:
+    """Sets ``crop`` ([w, h, x, y] or None) on each shot: the black bars to cut away before framing it."""
+    times, frames = _gray_frames(path, fps=fps)
+    bars = [bars_of(f) for f in frames]
+    small_h = frames.shape[1] if len(frames) else 1
+    for sh in shots:
+        mine = [b for t, b in zip(times, bars) if sh["s"] <= t < sh["e"]]
+        sh["crop"] = _crop_from(mine, small_h, width, height) if mine else None
+
+
+def photo_crop(path: Path) -> list[int] | None:
+    _, frames = _gray_frames(path, fps=None)
+    if not len(frames):
+        return None
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    try:
+        w, h = (int(x) for x in probe.stdout.strip().split(",")[:2])
+    except ValueError:
+        return None
+    return _crop_from([bars_of(frames[0])], frames.shape[1], w, h)
+
+
+def crop_filter(crop: list[int] | None) -> str:
+    """ffmpeg filter (with a trailing comma) that removes the black bars, or ""."""
+    return f"crop={crop[0]}:{crop[1]}:{crop[2]}:{crop[3]}," if crop else ""
+
+
+def cropped_photo(root: Path, rel: str, crop: list[int] | None) -> Path:
+    """A picture without its black bars (cached next to the library), or the picture itself."""
+    src = root / rel
+    if not crop:
+        return src
+    dest = root / ".cropped" / f"{re.sub(r'[^A-Za-z0-9_-]+', '_', Path(rel).stem)[:60]}_{crop[1]}x{crop[3]}.jpg"
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", crop_filter(crop).rstrip(","), "-q:v", "2", str(dest)], capture_output=True)
+        if proc.returncode != 0 or not dest.exists():
+            return src
+    return dest
+
+
 def _usable(shot: dict[str, float], duration: float, cfg: dict[str, Any], exclude: list[list[float]]) -> bool:
     if shot["e"] - shot["s"] < float(cfg.get("min_shot_seconds", 1.0)):
         return False
@@ -182,6 +282,7 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
     if old.get("version") != INDEX_VERSION:
         old = {}
     old_videos = {v["file"]: v for v in old.get("videos", [])}
+    old_photos = {(ph["file"], ph.get("size")): ph for ph in old.get("photos", []) if "crop" in ph}
     videos, photos, skipped = [], [], []
     if not root.exists():
         return {"version": INDEX_VERSION, "videos": [], "photos": [], "skipped": []}
@@ -201,13 +302,16 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
         credit = str(side.get("credit") or cfg.get("credit") or DEFAULT_CREDIT)
         st = p.stat()
         if ext in PHOTO_EXT:
-            photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", "")}
+            known = old_photos.get((rel, st.st_size))
+            crop = known["crop"] if known else photo_crop(p)
+            photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop}
             if side.get("from_video"):  # a still pulled from a trailer: same picture as that shot
                 photo.update(from_video=str(side["from_video"]), time=float(side.get("time") or 0), video_tags=canonical_tags(side.get("video_tags"), vocab))
             photos.append(photo)
             continue
         prev = old_videos.get(rel)
-        if prev and not force and prev.get("size") == st.st_size and prev.get("mtime") == int(st.st_mtime) and prev.get("sidecar") == side and prev.get("tags") == tags:
+        cropped = bool(prev) and all("crop" in sh for sh in prev.get("shots") or [])
+        if prev and cropped and not force and prev.get("size") == st.st_size and prev.get("mtime") == int(st.st_mtime) and prev.get("sidecar") == side and prev.get("tags") == tags:
             videos.append(prev)
             continue
         if not which("ffmpeg") or not which("ffprobe"):
@@ -221,6 +325,8 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
             info = _probe(p)
             shots = detect_shots(p, info["duration"], threshold=float(cfg.get("scene_threshold", 0.3)))
             shots = split_long_shots(shots, float(cfg.get("max_clip_seconds") or settings.get("rights_review.max_seconds_per_official_clip", 6)))
+        if not all("crop" in sh for sh in shots):  # black bars of each shot (also for videos indexed before this existed)
+            detect_letterbox(p, shots, info["width"], info["height"])
         seg_tags = [seg for seg in side.get("segments") or [] if isinstance(seg, dict)]
         exclude = [x for x in side.get("exclude") or [] if isinstance(x, list) and len(x) == 2]
         for sh in shots:
@@ -321,14 +427,14 @@ def load_items(settings: Any, index: dict[str, Any] | None = None) -> dict[str, 
             add(tags, v.get("tags"), W_VIDEO)
             add_auto(tags, shot_key(v["file"], v.get("size", 0), sh))
             add(tags, sh.get("tags"), W_ITEM)
-            shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "tags": tags, "key": f"{v['file']}@{sh['s']}"})
+            shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "crop": sh.get("crop"), "tags": tags, "key": f"{v['file']}@{sh['s']}"})
     for p in index.get("photos", []):
         tags = {}
         add(tags, p.get("video_tags"), W_VIDEO)
         own = photo_key(p["file"], p.get("size", 0))
         add_auto(tags, own if own in auto else (still_shot_key(index, p) or own))
         add(tags, p.get("tags"), W_ITEM)
-        photos.append({"kind": "photo", **p, "path": str(root / p["file"]), "tags": tags, "key": p["file"]})
+        photos.append({"kind": "photo", **p, "path": str(cropped_photo(root, p["file"], p.get("crop"))), "tags": tags, "key": p["file"]})
     every_tag = {t for it in shots + photos for t in it["tags"]}
     return {"shots": shots, "photos": photos, "vocab": vocab.with_tags(every_tag), "index": index}
 
@@ -356,6 +462,23 @@ def _yt_dlp():
         return None
 
 
+AGE_GATE = re.compile(r"confirm your age|age[- ]restricted|inappropriate for some users|sign in to confirm", re.I)
+
+
+def _cookies(settings: Any) -> str:
+    """``footage.cookies_from_browser`` (chrome, safari, firefox, edge, brave ...): lets yt-dlp open age-restricted videos."""
+    return str(settings.get("footage.cookies_from_browser") or "").strip()
+
+
+def _failure_hint(settings: Any, message: str) -> str:
+    if AGE_GATE.search(message or "") and not _cookies(settings):
+        return (
+            " - YouTube asks to sign in for this video (age-restricted). Log into YouTube in your browser, then set"
+            ' footage.cookies_from_browser: "chrome" (or safari, firefox, edge, brave) in config.yaml and try again.'
+        )
+    return ""
+
+
 def fetch(settings: Any, urls: list[str] | None = None, *, max_height: int = 1080, tags: list[str] | None = None, log: Callable[[str], None] = print) -> list[Path]:
     """Download videos with yt-dlp into ``videos/`` (skips files already there)."""
     urls = urls or list(settings.get("footage.sources") or DEFAULT_SOURCES)
@@ -374,6 +497,8 @@ def fetch(settings: Any, urls: list[str] | None = None, *, max_height: int = 108
         log(f"footage: downloading {url}")
         if yt_dlp is not None:
             opts = {"format": fmt, "outtmpl": template, "noplaylist": True, "quiet": True, "no_warnings": True, "noprogress": True, "download_archive": str(out_dir / ".downloaded.txt"), "writeinfojson": False}
+            if _cookies(settings):
+                opts["cookiesfrombrowser"] = (_cookies(settings),)
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=False) or {}
@@ -384,13 +509,14 @@ def fetch(settings: Any, urls: list[str] | None = None, *, max_height: int = 108
                     ydl.download([url])
             except Exception as exc:  # one bad URL must not stop the others
                 failed.append(url)
-                log(f"footage: download failed for {url}: {str(exc).splitlines()[0][:300]}")
+                log(f"footage: download failed for {url}: {str(exc).splitlines()[0][:300]}{_failure_hint(settings, str(exc))}")
                 continue
         else:
-            proc = subprocess.run(["yt-dlp", "-f", fmt, "-o", template, "--no-playlist", "--download-archive", str(out_dir / ".downloaded.txt"), url], capture_output=True, text=True)
+            cookie_args = ["--cookies-from-browser", _cookies(settings)] if _cookies(settings) else []
+            proc = subprocess.run(["yt-dlp", "-f", fmt, "-o", template, "--no-playlist", "--download-archive", str(out_dir / ".downloaded.txt"), *cookie_args, url], capture_output=True, text=True)
             if proc.returncode != 0:
                 failed.append(url)
-                log(f"footage: download failed for {url}: {proc.stderr.strip()[-400:]}")
+                log(f"footage: download failed for {url}: {proc.stderr.strip()[-400:]}{_failure_hint(settings, proc.stderr)}")
                 continue
         new = [p for p in set(out_dir.iterdir()) - before if p.suffix.lower() in VIDEO_EXT]
         for p in new:
@@ -404,7 +530,8 @@ def fetch(settings: Any, urls: list[str] | None = None, *, max_height: int = 108
     if failed and len(failed) == len(urls):
         raise FactoryError(
             f"No video could be downloaded ({len(failed)} URL(s) failed).",
-            hint="Check your internet connection and update yt-dlp (`pip install -U yt-dlp`). You can also download the files yourself and run `python -m gta_factory footage add <folder>`.",
+            hint="Check your internet connection and update yt-dlp (`pip install -U yt-dlp`). For age-restricted videos set footage.cookies_from_browser in config.yaml."
+            " You can also download the files yourself and run `python -m gta_factory footage add <folder>`.",
         )
     return done
 
@@ -425,7 +552,7 @@ def find_new_official(settings: Any, *, limit: int = 60, log: Callable[[str], No
     for channel in settings.get("footage.channels") or DEFAULT_CHANNELS:
         log(f"footage: looking for new GTA VI videos on {channel}")
         try:
-            with yt_dlp.YoutubeDL({"extract_flat": "in_playlist", "playlistend": limit, "quiet": True, "no_warnings": True}) as ydl:
+            with yt_dlp.YoutubeDL({"extract_flat": "in_playlist", "playlistend": limit, "quiet": True, "no_warnings": True, **({"cookiesfrombrowser": (_cookies(settings),)} if _cookies(settings) else {})}) as ydl:
                 info = ydl.extract_info(channel, download=False) or {}
         except Exception as exc:
             log(f"footage: could not read {channel}: {str(exc).splitlines()[0][:200]}")
@@ -567,7 +694,7 @@ def extract_stills(settings: Any, *, per_video: int = 12, log: Callable[[str], N
             dest = out_dir / f"{v['id']}_still_{int(t * 100):06d}.jpg"
             if dest.exists():
                 continue
-            proc = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t}", "-i", str(footage_dir(settings) / v["file"]), "-frames:v", "1", "-q:v", "2", str(dest)], capture_output=True, text=True)
+            proc = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t}", "-i", str(footage_dir(settings) / v["file"]), "-frames:v", "1", *(["-vf", crop_filter(sh.get("crop")).rstrip(",")] if sh.get("crop") else []), "-q:v", "2", str(dest)], capture_output=True, text=True)
             if proc.returncode == 0 and dest.exists():
                 write_json(sidecar_path(dest), {"tags": sorted(sh.get("tags", [])), "video_tags": sorted(v.get("tags", [])), "credit": v.get("credit") or DEFAULT_CREDIT, "source_url": v.get("source_url", ""), "from_video": v["file"], "time": t})
                 made.append(dest)

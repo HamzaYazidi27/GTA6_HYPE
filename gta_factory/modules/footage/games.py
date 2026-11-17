@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -115,6 +115,57 @@ def footage_label(settings: Any) -> str:
     """'GTA 6' or the other game's short name, for log lines."""
     gid = getattr(settings, "game_id", MAIN)
     return game(settings, gid)["short"]
+
+
+# ----------------------------------------------------------------------------- the library must not be empty
+
+def library_state(settings: Any, gid: str) -> dict[str, Any]:
+    from .library import build_index, library_summary
+
+    return library_summary(build_index(game_settings(settings, gid)))
+
+
+def ensure_footage(settings: Any, gid: str, *, log: Callable[[str], None] = lambda m: None) -> dict[str, Any]:
+    """Make sure a game's footage library has pictures: download its official videos when it is empty.
+
+    A comparison is never rendered without the other game's footage: when nothing can be
+    downloaded (no internet, an age-restricted video, a library you emptied), this raises
+    with what to do instead of letting the video show placeholders.
+    """
+    from ...app.core.errors import FactoryError
+    from . import library as lib
+
+    g = game(settings, gid)
+    gs = game_settings(settings, gid)
+    summ = library_state(settings, gid)
+    if summ["usable_shots"] or summ["photos"]:
+        return summ
+    log(f"footage: the {g['name']} library is empty - downloading its official videos now (one time) ...")
+    try:
+        lib.fetch(gs, None, log=log)
+    except FactoryError as exc:
+        log(f"footage: {exc.describe()}")
+    try:
+        lib.extract_stills(gs, log=log)
+    except FactoryError as exc:
+        log(f"footage: stills not extracted ({exc.message})")
+    if settings.get("footage.auto_tag", True):  # so the narration can call for what is in each shot (cached, one time)
+        try:
+            from .autotag import autotag, vision_status
+
+            if vision_status(gs)[0]:
+                autotag(gs, log=log)
+        except FactoryError as exc:
+            log(f"footage: auto-tagging skipped ({exc.message})")
+    summ = library_state(settings, gid)
+    if not (summ["usable_shots"] or summ["photos"]):
+        more = "" if gid == MAIN else f" --game {gid}"
+        raise FactoryError(
+            f"The {g['name']} footage library is empty and its official videos could not be downloaded, so this video would show no {g['short']} pictures.",
+            hint=f"Run `python -m gta_factory footage update{more}` and read its error (if YouTube asks to sign in, set footage.cookies_from_browser: \"chrome\" in config.yaml),"
+            f" or add your own {g['short']} clips: dashboard, page Footage, or `python -m gta_factory footage add <folder>{more}`. Then resume the job.",
+        )
+    return summ
 
 
 # ----------------------------------------------------------------------------- facts about the other game

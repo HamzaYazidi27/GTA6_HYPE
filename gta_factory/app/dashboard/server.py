@@ -162,6 +162,15 @@ def job_payload(settings: Any, job_id: str) -> dict[str, Any] | None:
     }
 
 
+def voice_options(src: dict[str, Any]) -> dict[str, str]:
+    """The voice chosen in the dashboard (provider + voice id), checked, as job options."""
+    from ...modules.voice_generation.samples import check_choice
+
+    tts, voice = str(src.get("tts") or "").strip(), str(src.get("voice") or "").strip()
+    check_choice(tts or None, voice or None)
+    return {**({"tts": tts} if tts else {}), **({"voice": voice} if voice else {})}
+
+
 def write_script_md(settings: Any, job_id: str, script: dict[str, Any], facts: list[dict[str, Any]]) -> None:
     root = settings.jobs_dir / job_id
     if script.get("kind") == "topic":
@@ -387,6 +396,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"lines": lines})
             elif parts[0] == "files":
                 self._file_route(parts)
+            elif parts == ["api", "voices"]:
+                from ...modules.voice_generation.samples import catalog
+
+                self._json(catalog(s))
+            elif len(parts) == 2 and parts[0] == "voice-samples" and re.match(r"^[A-Za-z0-9_.\-]+\.wav$", parts[1]):
+                self._serve_file(s.jobs_dir / ".cache" / "voice_samples" / parts[1])
             elif parts == ["api", "footage"]:
                 self._json(footage_payload(s))
             elif parts == ["api", "footage", "task"]:
@@ -411,6 +426,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._upload(parse_qs(url.query))
                 return
             body = self._body()
+            if parts == ["api", "voices", "sample"]:  # the sample sentence read by one voice
+                from ...modules.voice_generation.samples import sample
+
+                path = sample(s, str(body.get("tts") or "kokoro"), str(body.get("voice") or ""), out_dir=s.jobs_dir / ".cache" / "voice_samples")
+                self._json({"url": f"/voice-samples/{path.name}"})
+                return
             if parts[:2] == ["api", "footage"] and len(parts) == 3:
                 tags = body.get("tags") or ""
                 tags = ",".join(tags) if isinstance(tags, list) else str(tags)
@@ -437,7 +458,7 @@ class Handler(BaseHTTPRequestHandler):
                     video = str(body.get("video") or "").strip()
                     fmt = "details" if body.get("format") == "details" else "short"
                     count = int(body.get("count") or 0) or None
-                    job_id = create_details_job(s, videos=[video] if video else [], fmt=fmt, count=count)
+                    job_id = create_details_job(s, videos=[video] if video else [], fmt=fmt, count=count, options=voice_options(body))
                     spawn_runner(s, job_id)
                     self._json({"id": job_id}, 201)
                     return
@@ -455,7 +476,7 @@ class Handler(BaseHTTPRequestHandler):
                 from ..core.pipeline import create_topic_job
 
                 sources = [u for u in (body.get("sources") or []) if isinstance(u, str) and re.match(r"^https?://", u.strip())]
-                options = {k: v for k, v in (body.get("options") or {}).items() if k in ("no_search", "audit", "whisper", "target_seconds", "voice", "today")}
+                options = {k: v for k, v in (body.get("options") or {}).items() if k in ("no_search", "audit", "whisper", "target_seconds", "today")} | voice_options(body.get("options") or {})
                 fmt = str(body.get("format") or "") or None
                 if fmt not in (None, "versus", "toplist", "short"):
                     raise FactoryError(f"unknown format '{fmt}'")
@@ -469,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
                 urls = [u for u in (body.get("urls") or []) if isinstance(u, str) and re.match(r"^https?://", u.strip())]
                 if not urls:
                     raise FactoryError("Give at least one http(s) article URL.")
-                options = {k: v for k, v in (body.get("options") or {}).items() if k in ("force", "no_search", "audit", "whisper", "allow_broll", "target_seconds", "voice", "today")}
+                options = {k: v for k, v in (body.get("options") or {}).items() if k in ("force", "no_search", "audit", "whisper", "allow_broll", "target_seconds", "today")} | voice_options(body.get("options") or {})
                 job_id = create_job(s, urls, fmt=str(body.get("format") or "long"), options=options)
                 spawn_runner(s, job_id)
                 self._json({"id": job_id}, 201)

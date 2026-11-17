@@ -123,7 +123,8 @@ class ElevenLabsProvider(TTSProvider):
     def list_voices(self) -> list[str]:
         import httpx
 
-        self.check()
+        if not os.environ.get("ELEVENLABS_API_KEY"):  # listing needs the key only, not a chosen voice
+            raise ConfigError("ELEVENLABS_API_KEY is not set.", hint="Add it to .env or switch providers.tts.default to kokoro.")
         r = httpx.get("https://api.elevenlabs.io/v1/voices", headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}, timeout=30)
         if r.status_code != 200:
             raise ProviderError(f"ElevenLabs voices request failed: HTTP {r.status_code}")
@@ -220,6 +221,10 @@ _EXTRA: dict[str, type[TTSProvider]] = {}
 
 def register_tts(name: str, cls: type[TTSProvider]) -> None:
     _EXTRA[name] = cls
+
+
+def provider_names() -> list[str]:
+    return sorted({**REGISTRY, **_EXTRA})
 
 
 def get_tts(settings: Any, name: str | None = None, voice: str | None = None) -> TTSProvider:

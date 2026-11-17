@@ -243,3 +243,49 @@ def test_dashboard_topic_and_other_games(topic_project, monkeypatch):
         assert e.value.code == 400
     finally:
         httpd.shutdown()
+
+
+# ----------------------------------------------------------------- the other game's footage is never missing
+def test_empty_game_library_is_downloaded_before_anything_else(topic_project, monkeypatch):
+    s = topic_project["settings"]
+    rdr = s.root / "assets" / "game_footage" / "rdr2"
+    shutil.rmtree(rdr)  # as after an interrupted install
+    calls = []
+
+    def fake_fetch(settings, urls=None, **kw):
+        calls.append(list(settings.get("footage.sources")))
+        return [make_trailer(lib.footage_dir(settings) / "videos" / "Red Dead Redemption 2 Trailer [gmA6MrX81z4].mp4")]
+
+    monkeypatch.setattr(lib, "fetch", fake_fetch)
+    job = create_topic_job(s, "Red Dead 2 systems inside GTA 6", vs="rdr2", count=3, options=topic_options(topic_project))
+    assert run_job(s, job, until="research") == "paused", get_db(s.db_path).get_job(job)["error"]
+    assert len(calls) == 1 and calls[0][0].endswith("gmA6MrX81z4")  # the official Red Dead 2 videos, not GTA 6's
+    assert lib.library_summary(lib.build_index(game_settings(s, "rdr2")))["usable_shots"] > 0
+    assert list((rdr / "photos").glob("*.jpg"))  # stills pulled for photo scenes and the thumbnail
+    log = (s.jobs_dir / job / "pipeline.log").read_text()
+    assert "library is empty - downloading its official videos" in log
+
+
+def test_comparison_stops_when_the_other_game_has_no_footage(topic_project, monkeypatch):
+    s = topic_project["settings"]
+    shutil.rmtree(s.root / "assets" / "game_footage" / "rdr2")
+
+    def no_internet(settings, urls=None, **kw):
+        from gta_factory.app.core.errors import FactoryError
+
+        raise FactoryError("No video could be downloaded (3 URL(s) failed).")
+
+    monkeypatch.setattr(lib, "fetch", no_internet)
+    job = create_topic_job(s, "Red Dead 2 systems inside GTA 6", vs="rdr2", count=3, options=topic_options(topic_project))
+    assert run_job(s, job) == "failed"
+    error = get_db(s.db_path).get_job(job)["error"]
+    assert error.startswith("[research]") and "Red Dead Redemption 2 footage library is empty" in error and "--game rdr2" in error
+    assert not (s.jobs_dir / job / "research" / "analysis.json").exists()  # stopped before any long work
+
+
+def test_age_restricted_download_explains_the_cookies_setting(project):
+    from gta_factory.modules.footage.library import _failure_hint
+
+    s = project["settings"]
+    hint = _failure_hint(s, "ERROR: [youtube] gmA6MrX81z4: Sign in to confirm your age. This video may be inappropriate for some users.")
+    assert "cookies_from_browser" in hint and _failure_hint(s, "HTTP Error 404") == ""

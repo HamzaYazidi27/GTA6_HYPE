@@ -21,7 +21,7 @@ from gta_factory.app.database.db import get_db
 from gta_factory.modules.footage import library as lib
 from gta_factory.modules.footage.autotag import autotag, clean_answer, pending
 from gta_factory.modules.footage.library import build_index, library_summary, load_items, name_tags
-from gta_factory.modules.footage.select import _pick_scenes, assign_footage, build_segments, cut_scene_clips, preview
+from gta_factory.modules.footage.select import _pick_scenes, _piece, assign_footage, build_segments, cut_scene_clips, preview
 from gta_factory.modules.footage.vocabulary import load_vocabulary
 
 pytestmark = pytest.mark.skipif(not which("ffmpeg"), reason="needs ffmpeg")
@@ -373,3 +373,35 @@ def test_update_finds_new_official_videos(footage_project, monkeypatch):
     monkeypatch.setattr(lib, "_yt_dlp", lambda: type("M", (), {"YoutubeDL": FakeYDL}))
     found = lib.find_new_official(s, log=lambda m: None)
     assert [f["id"] for f in found] == ["NEWTRAILER3"] and found[0]["url"].endswith("NEWTRAILER3")
+
+
+def test_letterbox_bars_are_cut_away(project):
+    """Trailers with black bars (cinema framing) are cropped before framing, in clips and in pictures."""
+    import numpy as np
+
+    from gta_factory.modules.footage.library import cropped_photo, footage_dir
+
+    s = project["settings"]
+    root = footage_dir(s)
+    vid = root / "videos" / "Cinematic trailer.mp4"
+    vid.parent.mkdir(parents=True)
+    seq = "".join(f"{src}=s=1280x536:r=30,trim=duration=3,pad=1280:720:0:92:black[v{i}];" for i, src in enumerate(SOURCES[:6]))
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=30:d=3.5", "-filter_complex", seq + "".join(f"[v{i}]" for i in range(6)) + "concat=n=6:v=1:a=0[out]", "-map", "[out]", "-c:v", "libx264", "-preset", "ultrafast", str(vid)], check=True)
+    make_photo(root / "photos" / "night_sky.jpg", "0x0A0A12")  # dark, but not letterboxed
+    bars = root / "photos" / "cinematic_still.jpg"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", "4", "-i", str(vid), "-frames:v", "1", str(bars)], check=True)
+    index = build_index(s)
+    shots = [sh for sh in index["videos"][0]["shots"] if sh["ok"]]
+    assert shots and all(sh["crop"] and sh["crop"][0] == 1280 and 92 <= sh["crop"][3] <= 104 and 520 <= sh["crop"][1] <= 536 for sh in shots)
+    photos = {p["file"]: p for p in index["photos"]}
+    assert photos["photos/night_sky.jpg"]["crop"] is None and photos["photos/cinematic_still.jpg"]["crop"]
+    items = load_items(s, index)
+    still = next(p for p in items["photos"] if p["file"].endswith("cinematic_still.jpg"))
+    assert ".cropped" in still["path"] and Path(still["path"]).exists()
+    assert cropped_photo(root, "photos/night_sky.jpg", None) == root / "photos" / "night_sky.jpg"
+    # a clip cut from a letterboxed shot has picture from edge to edge
+    sc = {"scene_number": 1, "template": "kinetic", "narration": "Some words here.", "footage": {"kind": "video", "beats": [], "fill": [_piece(it, 6.0) for it in items["shots"][:2]]}}
+    cut_scene_clips(s, [sc], {1: 2.0}, out_dir=s.root / "clips", width=640, height=360, fps=30)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", sc["footage"]["clip"], "-frames:v", "1", "-vf", "format=gray", "-f", "rawvideo", "pipe:1"], capture_output=True).stdout
+    frame = np.frombuffer(raw, dtype=np.uint8).reshape(360, 640)
+    assert frame[:3].mean() > 40 and frame[-3:].mean() > 40  # no black band at the top or the bottom

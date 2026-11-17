@@ -79,6 +79,12 @@
 <main>
   <aside>
     <div class="card">
+      <h2>Voix de la narration</h2>
+      <div class="row" style="flex-wrap:nowrap"><select id="voice"></select><button class="ghost small" id="voice-play" title="écouter un exemple">▶</button></div>
+      <audio id="voice-audio" style="width:100%;margin-top:8px;display:none" controls></audio>
+      <div class="muted" id="voice-note" style="font-size:12px;margin-top:4px"></div>
+    </div>
+    <div class="card">
       <h2>Nouvelle vidéo</h2>
       <textarea id="urls" rows="3" placeholder="URL(s) d'article sur UNE histoire, une par ligne"></textarea>
       <div class="row" style="margin-top:8px"><select id="format"></select></div>
@@ -242,6 +248,38 @@ async function openJob(id) {
   if (['running', 'queued'].includes(d.job.status)) timer = setTimeout(() => openJob(id), 2500);
 }
 
+// ------------------------------------------------------------------ narration voice (remembered in this browser, sent with every job)
+let voiceCat = null;
+const voiceChoice = () => { const v = $('#voice').value || ''; const [tts, voice] = v.split('|'); return tts ? {tts, voice: voice || ''} : {}; };
+async function loadVoices() {
+  try { voiceCat = await api('GET', '/api/voices'); } catch (e) { $('#voice-note').textContent = e.message; return; }
+  const sel = $('#voice'); sel.replaceChildren();
+  let saved = null; try { saved = localStorage.getItem('voice'); } catch (e) {}
+  const def = voiceCat.default.tts + '|' + voiceCat.default.voice;
+  for (const p of voiceCat.providers) {
+    const g = el('optgroup', {label: p.label + (p.ready ? '' : ' - indisponible')});
+    for (const v of p.voices) g.append(el('option', {value: p.name + '|' + v.id, disabled: !p.ready}, v.label + (p.name + '|' + v.id === def ? ' (par défaut)' : '')));
+    if (!p.voices.length) g.append(el('option', {disabled: true}, p.note));
+    sel.append(g);
+  }
+  const ok = (x) => x && [...sel.options].some((o) => o.value === x && !o.disabled);
+  sel.value = ok(saved) ? saved : ok(def) ? def : ([...sel.options].find((o) => !o.disabled) || {}).value || '';
+  showVoiceNote();
+}
+function showVoiceNote() {
+  const p = (voiceCat && voiceCat.providers.find((x) => x.name === voiceChoice().tts)) || null;
+  $('#voice-note').textContent = p ? p.note : '';
+}
+$('#voice').addEventListener('change', () => { try { localStorage.setItem('voice', $('#voice').value); } catch (e) {} showVoiceNote(); });
+$('#voice-play').addEventListener('click', async () => {
+  const b = $('#voice-play'); b.disabled = true; b.textContent = '…';
+  try {
+    const r = await api('POST', '/api/voices/sample', voiceChoice());
+    const a = $('#voice-audio'); a.style.display = 'block'; a.src = r.url + '?t=' + Date.now(); a.play().catch(() => null);
+  } catch (e) { alert(e.message); }
+  b.disabled = false; b.textContent = '▶';
+});
+
 async function act(fn) {
   try { await fn(); } catch (e) { alert(e.message); }
   if (current) setTimeout(() => openJob(current), 600); else loadJobs();
@@ -311,7 +349,7 @@ async function openFootage() {
     view.append(el('div', {class: 'card'}, el('h2', {}, 'Vidéo « Details you missed »'),
       el('p', {class: 'muted'}, "Le modèle de vision cherche les petits détails que personne ne voit (panneaux, textes, plaques, écrans, animaux, personnages au fond…), vérifie chacun en gros plan, puis la vidéo s'arrête sur chaque détail, zoome, l'entoure et le nomme, avec le timestamp. Le premier passage sur une vidéo prend du temps (une seule fois, c'est gardé en cache)."),
       el('div', {class: 'row'}, vsel, fsel, cnt,
-        el('button', {disabled: !(d.vision && d.vision.ready), title: d.vision && d.vision.ready ? '' : 'il faut le modèle de vision (Ollama)', onclick: () => footAct(async () => { const r = await api('POST', '/api/footage/details', {video: vsel.value, format: fsel.value, count: parseInt(cnt.value) || null}); current = r.id; openJob(r.id); })}, 'Lancer'))));
+        el('button', {disabled: !(d.vision && d.vision.ready), title: d.vision && d.vision.ready ? '' : 'il faut le modèle de vision (Ollama)', onclick: () => footAct(async () => { const r = await api('POST', '/api/footage/details', {video: vsel.value, format: fsel.value, count: parseInt(cnt.value) || null, ...voiceChoice()}); current = r.id; openJob(r.id); })}, 'Lancer'))));
   }
   if ((d.games || []).length) {
     view.append(el('div', {class: 'card'}, el('h2', {}, 'Footage des autres jeux (pour les comparaisons)'),
@@ -375,7 +413,7 @@ $('#go').addEventListener('click', () => act(async () => {
   if ($('#opt-force').checked) options.force = true;
   if ($('#opt-nosearch').checked) options.no_search = true;
   if ($('#opt-nobroll').checked) options.allow_broll = false;
-  const r = await api('POST', '/api/jobs', {urls, format: $('#format').value, options});
+  const r = await api('POST', '/api/jobs', {urls, format: $('#format').value, options: {...options, ...voiceChoice()}});
   $('#urls').value = ''; $('#go-msg').textContent = 'job lancé';
   current = r.id;
 }));
@@ -386,10 +424,11 @@ $('#t-go').addEventListener('click', () => act(async () => {
   const options = {};
   if ($('#t-nosearch').checked) options.no_search = true;
   if (options.no_search && !sources.length) throw new Error('Sans recherche, colle au moins une source (URL)');
-  const r = await api('POST', '/api/topic', {topic, vs: $('#t-vs').value || null, sources, count: parseInt($('#t-count').value) || null, format: $('#t-format').value || null, options});
+  const r = await api('POST', '/api/topic', {topic, vs: $('#t-vs').value || null, sources, count: parseInt($('#t-count').value) || null, format: $('#t-format').value || null, options: {...options, ...voiceChoice()}});
   $('#t-topic').value = ''; $('#t-sources').value = ''; $('#t-msg').textContent = 'job lancé';
   current = r.id;
 }));
+loadVoices();
 loadJobs().then(() => { const first = document.querySelector('.job'); if (first) first.click(); });
 setInterval(() => { if (!current) loadJobs(); }, 8000);
 </script>

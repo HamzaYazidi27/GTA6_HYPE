@@ -420,11 +420,25 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
 
 
 def cmd_voices(args: argparse.Namespace) -> int:
+    from ...modules.voice_generation.samples import KOKORO_PICKS, sample
     from ...providers.tts import get_tts
 
-    tts = get_tts(get_settings(), args.provider)
-    for v in tts.list_voices():
-        _print(v)
+    s = get_settings()
+    if not args.sample:
+        tts = get_tts(s, args.provider)
+        for v in tts.list_voices():
+            _print(v)
+        return 0
+    # the same sentence read by several voices, to listen and choose (outputs/voice_samples/)
+    provider = args.provider or s.get("providers.tts.default", "kokoro")
+    voices = list(args.voices) or ([v for v, _ in KOKORO_PICKS] if provider == "kokoro" else [str((s.get(f"providers.tts.{provider}") or {}).get("voice") or (s.get(f"providers.tts.{provider}") or {}).get("voice_id") or "")])
+    out = s.outputs_dir / "voice_samples"
+    for v in voices:
+        try:
+            _print(f"  {provider} {v or '(default)'}: {sample(s, provider, v, out_dir=out)}")
+        except FactoryError as exc:
+            _print(f"  {provider} {v}: {exc.describe()}")
+    _print(f"\nlisten, then choose: providers.tts.default and providers.tts.{provider}.{'voice_id' if provider == 'elevenlabs' else 'voice'} in config.yaml, or --tts/--voice for one job (also in the dashboard)")
     return 0
 
 
@@ -769,8 +783,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("instruction", help='e.g. "shorter, lead with the date"')
     sp.set_defaults(fn=cmd_rewrite)
 
-    sp = sub.add_parser("voices", help="list available voices")
+    sp = sub.add_parser("voices", help="list available voices, or listen to samples (--sample)")
+    sp.add_argument("voices", nargs="*", help="--sample: which voices (default: the best Kokoro voices, or your configured voice)")
     sp.add_argument("--provider", help="kokoro | elevenlabs | openai")
+    sp.add_argument("--sample", action="store_true", help="read the same sentence with each voice into outputs/voice_samples/ to compare them")
     sp.set_defaults(fn=cmd_voices)
 
     sp = sub.add_parser("footage", help="real GTA 6 footage: add new footage, tag it, see what the narration will show")

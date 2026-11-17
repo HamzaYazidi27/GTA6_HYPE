@@ -35,6 +35,13 @@ SECTIONS TO WRITE, in this order (word budget per section in brackets)
 How to write an item section
 {item_rules}
 
+How it should sound (a person who knows these games talking to a friend, not a list being read)
+- Mix short and longer sentences; use contractions; vary how sentences start. Never two items opened the same way.
+- Carry the viewer from one item to the next with a spoken link ("That brings us to...", "This next one is easy to miss.", "Here is where it changes.").
+- When it fits, open an item with a short contrast line in plain words (e.g. "The horse becomes the trunk.").
+- A brief personal reaction is welcome when it is clearly an opinion ("this one surprised me"), never as a fact.
+- No "firstly", "additionally", "furthermore", "in conclusion", "let's dive in", no rhetorical filler, no repeating the item title as a heading.
+
 Return a JSON object:
 "title": final title (max 70 characters, accurate)
 "sections": list in the same order, each {{"id": section id, "narration": the spoken text for that section, "claim_ids": [ids of every fact used in it{id_note}]}}

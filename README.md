@@ -136,9 +136,23 @@ Les étapes : `research` (tes sources `--source` + les meilleurs articles trouv�
 
 **Ce qui est dit sur l'autre jeu** vient uniquement de `knowledge/games/<jeu>.yaml` (le jeu sorti : Red Dead 2 et GTA 5 sont fournis, ~20 faits chacun). Un fait absent du fichier ne peut pas être dit : ajoute, corrige ou supprime des lignes librement, une phrase courte par fait. Ce qui est dit sur GTA 6 garde son statut à l'écran (CONFIRMED, REPORTED…), comme dans les news.
 
-**Le footage de l'autre jeu** a sa propre bibliothèque (`assets/game_footage/<jeu>/`), avec les mêmes outils : `footage update|add|tag|autotag|list --game rdr2`. Tes propres captures de gameplay y ont leur place (`footage add ~/Captures/rdr2 --game rdr2 --tags horse,camp`). Une bibliothèque vide n'emprunte jamais les images de GTA 6 : ses scènes restent graphiques et le contrôle qualité le signale.
+**Le footage de l'autre jeu** a sa propre bibliothèque (`assets/game_footage/<jeu>/`), avec les mêmes outils : `footage update|add|tag|autotag|list --game rdr2`. Tes propres captures de gameplay y ont leur place (`footage add ~/Captures/rdr2 --game rdr2 --tags horse,camp`). Si la bibliothèque est vide au lancement, le job **télécharge tout seul** les vidéos officielles du jeu (une fois) ; s'il n'y arrive pas, il **s'arrête dès le début** avec la marche à suivre, au lieu de faire une vidéo avec des trous. Une vidéo YouTube réservée aux adultes demande une connexion : connecte-toi à YouTube dans ton navigateur et mets `footage.cookies_from_browser: "chrome"` (ou `safari`, `firefox`…) dans `config.yaml`.
+
+Les **bandes noires** des trailers au format cinéma sont détectées plan par plan et coupées : les images remplissent l'écran et les panneaux de l'écran partagé.
 
 **Ajouter un jeu** (GTA IV, San Andreas…) : une entrée dans la section `games` de `config.yaml` (nom, mots qui le désignent dans la narration, dossier, trailers officiels), un fichier `knowledge/games/<id>.yaml` avec ses faits, et du footage. Réglages : section `topic` (nombre d'items, durée par item, sources lues).
+
+## La voix
+
+Dans le dashboard, carte **Voix de la narration** : choisis une voix et clique sur **▶** pour l'écouter lire la même phrase ; elle est utilisée pour les vidéos lancées ensuite. En ligne de commande : `python -m gta_factory voices --sample` (les meilleures voix Kokoro dans `outputs/voice_samples/`), puis `--tts` / `--voice` pour un job, ou `providers.tts` dans `config.yaml` pour toujours.
+
+| Voix | Prix | Rendu |
+|---|---|---|
+| Kokoro (par défaut) | gratuit, local | correct mais reconnaissable comme synthétique ; `af_heart` (femme, US) est la plus naturelle, les voix d'homme le sont moins |
+| OpenAI `gpt-4o-mini-tts` | ~0,015 $ par minute de voix (~0,15 $ pour 10 min) | voix US naturelles, guidées par `providers.tts.openai.instructions` (narrateur américain détendu) ; clé `OPENAI_API_KEY` dans `.env` |
+| ElevenLabs | abonnement ElevenLabs | le plus humain ; clé `ELEVENLABS_API_KEY` dans `.env`, les voix de ton compte apparaissent dans la liste |
+
+Les voix OpenAI et ElevenLabs lisent **toute la scène d'un coup** (l'intonation enchaîne d'une phrase à l'autre comme un vrai narrateur) ; Kokoro lit phrase par phrase avec une respiration naturelle entre deux (`audio.synthesis`, `audio.sentence_pause_seconds`).
 
 ## Utilisation
 

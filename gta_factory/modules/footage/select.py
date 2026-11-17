@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 from ...app.core.errors import RenderError
 from ...app.core.utils import stable_hash
-from .library import DEFAULT_CREDIT, footage_dir, library_summary, load_items
+from .library import DEFAULT_CREDIT, crop_filter, footage_dir, library_summary, load_items
 from .vocabulary import load_vocabulary, word_tokens
 
 # templates whose content is dense enough to read best on a clean graphic backdrop,
@@ -114,7 +114,10 @@ def _piece(item: dict[str, Any], max_clip: float) -> dict[str, Any]:
         return {"type": "photo", "file": item["path"]}
     length = min(max_clip, item["e"] - item["s"])
     off = max(0.0, (item["e"] - item["s"] - length) / 2)  # the middle of a long shot: the most "settled" part of the move
-    return {"type": "shot", "file": item["path"], "s": item["s"], "e": item["e"], "start": round(item["s"] + off, 3), "end": round(item["s"] + off + length, 3)}
+    piece = {"type": "shot", "file": item["path"], "s": item["s"], "e": item["e"], "start": round(item["s"] + off, 3), "end": round(item["s"] + off + length, 3)}
+    if item.get("crop"):
+        piece["crop"] = item["crop"]  # the shot's black bars are cut away before framing
+    return piece
 
 
 def plan_beats(text: str, items: dict[str, Any], *, min_piece: float = 1.2) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -438,6 +441,8 @@ def _seg(p: dict[str, Any], t: float, d: float, beat: dict[str, Any] | None = No
     seg = {"t": round(t, 3), "d": round(d, 3), "type": p["type"], "file": p["file"]}
     if p["type"] == "shot":
         seg["start"] = round(_fit(p, d), 3)
+        if p.get("crop"):
+            seg["crop"] = p["crop"]
     if beat is not None:
         seg["said"] = beat.get("said", "")
     return seg
@@ -520,8 +525,8 @@ def build_segments(fo: dict[str, Any], words: list[dict[str, Any]], duration: fl
     return [{k: v for k, v in s.items() if k != "_p"} for s in segs]
 
 
-def _cover_filter(w: int, h: int, fps: int) -> str:
-    return f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps={fps},format=yuv420p"
+def _cover_filter(w: int, h: int, fps: int, crop: list[int] | None = None) -> str:
+    return f"{crop_filter(crop)}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps={fps},format=yuv420p"
 
 
 def _pan_filter(w: int, h: int, fps: int, frames: int, k: int) -> str:
@@ -607,7 +612,7 @@ def _cut_clip(sc: dict[str, Any], fo: dict[str, Any], need: float, words: list[d
                 vf = _pan_filter(width, height, fps, nf, i + sc["scene_number"])
             else:
                 cmd += ["-ss", f"{s['start']:.3f}", "-t", f"{secs:.3f}", "-i", s["file"]]
-                vf = _cover_filter(width, height, fps)
+                vf = _cover_filter(width, height, fps, s.get("crop"))
             chains.append(f"[{i}:v]{vf},trim=end_frame={nf},setpts=PTS-STARTPTS[v{i}];")
         graph = "".join(chains) + "".join(f"[v{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0[out]"
         tmp = cached.with_suffix(".part.mp4")
@@ -648,7 +653,7 @@ def thumbnail_photos(settings: Any, text: str, count: int, *, out_dir: Path) -> 
         for sh in shots[: (count - len(out)) * 3 : 3] or shots[: count - len(out)]:
             t = round((sh["s"] + sh["e"]) / 2, 2)
             dest = out_dir / f"thumb_still_{len(out) + 1}.jpg"
-            proc = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t}", "-i", sh["path"], "-frames:v", "1", "-q:v", "2", str(dest)], capture_output=True, text=True)
+            proc = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t}", "-i", sh["path"], "-frames:v", "1", *(["-vf", crop_filter(sh.get("crop")).rstrip(",")] if sh.get("crop") else []), "-q:v", "2", str(dest)], capture_output=True, text=True)
             if proc.returncode == 0 and dest.exists():
                 out.append(dest)
             if len(out) >= count:

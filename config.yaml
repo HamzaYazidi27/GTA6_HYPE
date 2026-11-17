@@ -53,7 +53,7 @@ providers:
     openai:
       model: "gpt-4o-mini-tts"
       voice: "ash"
-      instructions: "Energetic, clear gaming-news narrator. Natural pacing, confident, never shouting."
+      instructions: "Native American English speaker. A relaxed, confident YouTube gaming narrator talking to a friend who loves GTA: natural rhythm and pauses, light emphasis on the key words, a hint of excitement on surprising facts. Never an announcer voice, never shouting."
   search:
     # order matters: site feeds are first-party RSS, the news RSS engines widen the net
     providers: ["site_feeds", "bing_news_rss", "google_news_rss"]
@@ -173,6 +173,8 @@ audio:
   music_duck_db: -9.0              # extra reduction while the voice is speaking (sidechain)
   sfx_gain_db: -9.0
   scene_gap_seconds: 0.28          # breath between scenes
+  sentence_pause_seconds: 0.24     # breath between two sentences read separately (a bit more after ? and !)
+  synthesis: "auto"                # auto: premium voices (elevenlabs, openai) read a whole scene at once for a natural melody
   music_mood: "pulse"              # pulse | tension | drive  (original generated beds in assets/music)
 
 thumbnail:
@@ -210,6 +212,7 @@ footage:
   dir: "assets/gta6_footage"       # videos/ and photos/ inside; drop files there, or `footage add`, or the dashboard
   tags_file: "knowledge/footage_tags.yaml"   # your own characters, places, things the narration can call for
   credit: "Footage: Rockstar Games"
+  cookies_from_browser: ""         # age-restricted trailer on YouTube? log into YouTube in a browser and put its name here: chrome, safari, firefox, edge, brave
   thumbnails: true                 # put a real GTA 6 picture behind the thumbnail text
   auto_tag: true                   # look at new footage with a free local vision model (Ollama) to know what is in each shot
   vision_model: "auto"             # auto = qwen2.5vl:7b (16 GB RAM and more) or qwen2.5vl:3b

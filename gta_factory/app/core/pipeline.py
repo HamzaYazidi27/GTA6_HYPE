@@ -305,7 +305,13 @@ def step_research(ctx: JobContext) -> dict[str, Any]:
     """Topic videos: the operator's sources, plus the best articles the news search finds."""
     from ...modules.topic.research import find_sources
 
+    from ...modules.footage.games import MAIN, ensure_footage
+
     o = ctx.options
+    if ctx.settings.get("footage.enabled", True):  # before any long work: both games must have pictures to show
+        for gid in [MAIN] + ([o["vs"]] if o.get("vs") else []):
+            summ = ensure_footage(ctx.settings, gid, log=ctx.log)
+            ctx.log(f"footage: {gid}: {summ['videos']} video(s), {summ['usable_shots']} usable shots, {summ['photos']} photo(s)")
     urls = [u for u in ctx.job.get("urls") or [] if re.match(r"^https?://", u)]
     res = find_sources(ctx.settings, topic=o["topic"], style=o["style"], urls=urls, text_files=o.get("text_files"), other=ctx.other_game, search=not o.get("no_search"), log=ctx.log)
     if not res["articles"]:
@@ -573,6 +579,17 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
     vertical = ctx.settings.format(ctx.fmt).get("aspect") == "9:16"
     review = review_assets(ctx.settings, scenes, media_dir=ctx.paths.media, tts_provider=ctx.tts_name, vertical=vertical, log=ctx.log)
     footage = assign_footage(ctx.settings, scenes, log=ctx.log)
+    if ctx.kind == "topic" and footage["summary"].get("enabled"):
+        bare = [sc["scene_number"] for sc in scenes if (sc.get("footage_pair") and not (sc.get("footage") and sc.get("footage_b"))) or (sc.get("footage_game") and not sc.get("footage"))]
+        if bare:
+            from ...modules.footage.games import game
+
+            empty = [g["name"] for gid, g in (footage["summary"].get("games") or {}).items() if not g["library"].get("usable_shots") and not g["library"].get("photos")]
+            names = ", ".join(empty) or ", ".join(game(ctx.settings, x)["name"] for x in {"gta6", ctx.options.get("vs") or "gta6"})
+            raise FactoryError(
+                f"{len(bare)} scene(s) would have no footage (scenes {', '.join(map(str, bare[:12]))}): the {names} library has nothing to show.",
+                hint="Add footage of that game (`python -m gta_factory footage update --game <game>`, or your own clips in the dashboard, page Footage), then resume the job.",
+            )
     if footage["ledger"]:
         review["assets"] = footage["ledger"] + review["assets"]
         review["credits"] = sorted(set(review["credits"]) | {e["attribution"] for e in footage["ledger"] if e.get("attribution")})
