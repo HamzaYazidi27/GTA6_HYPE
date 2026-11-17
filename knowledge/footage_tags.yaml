@@ -1,0 +1,34 @@
+# Your own footage concepts: what the narration can talk about and the library can show.
+#
+# Built-in concepts (Lucia, Jason, Vice City, Leonida Keys, police, beach, alligator, the first / second
+# trailer ...) are in gta_factory/modules/footage/default_tags.yaml. Add new ones here when new footage
+# comes out (new characters, places, vehicles, missions ...). Same format, both files are merged:
+#
+#   say:   words or phrases of the narration that call for this footage
+#   look:  what it looks like (lets `python -m gta_factory footage autotag` recognise it in new footage)
+#   files: file-name patterns that always carry it (e.g. "trailer 4", a YouTube id)
+#   also:  related concepts to fall back on when the library has nothing for this one
+#
+# Then tag the files that show it:   python -m gta_factory footage tag <file> --tags <concept>
+# (or in the dashboard, page "Footage GTA 6"). See what a sentence would show:
+#                                    python -m gta_factory footage find "Lucia steals a jet ski"
+#
+# You do not even need an entry here: any tag put on a file works on its own
+# (a screenshot tagged "jet ski" is shown whenever the narration says "jet ski").
+#
+# Examples (remove the # to use them):
+#
+# trailer_4:
+#   say: ["fourth trailer", "trailer 4", "trailer four", "launch trailer"]
+#   files: ["trailer 4", "launch trailer"]
+#
+# jet_ski:
+#   say: ["jet ski", "jet skis", "watercraft"]
+#   look: "a jet ski on the water"
+#   also: [boats]
+#
+# lucia:                       # add words to a built-in concept
+#   say: ["our heroine"]
+#
+# money:                       # switch a built-in concept off
+#   enabled: false

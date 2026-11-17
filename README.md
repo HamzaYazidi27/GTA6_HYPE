@@ -20,10 +20,10 @@ uv venv && uv pip install -e ".[align,footage,dev]"   # ou : python -m venv .ven
 source .venv/bin/activate
 python -m gta_factory setup     # npm install, LLM local (Ollama), voix Kokoro (~350 Mo), musiques et effets
 python -m gta_factory doctor --ping
-python -m gta_factory footage fetch   # vrais trailers GTA 6 (voir plus bas)
+python -m gta_factory footage update  # vrais trailers GTA 6 + nouveaux trailers (voir plus bas)
 ```
 
-`setup` démarre Ollama et télécharge **une fois** le meilleur modèle pour ta RAM (`model: auto`) :
+`setup` démarre Ollama et télécharge **une fois** le meilleur modèle pour ta RAM (`model: auto`), plus le petit modèle de vision qui tague le footage GTA 6 (`qwen2.5vl`, 3 à 6 Go) :
 
 | RAM | Modèle | Taille |
 |---|---|---|
@@ -34,22 +34,43 @@ python -m gta_factory footage fetch   # vrais trailers GTA 6 (voir plus bas)
 
 Plus le modèle est gros, meilleurs sont le script et les titres. Pour en forcer un : `python -m gta_factory setup --model qwen3:8b` puis `providers.llm.ollama.model` dans `config.yaml`. Les garde-fous (preuves vérifiées mot pour mot, classement des affirmations par règles fixes, audit puis révision du script, contrôle qualité) ne dépendent pas du modèle : un modèle local ne peut pas faire passer une rumeur pour un fait.
 
-## Vraies images de GTA 6 (≈ 80 % de la vidéo)
+## Vraies images de GTA 6 (80 à 90 % de la vidéo)
 
-Les vidéos mélangent les **vrais trailers et screenshots officiels de GTA 6** (environ 80 % du temps) et les animations de la chaîne (les ~20 % restants : graphiques, tableaux, sources). Les cartes fact-check, les chiffres et les sous-titres s'affichent par-dessus les images du jeu.
+Les vidéos montrent les **vrais trailers, gameplay et screenshots officiels de GTA 6** sur **80 à 90 %** du temps (cible 85 %), et les animations de la chaîne sur le reste (graphiques, tableaux, sources). Les cartes fact-check, les chiffres et les sous-titres s'affichent par-dessus les images du jeu.
+
+**Ce qui est dit est montré.** Quand la narration dit quelque chose que la bibliothèque a (« Lucia », « Vice City », « la police », « un alligator », « le deuxième trailer », ou n'importe quel tag que tu as mis sur un fichier), c'est **cette** image qui passe, coupée **au mot près** (grâce au timing mot à mot des sous-titres) et tenue tant qu'on en parle. Sinon, n'importe quelle image du jeu passe (les moins utilisées d'abord, pour ne pas se répéter).
 
 ```bash
 pip install -e ".[footage]"                   # yt-dlp, une fois
-python -m gta_factory footage fetch           # télécharge les trailers officiels de Rockstar (footage.sources) + en tire des photos
-python -m gta_factory footage add ~/Images/gta6 --tags lucia,beach   # tes propres screenshots officiels
-python -m gta_factory footage list            # ce que contient la bibliothèque
+python -m gta_factory footage update          # trailers officiels + TOUT nouveau trailer GTA VI de la chaîne Rockstar, photos tirées des vidéos, tags auto
+python -m gta_factory footage list            # ce que contient la bibliothèque et ce que la narration peut appeler
 ```
 
-- Les fichiers vont dans `assets/gta6_footage/videos/` et `photos/` (hors git). Tu peux aussi y copier les fichiers à la main.
-- Les plans sont détectés automatiquement ; les cartons noirs, le logo du début et l'écran de fin sont ignorés. Chaque extrait dure au plus 6 s (`footage.max_clip_seconds`).
-- Les tags (et les mots du nom de fichier) servent à choisir un plan qui correspond à la phrase : une scène qui parle de Lucia prend en priorité un fichier tagué `lucia`.
-- Proportion réglable : `footage.ratio` (0.8 = 80 %), part de photos : `footage.photo_share`. `footage.enabled: false` revient aux seules animations.
-- Les miniatures utilisent aussi une vraie image du jeu (`footage.thumbnails`).
+### Ajouter du nouveau footage (quand tu veux, comme tu veux)
+
+| Comment | Commande |
+|---|---|
+| Nouveau trailer officiel sorti | `python -m gta_factory footage update` (le trouve tout seul sur la chaîne Rockstar) |
+| Une vidéo en ligne (YouTube, X…) ou une image | `python -m gta_factory footage add https://... --tags gameplay,jason` |
+| Tes fichiers (vidéos, screenshots, un dossier entier) | `python -m gta_factory footage add ~/Downloads/gta6 --tags lucia,beach` |
+| Glisser-déposer | dashboard → **Footage GTA 6** (envoi, URL, tags, aperçu, suppression) |
+| À la main | copie les fichiers dans `assets/gta6_footage/videos/` ou `photos/` : la prochaine vidéo les utilise |
+
+### Dire à l'usine ce que montre chaque fichier
+
+- **Tags automatiques** : un modèle de vision **gratuit et local** (Ollama, `qwen2.5vl`, installé par `setup`) regarde chaque plan et chaque screenshot et note ce qu'il voit (Lucia, Jason, plage, police, bateau, alligator, Vice City…). Lancé tout seul après `update` / `add`, ou `python -m gta_factory footage autotag`. Résultats en cache : il ne regarde qu'une fois.
+- **Tes tags** (toujours prioritaires) : `python -m gta_factory footage tag lucia_beach.jpg --tags lucia,beach`, ou une partie d'une vidéo : `footage tag "Trailer 2" --at 42-47.5 --tags jason,boat`. Le nom du fichier compte aussi (`lucia_beach_01.jpg` → lucia, beach ; « Trailer 3 » dans le nom → le troisième trailer).
+- **Tester** : `python -m gta_factory footage find "Lucia échappe à la police à Port Gellhorn"` montre quelle image passerait pour chaque mot, et ce qui manque.
+- **Nouveaux personnages, lieux, véhicules…** : ajoute-les dans `knowledge/footage_tags.yaml` (exemples dedans), ou mets simplement le tag sur un fichier : un screenshot tagué `jet ski` passe dès que la narration dit « jet ski ». Liste et couverture : `python -m gta_factory footage concepts`.
+- Le `REVIEW.md` de chaque vidéo liste ce qui a été montré pour chaque mot, et ce qui a été dit sans image dans la bibliothèque (pour savoir quoi ajouter).
+
+### Réglages (`config.yaml`, section `footage`)
+
+- `ratio: 0.85`, `ratio_min: 0.8`, `ratio_max: 0.9` : part de la vidéo sur de vraies images. Le contrôle qualité vérifie la part réelle (`footage.share`).
+- `match_spoken: true` : ce qui est dit est montré. `match_lead_seconds` : l'image arrive un peu avant le mot.
+- `photo_share`, `photo_hold_seconds`, `max_clip_seconds` (6 s max par extrait), `auto_tag`, `vision_model`, `sources`, `channels`, `title_filter`.
+- `footage.enabled: false` revient aux seules animations. Les miniatures utilisent aussi une vraie image du jeu, choisie d'après le titre (`footage.thumbnails`).
+- Les plans sont détectés automatiquement ; les cartons noirs, le logo du début et l'écran de fin sont ignorés.
 - Crédit « Footage: Rockstar Games » à l'écran et dans la description. Les fichiers contenant « leak », « leaked », « datamine » ou « reupload » ne sont jamais utilisés.
 - ⚠️ Les images appartiennent à Rockstar/Take-Two. Les chaînes d'actu les utilisent couramment, mais YouTube peut poser une **revendication Content ID** (monétisation reversée à Rockstar) ; c'est rare qu'une vidéo soit bloquée, mais c'est possible.
 
@@ -111,7 +132,7 @@ Si un point **critique** du contrôle qualité échoue (droits non validés, aff
 
 ## Droits et règles éditoriales
 
-- Images du jeu : uniquement les trailers et screenshots **officiels** de la bibliothèque `assets/gta6_footage` (voir plus haut), en extraits courts, transformés par les graphiques et crédités. Pas de logos ni de vidéos d'autres créateurs. Les animations sont dessinées en code, et la musique et les effets sont synthétisés (aucun sample), donc la bande-son ne déclenche pas de Content ID.
+- Images du jeu : la bibliothèque `assets/gta6_footage` (trailers, gameplay et screenshots officiels, voir plus haut), en extraits courts, transformés par les graphiques et crédités. Pas de logos ni de vidéos d'autres créateurs. Les animations sont dessinées en code, et la musique et les effets sont synthétisés (aucun sample), donc la bande-son ne déclenche pas de Content ID.
 - Photos d'ambiance (optionnel) : Pexels/Pixabay si une clé est dans `.env`, ou tes propres images dans `assets/licensed_visuals/` **avec** un fichier `<image>.license.json` (exemple dans `gta_factory/modules/asset_management/rights.py`). Sans licence documentée, la scène redevient de la typographie animée.
 - Mode `rights_review.mode: strict` par défaut : le matériel presse officiel est refusé. En mode `editorial`, il est accepté mais marqué « revue humaine ».
 - Les mots « leak », « leaked », « datamine » et « reupload » bloquent un visuel.

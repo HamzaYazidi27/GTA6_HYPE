@@ -1,0 +1,158 @@
+# Built-in footage concepts: what the narration can talk about AND a viewer can see.
+#
+#   say:   words or phrases in the narration that call for this footage (any of them)
+#   look:  what it looks like, for the local vision tagger (`python -m gta_factory footage autotag`)
+#   files: file-name patterns that always carry this concept (a trailer's YouTube id, "trailer 3"...)
+#   also:  related concepts to fall back on when the library has nothing for this one
+#
+# Add your own concepts (new characters, places, vehicles...) in knowledge/footage_tags.yaml:
+# same format, the two files are merged. Any tag you put on a file also works on its own:
+# a screenshot tagged "flamingo" is shown whenever the narration says "flamingo".
+
+# ------------------------------------------------------------------ characters (rockstargames.com/VI)
+lucia:
+  say: ["lucia", "lucia caminos", "caminos"]
+  look: "Lucia Caminos, the female lead: a young Latina woman with long dark hair, often tied back"
+jason:
+  say: ["jason", "jason duval", "duval"]
+  look: "Jason Duval, the male lead: a white man in his thirties with short brown hair and stubble"
+duo:
+  say: ["the duo", "the couple", "both protagonists", "the protagonists", "two protagonists", "bonnie and clyde", "jason and lucia", "lucia and jason"]
+  look: "Lucia and Jason together in the same shot (a man and a woman side by side)"
+  also: [lucia, jason]
+cal_hampton:
+  say: ["cal hampton", "cal"]
+  look: "Cal Hampton: a heavy-set bearded man, conspiracy-minded friend of Jason"
+boobie_ike:
+  say: ["boobie ike", "boobie"]
+  look: "Boobie Ike: a Black man, local businessman with a strip club and a recording studio"
+drequan_priest:
+  say: ["dre'quan priest", "dre'quan", "drequan", "only raw records"]
+  look: "Dre'Quan Priest: a young Black man, music label owner"
+real_dimez:
+  say: ["real dimez", "bae-luxe", "roxy"]
+  look: "Real Dimez: two young women, rap duo and social media stars"
+raul_bautista:
+  say: ["raul bautista", "raul"]
+  look: "Raul Bautista: an older man with grey hair, a seasoned bank robber"
+brian_heder:
+  say: ["brian heder", "brian"]
+  look: "Brian Heder: an older white man with a moustache, a drug runner in the Keys"
+
+# ------------------------------------------------------------------ places
+vice_city:
+  say: ["vice city", "miami", "vice beach", "ocean drive"]
+  look: "Vice City: a neon-lit Miami-like city, art-deco hotels, palm trees, ocean front"
+  also: [skyline, beach, nightlife]
+leonida:
+  say: ["leonida", "state of leonida", "florida"]
+  look: "the state of Leonida: Florida-like landscapes, highways, small towns, coast"
+  also: [open_world, vice_city]
+leonida_keys:
+  say: ["leonida keys", "the keys", "florida keys"]
+  look: "the Leonida Keys: tropical islands, long bridges over turquoise water, marinas"
+  also: [boats, beach, highway]
+grassrivers:
+  say: ["grassrivers", "grass rivers", "everglades"]
+  look: "the Grassrivers: Everglades-like wetlands, airboats, tall grass and water"
+  also: [swamp, alligator]
+port_gellhorn:
+  say: ["port gellhorn", "gellhorn"]
+  look: "Port Gellhorn: a run-down industrial port town, cheap motels, factories"
+ambrosia:
+  say: ["ambrosia"]
+  look: "Ambrosia: an inland industrial town with a sugar refinery, biker territory"
+mount_kalaga:
+  say: ["mount kalaga", "kalaga", "national park"]
+  look: "Mount Kalaga National Park: forests, rivers, hunting and off-road trails"
+
+# ------------------------------------------------------------------ what you see in the footage
+beach:
+  say: ["beach", "beaches", "shoreline", "seaside", "sand"]
+  look: "a beach: sand, sea, sunbathers"
+police:
+  say: ["police", "cops", "cop", "sheriff", "law enforcement", "arrest", "arrested", "swat"]
+  look: "police: officers, patrol cars, sirens, an arrest"
+chase:
+  say: ["chase", "chases", "pursuit", "getaway", "car chase", "police chase"]
+  look: "a chase: speeding vehicles pursued by police"
+  also: [police, cars]
+heist:
+  say: ["heist", "heists", "robbery", "robberies", "rob", "robbing", "stick-up", "hold-up", "bank job", "crime spree"]
+  look: "a robbery or heist: masked people with guns in a store or bank"
+  also: [guns]
+guns:
+  say: ["gun", "guns", "shootout", "shootouts", "firearm", "firearms", "weapon", "weapons", "gunfight", "combat"]
+  look: "guns: someone holding or firing a weapon"
+cars:
+  say: ["car", "cars", "vehicle", "vehicles", "driving", "convertible", "sports car", "muscle car", "traffic"]
+  look: "cars: vehicles on a road, someone driving, a convertible"
+motorcycle:
+  say: ["motorcycle", "motorcycles", "motorbike", "bikers", "biker"]
+  look: "a motorcycle or bikers"
+boats:
+  say: ["boat", "boats", "yacht", "yachts", "speedboat", "jet ski", "marina", "airboat"]
+  look: "boats: yachts, speedboats, jet skis or a marina"
+aircraft:
+  say: ["plane", "planes", "helicopter", "helicopters", "aircraft", "flying", "airport"]
+  look: "an aircraft: a plane or helicopter"
+swamp:
+  say: ["swamp", "swamps", "wetlands", "bayou", "marsh"]
+  look: "a swamp: murky water, mangroves, tall grass"
+alligator:
+  say: ["alligator", "alligators", "gator", "gators", "crocodile"]
+  look: "an alligator"
+flamingo:
+  say: ["flamingo", "flamingos", "wildlife"]
+  look: "pink flamingos or other wildlife"
+nightlife:
+  say: ["nightlife", "nightclub", "nightclubs", "club", "clubs", "party", "parties", "strip club"]
+  look: "nightlife: a club, dancers, a party with neon lights"
+skyline:
+  say: ["skyline", "skyscrapers", "downtown", "city streets", "big city", "cityscape"]
+  look: "a city skyline, skyscrapers or busy downtown streets"
+sunset:
+  say: ["sunset", "sunsets", "sunrise", "golden hour", "dusk"]
+  look: "a sunset or sunrise sky"
+open_world:
+  say: ["open world", "the map", "map size", "game world", "explore", "exploration", "landscape", "landscapes"]
+  look: "a wide aerial view of a large landscape or city"
+social_media:
+  say: ["social media", "viral", "influencer", "influencers", "livestream", "streamer", "selfie", "smartphone"]
+  look: "social media: phone-recorded vertical video, a livestream, a selfie"
+crowd:
+  say: ["crowd", "crowds", "npcs", "npc", "pedestrians", "population"]
+  look: "a crowd of people, pedestrians on a street"
+prison:
+  say: ["prison", "jail", "inmate", "inmates", "prisoner", "behind bars", "correctional"]
+  look: "a prison: inmates, cells, an orange jumpsuit"
+money:
+  say: ["money", "cash", "dollars", "wealth", "fortune"]
+  look: "money: banknotes, cash bundles"
+gym:
+  say: ["gym", "workout", "fitness", "bodybuilder"]
+  look: "a gym or someone working out"
+weather:
+  say: ["weather", "storm", "storms", "rain", "hurricane", "thunderstorm"]
+  look: "dramatic weather: a storm, rain, a hurricane"
+highway:
+  say: ["highway", "highways", "freeway", "interstate", "road trip", "bridge", "bridges"]
+  look: "a highway or a long bridge"
+graphics:
+  say: ["graphics", "visuals", "visual fidelity", "lighting", "reflections", "realism", "realistic", "next-gen", "ray tracing"]
+  look: "a highly detailed, beautifully lit scenic shot (reflections, lighting, crowds)"
+
+# ------------------------------------------------------------------ which trailer / what kind of footage
+trailer_1:
+  say: ["first trailer", "trailer one", "trailer 1", "debut trailer", "original trailer", "reveal trailer"]
+  files: ["QdBZY2fkU-0", "trailer 1", "trailer one"]
+trailer_2:
+  say: ["second trailer", "trailer two", "trailer 2"]
+  files: ["VQRLujxTm3c", "trailer 2", "trailer two"]
+trailer_3:
+  say: ["third trailer", "trailer three", "trailer 3"]
+  files: ["trailer 3", "trailer three"]
+gameplay:
+  say: ["gameplay", "game play", "hands-on", "in-game", "mission", "missions"]
+  files: ["gameplay"]
+  look: "in-game gameplay with a HUD (minimap, health, weapon icons)"

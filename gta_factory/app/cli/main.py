@@ -7,7 +7,8 @@
     list | status JOB | log JOB | delete JOB
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
     voices                     list the voices of the TTS provider
-    footage fetch|add|stills|list   real GTA 6 footage library (official trailers + screenshots)
+    footage [list|update|add|tag|autotag|find|concepts|remove|fetch|stills]
+                               real GTA 6 footage library: add new footage any time, tag it, see what a sentence shows
     competitors CHANNEL_URL    refresh the competitor reference database
     youtube auth|whoami|logout|status JOB    connect the channel (OAuth, one time)
     publish JOB                upload a reviewed package (private by default, resumable)
@@ -91,6 +92,18 @@ def _setup_local_llm(s: Any, model: str | None) -> bool:
         llm.pull(tag, log=_print)  # type: ignore[attr-defined]
     if model and str(s.get("providers.llm.ollama.model")) not in (model,):
         _print(f"tip: set providers.llm.ollama.model: \"{model}\" in config.yaml to always use it")
+    if s.get("footage.enabled", True) and s.get("footage.auto_tag", True):
+        from ...modules.footage.autotag import vision_model
+
+        vtag = vision_model(s)
+        if any(_same_model(vtag, h) for h in llm.installed_models()):  # type: ignore[attr-defined]
+            _print(f"footage tagger: {vtag} already downloaded")
+        else:
+            _print(f"downloading the local vision model {vtag} (one time, tags the GTA 6 footage so what is said is shown) ...")
+            try:
+                llm.pull(vtag, log=_print)  # type: ignore[attr-defined]
+            except FactoryError as exc:
+                _print(f"footage tagger not installed ({exc.describe()}); tag files yourself with `footage tag`, or retry later")
     return True
 
 
@@ -134,8 +147,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         from ...modules.footage.library import build_index, library_summary
 
+        from ...modules.footage.select import ratio_band
+
         fs = library_summary(build_index(s)) if s.get("footage.enabled", True) else None
-        rows.append((True, "GTA 6 footage", "off (footage.enabled: false)" if fs is None else (f"{fs['videos']} trailer(s), {fs['usable_shots']} shots, {fs['photos']} photo(s) - ~{float(s.get('footage.ratio', 0.8)):.0%} of each video" if fs["usable_shots"] or fs["photos"] else "empty: run `python -m gta_factory footage fetch` for real trailer footage")))
+        _, lo, hi = ratio_band(s)
+        rows.append((True, "GTA 6 footage", "off (footage.enabled: false)" if fs is None else (f"{fs['videos']} video(s), {fs['usable_shots']} shots, {fs['photos']} photo(s) - {lo:.0%}-{hi:.0%} of each video" if fs["usable_shots"] or fs["photos"] else "empty: run `python -m gta_factory footage update` for real trailer footage")))
+        if fs is not None and s.get("footage.auto_tag", True):
+            from ...modules.footage.autotag import pending, vision_status
+
+            ready, detail = vision_status(s)
+            left = len(pending(s)) if fs["usable_shots"] or fs["photos"] else 0
+            rows.append((True, "footage tagger", detail + (f" - {left} shot(s)/photo(s) not tagged yet: `python -m gta_factory footage autotag`" if ready and left else "")))
     except FactoryError as exc:
         rows.append((True, "GTA 6 footage", f"not indexed ({exc.message})"))
     paid = [x for x, on in (("Claude subscription", s.get("providers.llm.default") == "claude_code"), ("Anthropic API", s.get("providers.llm.default") == "anthropic"), ("OpenAI API", s.get("providers.llm.default") == "openai" or s.get("providers.tts.default") == "openai"), ("ElevenLabs", s.get("providers.tts.default") == "elevenlabs")) if on]
@@ -315,37 +337,154 @@ def cmd_voices(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tag_list(raw: str | None) -> list[str]:
+    return [x.strip() for x in (raw or "").split(",") if x.strip()]
+
+
+def _autotag_new(s: Any, args: argparse.Namespace) -> None:
+    """Tag what was just added, when the free local vision model is available (never fails the command)."""
+    if getattr(args, "no_autotag", False) or not s.get("footage.auto_tag", True):
+        return
+    from ...modules.footage.autotag import autotag
+
+    try:
+        autotag(s, log=_print)
+    except FactoryError as exc:
+        _print(f"auto-tagging skipped: {exc.describe()}")
+
+
+def _footage_listing(s: Any, index: dict[str, Any]) -> None:
+    from ...modules.footage import library as lib
+    from ...modules.footage.select import ratio_band
+
+    items = lib.load_items(s, index)
+    summ = lib.library_summary(index)
+    _print(f"\nGTA 6 footage library: {lib.footage_dir(s)}")
+    tagged = lambda its, base=(): sum(1 for it in its if set(it["tags"]) - set(base))  # noqa: E731
+    for v in index["videos"]:
+        its = [it for it in items["shots"] if it["file"] == v["file"]]
+        _print(f"  video  {v['file']}  {v['duration']:.0f}s  {len(its)} usable shots ({tagged(its, v['tags'])} tagged)  tags: {', '.join(v['tags']) or '-'}")
+    if index["photos"]:
+        _print(f"  photos {len(index['photos'])} ({tagged(items['photos'])} tagged): {', '.join(p['file'] for p in index['photos'][:4])}{' ...' if len(index['photos']) > 4 else ''}")
+    for sk in summ["skipped"]:
+        _print(f"  skipped {sk['file']}: {sk['reason']}")
+    _print(f"total: {summ['videos']} video(s), {summ['usable_shots']} usable shots ({summ['usable_seconds']:.0f}s), {summ['photos']} photo(s)")
+    if not summ["usable_shots"] and not summ["photos"]:
+        _print("the library is empty: run `python -m gta_factory footage update` (official trailers) or `footage add <files, folder or URL>`")
+        return
+    cov = lib.concept_coverage(s, items)
+    have = [f"{r['concept']} ({r['shots'] + r['photos']})" for r in cov if r["shots"] + r["photos"]]
+    _print(f"what the narration can call for: {', '.join(have) if have else 'nothing tagged yet - run `footage autotag` or tag files with `footage tag`'}")
+    _, lo, hi = ratio_band(s)
+    _print(f"new videos show real footage on {lo:.0%}-{hi:.0%} of the running time (footage.ratio_min / ratio_max in config.yaml)")
+
+
 def cmd_footage(args: argparse.Namespace) -> int:
     from ...modules.footage import library as lib
 
     s = get_settings()
-    if args.action == "fetch":
-        lib.fetch(s, args.paths or None, max_height=args.max_height, log=_print)
+    tags = _tag_list(args.tags)
+    act = args.action
+    if act == "update":
+        try:
+            lib.fetch(s, list(args.paths) or None, max_height=args.max_height, log=_print)
+        except FactoryError as exc:  # the known trailers failing must not stop the search for new ones
+            _print(f"footage: {exc.describe()}")
+        if not args.no_new:
+            try:
+                new = lib.find_new_official(s, log=_print)
+            except FactoryError as exc:
+                new = []
+                _print(f"could not look for new videos: {exc.describe()}")
+            if new:
+                for n in new:
+                    _print(f"  new: {n['title']}")
+                lib.fetch(s, [n["url"] for n in new], max_height=args.max_height, log=_print)
+            else:
+                _print("footage: no new official GTA VI video")
         if not args.no_stills:
             lib.extract_stills(s, per_video=args.stills, log=_print)
-    elif args.action == "add":
+        _autotag_new(s, args)
+    elif act == "fetch":
+        lib.fetch(s, args.paths or None, max_height=args.max_height, tags=tags, log=_print)
+        if not args.no_stills:
+            lib.extract_stills(s, per_video=args.stills, log=_print)
+        _autotag_new(s, args)
+    elif act == "add":
         if not args.paths:
-            _print("usage: footage add FILE_OR_FOLDER [...] [--tags lucia,beach]")
+            _print("usage: footage add FILE_FOLDER_OR_URL [...] [--tags lucia,beach]")
             return 2
-        lib.add_files(s, [Path(p).expanduser() for p in args.paths], tags=[t.strip() for t in (args.tags or "").split(",") if t.strip()], credit=args.credit or "", log=_print)
-    elif args.action == "stills":
+        added = lib.add_files(s, list(args.paths), tags=tags, credit=args.credit or "", log=_print)
+        if not added:
+            _print("nothing added (supported: mp4 mov webm mkv m4v / jpg jpeg png webp, or a video / image URL)")
+            return 1
+        if any(p.suffix.lower() in lib.VIDEO_EXT for p in added) and not args.no_stills:
+            lib.extract_stills(s, per_video=args.stills, log=_print)
+        _autotag_new(s, args)
+    elif act == "tag":
+        if not args.paths or not (tags or args.remove or args.clear):
+            _print("usage: footage tag FILE --tags lucia,beach [--at 12-19.5] [--remove police] [--clear]")
+            return 2
+        path = lib.resolve_file(s, " ".join(args.paths))
+        at = None
+        if args.at:
+            try:
+                a, b = (float(x) for x in args.at.replace(",", ".").split("-", 1))
+            except ValueError:
+                raise FactoryError("--at expects START-END in seconds, e.g. 12-19.5")
+            at = (a, b)
+        side = lib.set_tags(s, path, add=tags, remove=_tag_list(args.remove), replace=[] if args.clear else None, at=at)
+        where = f" from {at[0]:g}s to {at[1]:g}s" if at else ""
+        now = next((x["tags"] for x in side.get("segments", []) if at and abs(x["start"] - at[0]) < 0.05), []) if at else side.get("tags", [])
+        _print(f"{path.name}{where}: {', '.join(now) or '(no tags)'}")
+        return 0
+    elif act == "autotag":
+        from ...modules.footage.autotag import autotag
+
+        autotag(s, force=args.force, limit=args.limit, model=args.model, log=_print)
+    elif act == "find":
+        from ...modules.footage.select import preview
+
+        text = " ".join(args.paths)
+        if not text:
+            _print('usage: footage find "Lucia escapes the cops in Vice City"')
+            return 2
+        rows = preview(s, text)
+        if not rows:
+            _print("nothing in this sentence calls for specific footage: any GTA 6 footage will be shown")
+        for r in rows:
+            if r["matches"]:
+                _print(f"« {r['said']} » ({', '.join(r['concepts'])}): {r['matches']} match(es)")
+                for b in r["best"]:
+                    _print(f"    {b['file']}  [{', '.join(b['tags'][:8])}]")
+            else:
+                _print(f"« {r['said']} » ({', '.join(r['concepts'])}): nothing in the library - add some with `footage add <file or URL> --tags {r['concepts'][0]}`")
+        return 0
+    elif act == "concepts":
+        from ...modules.footage.vocabulary import load_vocabulary, tags_file
+
+        vocab = load_vocabulary(s)
+        cov = {r["concept"]: r for r in lib.concept_coverage(s)}
+        _print(f"concepts the narration can call for (add yours in {tags_file(s)}):")
+        for cid, c in vocab.concepts.items():
+            r = cov.get(cid) or {"shots": 0, "photos": 0}
+            n = r["shots"] + r["photos"]
+            _print(f"  {'✓' if n else '·'} {cid:<16} {('%d shot(s), %d photo(s)' % (r['shots'], r['photos'])) if n else 'no footage yet':<24} says: {', '.join((c.get('say') or [])[:5])}")
+        return 0
+    elif act == "remove":
+        if not args.paths:
+            _print("usage: footage remove FILE")
+            return 2
+        path = lib.resolve_file(s, " ".join(args.paths))
+        if not args.yes and input(f"remove {path.relative_to(lib.footage_dir(s))} from the library? [y/N] ").strip().lower() not in ("y", "yes", "o", "oui"):
+            return 1
+        lib.remove_file(s, path)
+        _print(f"removed {path.name}")
+    elif act == "stills":
         lib.extract_stills(s, per_video=args.stills, log=_print)
+        _autotag_new(s, args)
     index = lib.build_index(s, force=args.reindex, log=_print)
-    summ = lib.library_summary(index)
-    _print(f"\nGTA 6 footage library: {lib.footage_dir(s)}")
-    for v in index["videos"]:
-        ok = [x for x in v["shots"] if x.get("ok")]
-        _print(f"  video  {v['file']}  {v['duration']:.0f}s  {len(ok)} usable shots  tags: {', '.join(v['tags']) or '-'}")
-    if index["photos"]:
-        _print(f"  photos {len(index['photos'])} ({', '.join(p['file'] for p in index['photos'][:4])}{' ...' if len(index['photos']) > 4 else ''})")
-    for sk in summ["skipped"]:
-        _print(f"  skipped {sk['file']}: {sk['reason']}")
-    _print(f"total: {summ['videos']} video(s), {summ['usable_shots']} usable shots ({summ['usable_seconds']:.0f}s), {summ['photos']} photo(s)")
-    ratio = float(s.get("footage.ratio", 0.8))
-    if not summ["usable_shots"] and not summ["photos"]:
-        _print("the library is empty: run `python -m gta_factory footage fetch` (official trailers) or `footage add <folder>`")
-    else:
-        _print(f"new videos will show real footage on ~{ratio:.0%} of the running time (footage.ratio in config.yaml)")
+    _footage_listing(s, index)
     return 0
 
 
@@ -514,15 +653,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--provider", help="kokoro | elevenlabs | openai")
     sp.set_defaults(fn=cmd_voices)
 
-    sp = sub.add_parser("footage", help="real GTA 6 footage: fetch official trailers, add screenshots, list the library")
-    sp.add_argument("action", choices=("fetch", "add", "stills", "list"), nargs="?", default="list")
-    sp.add_argument("paths", nargs="*", help="fetch: video URLs (default: footage.sources); add: files or folders")
-    sp.add_argument("--tags", help="add: comma-separated tags for the added files (e.g. lucia,beach)")
+    sp = sub.add_parser("footage", help="real GTA 6 footage: add new footage, tag it, see what the narration will show")
+    sp.add_argument("action", choices=("list", "update", "add", "tag", "autotag", "find", "concepts", "remove", "fetch", "stills"), nargs="?", default="list",
+                    help="update: official trailers + any NEW official GTA VI video; add: files, folders or URLs; tag: set what a file shows; "
+                         "autotag: let the local vision model tag everything; find: what a sentence would show; concepts: what the narration can call for")
+    sp.add_argument("paths", nargs="*", help="add: files, folders or URLs; fetch/update: video URLs; tag/remove: a file name; find: a sentence")
+    sp.add_argument("--tags", help="comma-separated tags, e.g. lucia,beach (characters, places, anything you will say in a video)")
+    sp.add_argument("--at", help="tag: only this part of a video, START-END in seconds (e.g. 12-19.5)")
+    sp.add_argument("--remove", help="tag: comma-separated tags to take off")
+    sp.add_argument("--clear", action="store_true", help="tag: replace the existing tags instead of adding to them")
     sp.add_argument("--credit", help="add: on-screen credit (default: footage.credit)")
-    sp.add_argument("--max-height", type=int, default=1080, help="fetch: max video height (default 1080)")
-    sp.add_argument("--stills", type=int, default=12, help="stills per trailer pulled into photos/ (default 12)")
-    sp.add_argument("--no-stills", action="store_true", help="fetch: do not pull stills from the trailers")
+    sp.add_argument("--max-height", type=int, default=1080, help="fetch/update: max video height (default 1080)")
+    sp.add_argument("--stills", type=int, default=12, help="stills per video pulled into photos/ (default 12)")
+    sp.add_argument("--no-stills", action="store_true", help="do not pull stills from new videos")
+    sp.add_argument("--no-new", action="store_true", help="update: do not look for new official videos")
+    sp.add_argument("--no-autotag", action="store_true", help="do not run the vision tagger on new footage")
+    sp.add_argument("--force", action="store_true", help="autotag: look again at footage already tagged")
+    sp.add_argument("--limit", type=int, help="autotag: at most this many shots/photos")
+    sp.add_argument("--model", help="autotag: Ollama vision model (default footage.vision_model)")
     sp.add_argument("--reindex", action="store_true", help="re-detect the shots of every video")
+    sp.add_argument("-y", "--yes", action="store_true", help="remove: do not ask for confirmation")
     sp.set_defaults(fn=cmd_footage)
 
     sp = sub.add_parser("competitors", help="refresh the competitor reference database from public channel metadata")

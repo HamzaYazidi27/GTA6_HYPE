@@ -397,14 +397,14 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
         review["assets"] = footage["ledger"] + review["assets"]
         review["credits"] = sorted(set(review["credits"]) | {e["attribution"] for e in footage["ledger"] if e.get("attribution")})
         review["decisions"] += [{"scene_number": sc["scene_number"], "outcome": f"gta6_{sc['footage']['kind']}", "asset_ids": sc["footage"]["asset_ids"]} for sc in scenes if sc.get("footage")]
-        review["summary"] += f" Real GTA 6 footage on {footage['summary']['share']:.0%} of the narration."
+        review["summary"] += f" Real GTA 6 footage on {footage['summary']['share']:.0%} of the narration ({len(footage['summary'].get('matched') or [])} spoken mention(s) shown)."
     review["footage"] = footage["summary"]
     write_json(ctx.paths.scenes, scenes)  # b-roll scenes may have been resolved or converted, footage assigned
     write_json(ctx.paths.rights, review)
     for a in review["assets"] + review["rejected"]:
         ctx.db.upsert_asset(ctx.job_id, a)
     ctx.log(f"rights: {review['summary']}")
-    return {"verdict": review["verdict"], "summary": review["summary"], "footage_share": footage["summary"].get("share", 0.0)}
+    return {"verdict": review["verdict"], "summary": review["summary"], "footage_share": footage["summary"].get("share", 0.0), "footage_matches": len(footage["summary"].get("matched") or [])}
 
 
 def step_voice(ctx: JobContext) -> dict[str, Any]:
@@ -430,7 +430,7 @@ def step_timeline(ctx: JobContext) -> dict[str, Any]:
     from ...modules.subtitles.align import align_scene, build_captions, to_srt, to_vtt
     from ...modules.footage.select import cut_scene_clips
     from ...modules.video_editing.render import stage_footage, stage_media
-    from ...modules.video_editing.timeline import build_render_props
+    from ...modules.video_editing.timeline import build_render_props, scene_local_words
     from ...modules.voice_generation.engine import build_timeline
 
     s = ctx.settings
@@ -461,7 +461,8 @@ def step_timeline(ctx: JobContext) -> dict[str, Any]:
     script = ctx.need(ctx.paths.script)
     if any(sc.get("footage") for sc in scenes):
         prof = s.video_profile(ctx.fmt)
-        cut_scene_clips(s, scenes, {n: p["duration_frames"] / fps for n, p in placed.items()}, out_dir=ctx.paths.media, width=int(prof["width"]), height=int(prof["height"]), fps=fps, log=ctx.log)
+        local_words = {n: scene_local_words(al["words"], placed[n]["voice_offset"]) for n, al in alignments.items()}
+        cut_scene_clips(s, scenes, {n: p["duration_frames"] / fps for n, p in placed.items()}, out_dir=ctx.paths.media, width=int(prof["width"]), height=int(prof["height"]), fps=fps, words=local_words, log=ctx.log)
         write_json(ctx.paths.scenes, scenes)
     media = stage_media(s, ctx.job_id, scenes)
     footage = stage_footage(s, ctx.job_id, scenes)
@@ -615,10 +616,18 @@ def _footage_point(ctx: JobContext) -> str:
     fo = (read_json(ctx.paths.rights, {}) or {}).get("footage") or {}
     if not fo.get("share"):
         return ""
-    return (
+    point = (
         f"\n- [ ] Images réelles de GTA 6 sur {fo['share']:.0%} de la vidéo ({fo.get('video_scenes', 0)} scènes trailer, {fo.get('photo_scenes', 0)} screenshots) :"
         " vérifier qu'aucun plan ne contredit la narration. Une revendication Content ID de Rockstar/Take-Two est possible après l'upload (regarder l'onglet Droits d'auteur dans YouTube Studio)."
     )
+    matched = fo.get("matched") or []
+    if matched:
+        lines = [f"    - scène {m['scene']} : « {m['said']} » → `{m['file']}`" + (f" à {m['at']:.1f}s" if m.get("at") is not None else "") for m in matched[:40]]
+        point += f"\n- [ ] Ce qui est dit est montré ({len(matched)} passages) : vérifier que chaque image montre bien ce qui est dit (sinon corrige ses tags avec `python -m gta_factory footage tag`).\n" + "\n".join(lines)
+    missing = sorted({m["said"] for m in fo.get("missing") or []})
+    if missing:
+        point += "\n- [ ] Dit dans la vidéo mais absent de la bibliothèque (une image au hasard a été montrée) : " + ", ".join(f"« {x} »" for x in missing[:20]) + ". Ajoute des images avec `python -m gta_factory footage add <fichier ou URL> --tags ...`."
+    return point
 
 
 def step_package(ctx: JobContext) -> dict[str, Any]:

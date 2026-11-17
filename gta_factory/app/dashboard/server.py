@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
 import subprocess
 import sys
@@ -24,12 +25,14 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ..core.errors import FactoryError
-from ..core.utils import read_json, write_json
+from ..core.utils import now_iso, read_json, sha1, write_json
 from ..database.db import get_db
 
 HERE = Path(__file__).parent
 JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-]{0,80}$")
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]", "::1"}
+UPLOAD_MAX = 8 * 1024**3  # one trailer can be big
+_FOOTAGE_TASKS: dict[int, subprocess.Popen] = {}
 
 
 def spawn_runner(settings: Any, job_id: str, *, from_step: str | None = None, force: bool = False) -> None:
@@ -40,6 +43,85 @@ def spawn_runner(settings: Any, job_id: str, *, from_step: str | None = None, fo
         cmd.append("--force")
     out = open(settings.jobs_dir / job_id / "pipeline.out", "ab")
     subprocess.Popen(cmd, cwd=str(settings.root), stdout=out, stderr=out, start_new_session=True)
+
+
+# --------------------------------------------------------------------------- footage library
+def _pid_alive(pid: int) -> bool:
+    proc = _FOOTAGE_TASKS.get(pid)
+    if proc is not None:
+        return proc.poll() is None
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def footage_task(settings: Any) -> dict[str, Any]:
+    from ...modules.footage.library import footage_dir
+
+    root = footage_dir(settings)
+    info = read_json(root / ".task.json", {}) or {}
+    log = root / ".task.log"
+    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()[-60:] if log.exists() else []
+    return {"running": bool(info.get("pid")) and _pid_alive(int(info["pid"])), "args": info.get("args") or [], "started": info.get("started"), "log": lines}
+
+
+def spawn_footage_task(settings: Any, args: list[str]) -> None:
+    """Run ``python -m gta_factory footage <args>`` in the background (one at a time), logging to .task.log."""
+    from ...modules.footage.library import footage_dir
+
+    if footage_task(settings)["running"]:
+        raise FactoryError("A footage task is already running.", hint="Wait for it to finish (its log is shown on the Footage page).")
+    root = footage_dir(settings)
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / ".task.log", "wb") as out:
+        proc = subprocess.Popen([sys.executable, "-m", "gta_factory", "footage", *args], cwd=str(settings.root), stdout=out, stderr=out, start_new_session=True)
+    _FOOTAGE_TASKS[proc.pid] = proc
+    write_json(root / ".task.json", {"pid": proc.pid, "args": args, "started": now_iso()})
+
+
+def footage_payload(settings: Any) -> dict[str, Any]:
+    from collections import Counter
+    from urllib.parse import quote
+
+    from ...modules.footage import library as lib
+    from ...modules.footage.select import ratio_band
+
+    index = lib.build_index(settings)
+    items = lib.load_items(settings, index)
+    videos = []
+    for v in index["videos"]:
+        its = [it for it in items["shots"] if it["file"] == v["file"]]
+        seen = Counter(tag for it in its for tag in it["tags"] if tag not in v["tags"])
+        videos.append({
+            "file": v["file"],
+            "duration": round(v.get("duration", 0), 1),
+            "shots": len(its),
+            "tagged": sum(1 for it in its if set(it["tags"]) - set(v["tags"])),  # shots with tags of their own
+            "tags": v["tags"],
+            "seen": [f"{tag} ({n})" for tag, n in seen.most_common(14)],
+            "segments": [s for s in (v.get("sidecar") or {}).get("segments") or [] if isinstance(s, dict)],
+            "poster": "/api/footage/poster?file=" + quote(v["file"]),
+        })
+    photos = [{"file": p["file"], "tags": p["tags"], "auto": sorted(tag for tag in it["tags"] if tag not in p["tags"]), "url": "/footage-files/" + quote(p["file"])} for p, it in zip(index["photos"], items["photos"])]
+    ratio, lo, hi = ratio_band(settings)
+    vision = None
+    if settings.get("footage.auto_tag", True):
+        from ...modules.footage.autotag import pending, vision_status
+
+        ready, detail = vision_status(settings)
+        vision = {"ready": ready, "detail": detail, "pending": len(pending(settings, index)) if (videos or photos) else 0}
+    return {
+        "dir": str(lib.footage_dir(settings)),
+        "summary": lib.library_summary(index),
+        "videos": videos,
+        "photos": photos,
+        "concepts": lib.concept_coverage(settings, items),
+        "ratio": {"target": ratio, "min": lo, "max": hi},
+        "vision": vision,
+        "task": footage_task(settings),
+    }
 
 
 def job_payload(settings: Any, job_id: str) -> dict[str, Any] | None:
@@ -182,6 +264,69 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._serve_file(target)
 
+    def _footage_file(self, rel: str) -> Path:
+        from ...modules.footage.library import footage_dir
+
+        base = footage_dir(self.settings).resolve()
+        target = (base / unquote(rel)).resolve()
+        if not str(target).startswith(str(base) + "/"):
+            raise FactoryError("outside the footage library")
+        return target
+
+    def _poster(self, rel: str) -> None:
+        from ...modules.footage.library import footage_dir
+
+        src = self._footage_file(rel)
+        if not src.is_file():
+            self._error(HTTPStatus.NOT_FOUND, "file not found")
+            return
+        out = footage_dir(self.settings) / ".posters" / f"{sha1(rel + str(src.stat().st_size))[:16]}.jpg"
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            dur = 0.0
+            try:
+                dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(src)], capture_output=True, text=True, timeout=30).stdout.strip() or 0)
+            except (ValueError, subprocess.SubprocessError, OSError):
+                pass
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{dur * 0.3:.2f}", "-i", str(src), "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4", str(out)], capture_output=True, timeout=60)
+        self._serve_file(out)
+
+    def _upload(self, query: dict[str, list[str]]) -> None:
+        """Raw request body = one file. ``?name=<file name>&tags=lucia,beach``."""
+        from ...modules.footage import library as lib
+
+        name = re.sub(r"[^\w.\- ()\[\]]+", "_", Path(unquote((query.get("name") or [""])[0])).name).strip(" .")[:150]
+        ext = Path(name).suffix.lower()
+        if not name or ext not in lib.VIDEO_EXT | lib.PHOTO_EXT:
+            raise FactoryError("Only videos (mp4 mov webm mkv m4v) and pictures (jpg png webp) can be added.")
+        size = int(self.headers.get("Content-Length") or 0)
+        if size <= 0 or size > UPLOAD_MAX:
+            raise FactoryError("Empty or too large file (max 8 GB).")
+        folder = lib.footage_dir(self.settings) / ("videos" if ext in lib.VIDEO_EXT else "photos")
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / name
+        k = 2
+        while dest.exists():
+            dest = folder / f"{Path(name).stem} ({k}){ext}"
+            k += 1
+        tmp = folder / f".{dest.name}.part"  # hidden while it uploads: the indexer skips it
+        left = size
+        with tmp.open("wb") as fh:
+            while left > 0:
+                chunk = self.rfile.read(min(1 << 20, left))
+                if not chunk:
+                    break
+                fh.write(chunk)
+                left -= len(chunk)
+        if left:
+            tmp.unlink(missing_ok=True)
+            raise FactoryError("The upload was interrupted.")
+        tmp.rename(dest)
+        tags = [x for x in (query.get("tags") or [""])[0].split(",") if x.strip()]
+        if tags:
+            lib.set_tags(self.settings, dest, add=tags)
+        self._json({"file": dest.relative_to(lib.footage_dir(self.settings)).as_posix()}, 201)
+
     # ------------------------------------------------------------------ routes
     def do_HEAD(self) -> None:
         self.do_GET()
@@ -208,6 +353,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"lines": lines})
             elif parts[0] == "files":
                 self._file_route(parts)
+            elif parts == ["api", "footage"]:
+                self._json(footage_payload(s))
+            elif parts == ["api", "footage", "task"]:
+                self._json(footage_task(s))
+            elif parts == ["api", "footage", "poster"]:
+                self._poster((parse_qs(url.query).get("file") or [""])[0])
+            elif parts[0] == "footage-files" and len(parts) > 1:
+                self._serve_file(self._footage_file("/".join(parts[1:])))
             else:
                 self._error(404, "not found")
         except FactoryError as exc:
@@ -216,10 +369,38 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._guard(True):
             return
-        parts = [p for p in urlparse(self.path).path.split("/") if p]
+        url = urlparse(self.path)
+        parts = [p for p in url.path.split("/") if p]
         s = self.settings
         try:
+            if parts == ["api", "footage", "upload"]:
+                self._upload(parse_qs(url.query))
+                return
             body = self._body()
+            if parts[:2] == ["api", "footage"] and len(parts) == 3:
+                tags = body.get("tags") or ""
+                tags = ",".join(tags) if isinstance(tags, list) else str(tags)
+                if parts[2] == "add":
+                    link = str(body.get("url") or "").strip()
+                    if not re.match(r"^https?://\S+$", link):
+                        raise FactoryError("Give a video or picture URL (http...).")
+                    spawn_footage_task(s, ["add", link] + (["--tags", tags] if tags.strip() else []))
+                elif parts[2] == "update":
+                    spawn_footage_task(s, ["update"])
+                elif parts[2] == "autotag":
+                    spawn_footage_task(s, ["autotag"])
+                elif parts[2] == "process":  # after uploads: stills from new videos, then auto-tags
+                    spawn_footage_task(s, ["stills"])
+                elif parts[2] == "find":
+                    from ...modules.footage.select import preview
+
+                    self._json({"rows": preview(s, str(body.get("text") or "")[:2000])})
+                    return
+                else:
+                    self._error(404, "not found")
+                    return
+                self._json({"ok": True, "task": footage_task(s)}, 202)
+                return
             if parts == ["api", "jobs"]:
                 from ..core.pipeline import create_job
 
@@ -265,7 +446,20 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in urlparse(self.path).path.split("/") if p]
         s = self.settings
         try:
-            if len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "script":
+            if parts == ["api", "footage", "tags"]:
+                from ...modules.footage import library as lib
+
+                body = self._body()
+                path = self._footage_file(str(body.get("file") or ""))
+                if not path.is_file():
+                    raise FactoryError("unknown footage file")
+                tags = body.get("tags") or []
+                tags = [x for x in (tags.split(",") if isinstance(tags, str) else tags) if str(x).strip()]
+                at = body.get("at")
+                at = (float(at[0]), float(at[1])) if isinstance(at, list) and len(at) == 2 else None
+                side = lib.set_tags(s, path, replace=[str(x) for x in tags], at=at)
+                self._json({"ok": True, "sidecar": side})
+            elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]) and parts[3] == "script":
                 from ...modules.script_generation.writer import render_script_markdown, word_count
 
                 root = s.jobs_dir / parts[2]
@@ -291,8 +485,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         if not self._guard(True):
             return
-        parts = [p for p in urlparse(self.path).path.split("/") if p]
-        if len(parts) == 3 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]):
+        url = urlparse(self.path)
+        parts = [p for p in url.path.split("/") if p]
+        if parts == ["api", "footage"]:
+            from ...modules.footage import library as lib
+
+            try:
+                path = self._footage_file((parse_qs(url.query).get("file") or [""])[0])
+                if not path.is_file():
+                    raise FactoryError("unknown footage file")
+                lib.remove_file(self.settings, path)
+                self._json({"ok": True})
+            except FactoryError as exc:
+                self._error(400, exc.message, exc.hint)
+        elif len(parts) == 3 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]):
             from ..core.pipeline import delete_job
 
             delete_job(self.settings, parts[2])

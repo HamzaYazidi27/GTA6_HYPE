@@ -59,11 +59,23 @@
   .muted { color:var(--mute); }
   .empty { color:var(--mute); text-align:center; padding:60px 0; }
   .qc-critical { color:var(--coral); } .qc-warning { color:var(--amber); } .qc-pass { color:var(--lime); }
+  nav { display:flex; gap:8px; }
+  nav button.on { border-color:var(--coral); color:var(--coral); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { padding:2px 9px; border-radius:99px; font-size:12px; background:var(--ink2); border:1px solid var(--line); color:var(--mute); }
+  .chip.have { color:var(--lime); border-color:rgba(46,229,157,.35); }
+  .drop { border:1px dashed var(--line); border-radius:10px; padding:16px; text-align:center; color:var(--mute); margin-bottom:8px; }
+  .drop.over { border-color:var(--cyan); color:var(--cyan); }
+  .pgrid { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:10px; }
+  .pgrid .ph { background:var(--ink2); border-radius:10px; padding:6px; border:1px solid var(--line); }
+  .pgrid img, td img { width:100%; border-radius:6px; display:block; aspect-ratio:16/9; object-fit:cover; background:#000; }
+  .pgrid .fn { font-size:11px; color:var(--mute); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:4px 0; }
+  .auto { font-size:11px; color:var(--violet); }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { position:static; max-height:none; } .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<header><h1>NEON <span>DISPATCH</span> · USINE GTA 6</h1><div class="counts" id="counts"></div></header>
+<header><h1>NEON <span>DISPATCH</span> · USINE GTA 6</h1><nav><button class="ghost small" id="nav-footage">Footage GTA 6</button></nav><div class="counts" id="counts"></div></header>
 <main>
   <aside>
     <div class="card">
@@ -190,6 +202,7 @@ function qcCard(qc) {
 async function openJob(id) {
   current = id;
   clearTimeout(timer);
+  $('#nav-footage').classList.remove('on');
   let d;
   try { d = await api('GET', '/api/jobs/' + id); } catch (e) { $('#detail').replaceChildren(el('div', {class: 'err'}, e.message)); return; }
   const log = await api('GET', `/api/jobs/${id}/log?lines=120`).catch(() => ({lines: []}));
@@ -209,6 +222,104 @@ async function act(fn) {
   if (current) setTimeout(() => openJob(current), 600); else loadJobs();
 }
 
+// ------------------------------------------------------------------ footage library
+const pct = (x) => Math.round(x * 100) + ' %';
+const tagText = (a) => (a || []).map((x) => x.replace(/_/g, ' ')).join(', ');
+function tagEditor(file, tags, extra) {
+  const inp = el('input', {value: tagText(tags), placeholder: 'tags : lucia, vice city, police…'});
+  const ok = el('button', {class: 'ghost small', onclick: () => footAct(() => api('PUT', '/api/footage/tags', {file, tags: inp.value.split(',')}))}, 'OK');
+  return el('div', {class: 'row', style: 'flex-wrap:nowrap'}, inp, ok, extra || null);
+}
+function delBtn(file) {
+  return el('button', {class: 'ghost small', title: 'retirer de la bibliothèque', onclick: () => { if (confirm('Retirer ' + file + ' de la bibliothèque ?')) footAct(() => api('DELETE', '/api/footage?file=' + encodeURIComponent(file))); }}, '✕');
+}
+async function footAct(fn) {
+  try { await fn(); } catch (e) { alert(e.message); }
+  setTimeout(openFootage, 300);
+}
+async function uploadFiles(list, tags, msg) {
+  let n = 0;
+  for (const f of list) {
+    n += 1; msg.textContent = `envoi ${n}/${list.length} : ${f.name}…`;
+    const r = await fetch('/api/footage/upload?name=' + encodeURIComponent(f.name) + '&tags=' + encodeURIComponent(tags), {method: 'POST', headers: {'X-Factory': '1'}, body: f});
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(f.name + ' : ' + (d.error || r.statusText)); }
+  }
+  msg.textContent = `${n} fichier(s) ajouté(s)`;
+  await api('POST', '/api/footage/process', {}).catch(() => null);  // stills + auto tags in the background
+}
+
+async function openFootage() {
+  current = null; clearTimeout(timer);
+  $('#nav-footage').classList.add('on');
+  document.querySelectorAll('.job.active').forEach((x) => x.classList.remove('active'));
+  let d;
+  try { d = await api('GET', '/api/footage'); } catch (e) { $('#detail').replaceChildren(el('div', {class: 'err'}, e.message)); return; }
+  const s = d.summary;
+  const view = el('div', {}, el('h2', {style: 'margin:0 0 14px;font:800 26px/1.1 "Barlow Condensed",sans-serif'}, 'Footage GTA 6'));
+  const running = d.task.running;
+  view.append(el('div', {class: 'card'}, el('h2', {}, 'Bibliothèque'),
+    el('p', {}, `${s.videos} vidéo(s) · ${s.usable_shots} plans utilisables (${Math.round(s.usable_seconds)} s) · ${s.photos} photo(s)`),
+    el('p', {class: 'muted'}, `Chaque vidéo produite montre de vraies images de GTA 6 sur ${pct(d.ratio.min)} à ${pct(d.ratio.max)} du temps. Quand la narration dit quelque chose que la bibliothèque a (Lucia, Vice City, la police, un alligator…), c'est cette image qui passe, au moment où c'est dit ; sinon n'importe quelle image du jeu.`),
+    d.vision ? el('p', {class: d.vision.ready ? 'muted' : 'qc-warning'}, 'Tagger automatique : ' + d.vision.detail + (d.vision.pending ? ` · ${d.vision.pending} plan(s)/photo(s) à tagger` : '')) : null,
+    el('div', {class: 'row'},
+      el('button', {disabled: running, onclick: () => footAct(() => api('POST', '/api/footage/update', {}))}, 'Chercher les nouveaux trailers officiels'),
+      el('button', {class: 'ghost', disabled: running || !(d.vision && d.vision.ready), onclick: () => footAct(() => api('POST', '/api/footage/autotag', {}))}, 'Tagger automatiquement')),
+    d.task.log.length ? el('pre', {class: 'log', style: 'margin-top:10px'}, (running ? '… en cours : footage ' + d.task.args.join(' ') + '\n' : '') + d.task.log.join('\n')) : null));
+
+  const files = el('input', {type: 'file', multiple: true, accept: 'video/*,image/*'});
+  const ftags = el('input', {placeholder: 'tags de ces fichiers (ex. lucia, beach, vice city) - optionnel'});
+  const fmsg = el('span', {class: 'muted'});
+  const drop = el('div', {class: 'drop'}, 'Glisse ici des vidéos (trailers, gameplay) ou des screenshots de GTA 6, ou ', files);
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); footAct(() => uploadFiles([...e.dataTransfer.files], ftags.value, fmsg)); });
+  const link = el('input', {placeholder: "URL d'une vidéo (YouTube, X…) ou d'une image"});
+  const ltags = el('input', {placeholder: 'tags (optionnel)'});
+  view.append(el('div', {class: 'card'}, el('h2', {}, 'Ajouter du footage (nouveau trailer, gameplay, screenshots…)'), drop, ftags,
+    el('div', {class: 'row', style: 'margin-top:8px'}, el('button', {onclick: () => footAct(() => { if (!files.files.length) throw new Error('Choisis au moins un fichier'); return uploadFiles([...files.files], ftags.value, fmsg); })}, 'Envoyer'), fmsg),
+    el('div', {class: 'row', style: 'margin-top:14px;flex-wrap:nowrap'}, link, ltags, el('button', {class: 'ghost', disabled: running, onclick: () => footAct(() => api('POST', '/api/footage/add', {url: link.value, tags: ltags.value}))}, 'Télécharger'))));
+
+  const q = el('input', {placeholder: 'une phrase de narration, ex. « Lucia échappe à la police à Vice City »'});
+  const out = el('div', {style: 'margin-top:8px'});
+  const find = async () => {
+    const r = await api('POST', '/api/footage/find', {text: q.value});
+    out.replaceChildren(...(r.rows.length ? r.rows.map((x) => el('div', {style: 'margin-bottom:6px'}, el('b', {}, '« ' + x.said + ' » '), x.matches ? el('span', {class: 'qc-pass'}, x.matches + ' image(s)') : el('span', {class: 'qc-warning'}, 'rien dans la bibliothèque - ajoute du footage avec le tag ' + x.concepts[0]),
+      ...x.best.map((b) => el('div', {class: 'muted', style: 'font-size:12px'}, '→ ' + b.file + '  [' + tagText(b.tags.slice(0, 8)) + ']')))) : [el('div', {class: 'muted'}, 'Rien de précis dans cette phrase : n\'importe quelle image du jeu sera montrée.')]));
+  };
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') find().catch((err) => alert(err.message)); });
+  view.append(el('div', {class: 'card'}, el('h2', {}, 'Tester : ce que montrera une phrase'), el('div', {class: 'row', style: 'flex-wrap:nowrap'}, q, el('button', {class: 'ghost', onclick: () => find().catch((err) => alert(err.message))}, 'Tester')), out));
+
+  view.append(el('div', {class: 'card'}, el('h2', {}, 'Ce que la narration peut appeler'),
+    el('p', {class: 'muted'}, 'En vert : la bibliothèque a des images. Ajoute tes propres personnages, lieux, véhicules… dans knowledge/footage_tags.yaml, ou mets simplement le tag sur un fichier.'),
+    el('div', {class: 'chips'}, d.concepts.map((c) => el('span', {class: 'chip' + (c.shots + c.photos ? ' have' : ''), title: 'dit : ' + c.say.join(', ')}, c.concept.replace(/_/g, ' ') + (c.shots + c.photos ? ' · ' + (c.shots + c.photos) : ''))))));
+
+  if (d.videos.length) {
+    view.append(el('div', {class: 'card'}, el('h2', {}, `Vidéos (${d.videos.length})`),
+      el('table', {}, el('tbody', {}, d.videos.map((v) => {
+        const a = el('input', {placeholder: 'début s', style: 'width:70px'}), b = el('input', {placeholder: 'fin s', style: 'width:70px'}), tg = el('input', {placeholder: 'tags de ce passage'});
+        return el('tr', {},
+          el('td', {style: 'width:170px'}, el('img', {src: v.poster, alt: '', loading: 'lazy'})),
+          el('td', {}, el('div', {}, el('b', {}, v.file), ' ', delBtn(v.file)),
+            el('div', {class: 'muted'}, `${Math.round(v.duration)} s · ${v.shots} plans · ${v.tagged} tagués`),
+            tagEditor(v.file, v.tags),
+            v.seen.length ? el('div', {class: 'auto'}, 'vu dans les plans : ' + v.seen.join(', ')) : null,
+            v.segments.length ? el('div', {class: 'muted', style: 'font-size:12px'}, 'passages : ' + v.segments.map((x) => `${x.start}-${x.end}s ${tagText(x.tags)}`).join(' · ')) : null,
+            el('div', {class: 'row', style: 'margin-top:4px;flex-wrap:nowrap'}, a, b, tg, el('button', {class: 'ghost small', onclick: () => footAct(() => api('PUT', '/api/footage/tags', {file: v.file, tags: tg.value.split(','), at: [parseFloat(a.value), parseFloat(b.value)]}))}, 'Tagger le passage'))));
+      })))));
+  }
+  if (d.photos.length) {
+    view.append(el('div', {class: 'card'}, el('h2', {}, `Photos (${d.photos.length})`),
+      el('div', {class: 'pgrid'}, d.photos.map((p) => el('div', {class: 'ph'},
+        el('a', {href: p.url, target: '_blank'}, el('img', {src: p.url, alt: '', loading: 'lazy'})),
+        el('div', {class: 'fn', title: p.file}, p.file),
+        tagEditor(p.file, p.tags, delBtn(p.file)),
+        p.auto.length ? el('div', {class: 'auto'}, 'vu : ' + tagText(p.auto)) : null)))));
+  }
+  const focused = document.activeElement && document.activeElement.closest('#detail');
+  if (!(focused && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName))) $('#detail').replaceChildren(view);
+  if (running) timer = setTimeout(() => { if (!current) openFootage(); }, 3000);
+}
+$('#nav-footage').addEventListener('click', () => openFootage());
 $('#go').addEventListener('click', () => act(async () => {
   const urls = $('#urls').value.split(/\s+/).filter((u) => /^https?:\/\//.test(u));
   if (!urls.length) throw new Error("Colle au moins une URL d'article (http…)");

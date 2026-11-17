@@ -167,6 +167,12 @@ def run_qc(
     # --- rights
     pending = [a for a in rights.get("assets", []) if a.get("review_status") == "needs_human_review"]
     r.add("rights.cleared", "critical", not pending, "Every asset has a documented licence." if not pending else f"{len(pending)} asset(s) need a human rights review: " + ", ".join(a["asset_id"] for a in pending), assets=[a["asset_id"] for a in pending])
+    fo = rights.get("footage") or {}
+    lib = fo.get("library") or {}
+    if fo.get("enabled") and (lib.get("usable_shots") or lib.get("photos")):
+        covered = sum(sc["durationFrames"] for sc in props.get("scenes", []) if sc.get("footage")) / max(1, int(props.get("totalFrames") or 1))
+        lo, hi = float(fo.get("ratio_min", 0.8)), float(fo.get("ratio_max", 0.9))
+        r.add("footage.share", "warning", lo - 0.03 <= covered <= hi + 0.03, f"Real GTA 6 footage on {covered:.0%} of the video (target {lo:.0%}-{hi:.0%}).", matched=len(fo.get("matched") or []))
 
     # --- storyboard rhythm (from the render props)
     scenes = props.get("scenes", [])
