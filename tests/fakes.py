@@ -37,7 +37,7 @@ CLAIMS = [
 ]
 
 NARRATION = {
-    "hook": "Pre-orders for Grand Theft Auto VI open on December 4, and Rockstar Games has now put that date in writing for every platform.",
+    "hook": "Pre-orders for Grand Theft Auto VI open on December 4, and Rockstar Games has put that date in writing for every platform.",
     "story": "Rockstar Games says the game launches on November 19, 2026, on PlayStation 5 and Xbox Series X|S. The studio also says a third trailer is planned before launch. Some fans speculate that a PC version could follow later, but that is only speculation for now.",
     "payoff": "For players, the plan is simple. Mark December 4 for pre-orders, and expect one more trailer before launch day.",
     "cta": "Will you pre-order on day one, or wait for the third trailer?",

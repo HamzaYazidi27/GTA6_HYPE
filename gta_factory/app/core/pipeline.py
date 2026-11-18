@@ -214,9 +214,7 @@ class JobContext:
     def tts(self):
         from ...providers.tts import get_tts
 
-        vertical = self.settings.format(self.fmt).get("aspect") == "9:16"
-        factor = float(self.settings.get("audio.short_voice_speed_factor", 1.06)) if vertical else 1.0
-        return get_tts(self.settings, self.tts_name, self.options.get("voice"), speed_factor=factor)
+        return get_tts(self.settings, self.tts_name, self.options.get("voice"), speed_factor=self.settings.rhythm(self.fmt)["voice_speed_factor"])
 
     def save_llm_usage(self) -> None:
         """Append this run's model calls to ``llm_usage.json`` (kept across resumes)."""
@@ -624,6 +622,7 @@ def step_voice(ctx: JobContext) -> dict[str, Any]:
         audio_dir=ctx.paths.audio,
         force_scenes=force or None,
         progress=lambda done, total, msg: ctx.progress(done / total, f"voice {done}/{total}: {msg}"),
+        vertical=ctx.settings.format(ctx.fmt).get("aspect") == "9:16",
     )
     write_json(ctx.paths.voice_manifest, voice)
     total = sum(m["duration"] for m in voice["scenes"])

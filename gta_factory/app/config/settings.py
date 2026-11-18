@@ -74,6 +74,13 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# used when a config file has no `rhythm` section (the values of defaults.yaml)
+RHYTHM_FALLBACK: dict[str, dict[str, float]] = {
+    "long": {"target_scene_seconds": 6, "max_scene_seconds": 9, "scene_gap_seconds": 0.18, "sentence_pause_seconds": 0.2, "tail_seconds": 1.0, "outro_seconds": 5.5, "voice_speed_factor": 1.03, "max_sentence_words": 30, "cta_max_words": 25},
+    "short": {"target_scene_seconds": 3.5, "max_scene_seconds": 6, "scene_gap_seconds": 0.12, "sentence_pause_seconds": 0.14, "tail_seconds": 0.6, "outro_seconds": 3.0, "voice_speed_factor": 1.06, "max_sentence_words": 22, "cta_max_words": 14},
+}
+
+
 class Settings:
     """Read-only view over the merged configuration with dotted-path access."""
 
@@ -125,6 +132,13 @@ class Settings:
     def video_profile(self, fmt: str) -> dict[str, Any]:
         key = "short" if self.format(fmt).get("aspect") == "9:16" else "long"
         return self.get(f"video.{key}")
+
+    def rhythm(self, fmt: str | None = None, *, vertical: bool | None = None) -> dict[str, float]:
+        """The timing profile of a video: ``rhythm.short`` for every 9:16 video, ``rhythm.long`` for every 16:9 one."""
+        if vertical is None:
+            vertical = bool(fmt) and fmt in (self.get("formats", {}) or {}) and self.format(fmt).get("aspect") == "9:16"
+        key = "short" if vertical else "long"
+        return {**RHYTHM_FALLBACK[key], **{k: float(v) for k, v in (self.get(f"rhythm.{key}") or {}).items()}}
 
     def source_tier(self, domain: str) -> str:
         d = (domain or "").lower().removeprefix("www.")

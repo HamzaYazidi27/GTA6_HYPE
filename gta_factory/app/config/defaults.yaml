@@ -140,16 +140,39 @@ formats:
 
 script:
   words_per_minute: 165            # used to turn a target duration into a word budget; re-measured after TTS
-  max_scene_seconds: 14            # hard ceiling for one visual scene in long-form
-  target_scene_seconds: 8
-  short_target_scene_seconds: 4
-  short_max_scene_seconds: 6        # a Short never holds one card or picture longer than this (long-form: max_scene_seconds)
 
 novelty:
   duplicate_threshold: 0.72        # claim overlap above this = same story
   update_threshold: 0.35           # between update and duplicate = "update" video about the delta only
   min_score_to_produce: 45         # NEWS NOVELTY SCORE (0-100) below this stops the job unless --force
   stale_after_days: 10             # publication older than this is flagged as possibly old news
+
+# ---------------------------------------------------------------------------
+# Rhythm of EVERY video: how long a picture stays, how the voice breathes, how it ends.
+# "long" applies to every 16:9 video (news, breaking, recap, guide, analysis, details, comparisons, top lists),
+# "short" to every 9:16 video (news Shorts, details Shorts, topic Shorts).
+# ---------------------------------------------------------------------------
+rhythm:
+  long:
+    target_scene_seconds: 6        # a new picture or graphic every ~6 s on average
+    max_scene_seconds: 9           # one card / picture never stays longer than this (longer passages are split)
+    scene_gap_seconds: 0.18        # breath between two scenes
+    sentence_pause_seconds: 0.2    # breath between two sentences
+    tail_seconds: 1.0              # silence after the last word
+    outro_seconds: 5.5             # end card: YouTube end screens need the last 5 s
+    voice_speed_factor: 1.03       # Kokoro reads this much faster than providers.tts.kokoro.speed
+    max_sentence_words: 30         # longer spoken sentences are rewritten (hard to follow by ear)
+    cta_max_words: 25              # the question for the comments
+  short:
+    target_scene_seconds: 3.5
+    max_scene_seconds: 6
+    scene_gap_seconds: 0.12
+    sentence_pause_seconds: 0.14
+    tail_seconds: 0.6
+    outro_seconds: 3.0             # a long silent end card is where Shorts viewers swipe away
+    voice_speed_factor: 1.06
+    max_sentence_words: 22
+    cta_max_words: 14
 
 # ---------------------------------------------------------------------------
 # Rendering
@@ -175,12 +198,6 @@ audio:
   music_gain_db: -19.0             # bed level under narration
   music_duck_db: -9.0              # extra reduction while the voice is speaking (sidechain)
   sfx_gain_db: -9.0
-  scene_gap_seconds: 0.28          # breath between scenes
-  short_scene_gap_seconds: 0.12    # Shorts: shorter breaths keep the voice moving
-  short_tail_seconds: 0.6          # Shorts: silence after the last word
-  short_outro_seconds: 3.0         # Shorts: the end card ("your call") stays this long at least (long-form: 5.5 s)
-  short_voice_speed_factor: 1.06   # Shorts: Kokoro reads this much faster than providers.tts.kokoro.speed
-  sentence_pause_seconds: 0.24     # breath between two sentences read separately (a bit more after ? and !)
   synthesis: "auto"                # auto: premium voices read a whole scene at once (natural melody), Kokoro sentence by sentence; or scene / sentence
   music_mood: "pulse"              # pulse | tension | drive  (original generated beds in assets/music)
 
@@ -255,7 +272,6 @@ topic:
   intro_seconds_long: 50           # hook + verdict + closing question
   intro_seconds_short: 12
   max_articles: 8                  # sources read: yours (--source) plus the best ones the news search finds
-  scene_words: 24                  # about one picture change per this many spoken words
 
 # Games a comparison can put next to GTA 6. Each one has its own footage library (official trailers
 # and your own gameplay captures: `python -m gta_factory footage update --game rdr2`) and a facts file.

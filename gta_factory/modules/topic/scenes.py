@@ -75,8 +75,9 @@ def build_topic_scenes(settings: Any, script: dict[str, Any], *, fmt: str, facts
     prof = settings.video_profile(fmt)
     panels = compare_panels(int(prof["width"]), int(prof["height"]))
     wpm = float(settings.get("script.words_per_minute", 165))
-    target = int(settings.get("topic.scene_words", 24)) if not vertical else 14
-    cap = int(float(settings.get("script.max_scene_seconds", 14)) * wpm / 60)
+    rh = settings.rhythm(vertical=vertical)
+    target = int(round(rh["target_scene_seconds"] * wpm / 60))  # one picture change per this many words (rhythm.*)
+    cap = max(target, int(rh["max_scene_seconds"] * wpm / 60))
     style = script.get("style") or "list"
     main = game(settings, "gta6")
     other = game(settings, script["vs"]) if style == "versus" and script.get("vs") else None

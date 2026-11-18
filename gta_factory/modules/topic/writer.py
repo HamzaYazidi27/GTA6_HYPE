@@ -137,6 +137,7 @@ def write_topic_script(
 ) -> dict[str, Any]:
     style = outline["style"]
     oname = (other or {}).get("short", "")
+    rh = settings.rhythm(fmt)
     wpm = float(settings.get("script.words_per_minute", 165))
     b = budgets(settings, fmt, len(outline["items"]))
     natural = target_seconds(settings, fmt, len(outline["items"]))
@@ -209,7 +210,7 @@ def write_topic_script(
 
     history: list[dict[str, Any]] = []
     script = call("")
-    lint = lint_script(script["sections"], combined, quotes, allowed_text, min_words=min_words, max_words=max_words)
+    lint = lint_script(script["sections"], combined, quotes, allowed_text, min_words=min_words, max_words=max_words, cta_max_words=rh["cta_max_words"], max_sentence_words=rh["max_sentence_words"])
     audit_result: dict[str, Any] = {"verdict": "skipped", "issues": []}
     for round_no in range(2):
         audit_issues: list[dict[str, Any]] = []
@@ -235,7 +236,7 @@ def write_topic_script(
             problems.append(f"- [{i.get('type')}] \"{sent[:140]}\": {i.get('detail')} Fix: {i.get('fix')}")
         previous = "\n".join(f"[{s['id']}] {s['narration']}" for s in script["sections"])
         script = call("\nREVISION REQUIRED. Your previous draft is below, followed by the problems the standards editor found. Rewrite the full script, fixing every problem and keeping what worked.\n\nPREVIOUS DRAFT\n" + previous + "\n\nPROBLEMS\n" + "\n".join(problems))
-        lint = lint_script(script["sections"], combined, quotes, allowed_text, min_words=min_words, max_words=max_words)
+        lint = lint_script(script["sections"], combined, quotes, allowed_text, min_words=min_words, max_words=max_words, cta_max_words=rh["cta_max_words"], max_sentence_words=rh["max_sentence_words"])
 
     by_plan = {p["id"]: p for p in plan}
     items = {it["n"]: it for it in outline["items"]}

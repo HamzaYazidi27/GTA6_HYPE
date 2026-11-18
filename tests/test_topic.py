@@ -138,9 +138,13 @@ def test_versus_job_until_timeline(topic_project):
     assert [c["data"]["n"] for c in cards] == [1, 2, 3] and cards[0]["data"]["left"]["game"] == "RED DEAD 2"
     assert cards[0]["data"]["right"]["status"] == "reported" and cards[0]["chapter_title"] == "Weapon limit"
     item1 = [sc for sc in scenes if sc.get("item") == 1]
-    # the card, then what is said about GTA 6 over GTA 6 footage, then both games side by side again
-    assert [sc["template"] for sc in item1] == ["compare", "footage", "compare"]
-    assert item1[1]["footage_game"] == "gta6" and item1[1]["status"] == "reported" and "GTA 6" in item1[1]["data"]["game"]
+    # the card, then what is said about GTA 6 over GTA 6 footage (cut every few seconds), then both games side by side again
+    t1 = [sc["template"] for sc in item1]
+    assert t1[0] == "compare" and t1[-1] == "compare" and len(t1) >= 3 and set(t1[1:-1]) == {"footage"}
+    on_gta6 = [sc for sc in item1 if sc["template"] == "footage" and sc["footage_game"] == "gta6"]
+    assert on_gta6 and on_gta6[0]["status"] == "reported" and "GTA 6" in on_gta6[0]["data"]["game"] and "IGN" in on_gta6[0]["narration"]
+    # with a scene every ~6 s, the Red Dead 2 sentence now gets its own shot of Red Dead 2 instead of staying on the card
+    assert any(sc["footage_game"] == "rdr2" and "Arthur" in sc["narration"] for sc in item1)
     rdr_scenes = [sc for sc in scenes if sc.get("footage_game") == "rdr2"]
     assert rdr_scenes and all(sc["status"] is None and sc["data"]["side"] == "other" for sc in rdr_scenes)
     assert any("bounty" in sc["narration"] for sc in rdr_scenes)

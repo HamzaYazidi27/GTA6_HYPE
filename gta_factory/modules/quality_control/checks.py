@@ -189,7 +189,7 @@ def run_qc(
         fps_p = props["fps"]
         longest = max(scenes, key=lambda s: s["durationFrames"])
         vertical = int(props.get("height") or 0) > int(props.get("width") or 0)
-        limit = float(settings.get("script.short_max_scene_seconds", 6)) + 1.5 if vertical else float(settings.get("script.max_scene_seconds", 14)) + 2.0
+        limit = settings.rhythm(vertical=vertical)["max_scene_seconds"] + (1.5 if vertical else 2.0)
         r.add("edit.scene_length", "warning", longest["durationFrames"] / fps_p <= limit, f"Longest scene: #{longest['n']} {longest['template']} {longest['durationFrames'] / fps_p:.1f}s.")
         templates = [s["template"] for s in scenes]
         r.add("edit.variety", "info", True, f"{len(set(templates))} different templates over {len(scenes)} scenes.", counts={t: templates.count(t) for t in sorted(set(templates))})

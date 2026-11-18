@@ -202,12 +202,13 @@ def generate_voiceover(
     only_scenes: set[int] | None = None,
     force_scenes: set[int] | None = None,
     progress: Callable[[int, int, str], None] = lambda done, total, msg: None,
+    vertical: bool = False,
 ) -> dict[str, Any]:
     """Create scene WAVs and the manifest. ``force_scenes`` bypasses the cache for those scene numbers."""
     tts.check()
     lexicon = load_lexicon(settings)
     whole = whole_scene(settings, tts)
-    pause = float(settings.get("audio.sentence_pause_seconds", 0.24))
+    pause = settings.rhythm(vertical=vertical)["sentence_pause_seconds"]
     cache_dir.mkdir(parents=True, exist_ok=True)
     audio_dir.mkdir(parents=True, exist_ok=True)
     manifest = []
@@ -244,12 +245,13 @@ def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str,
     """Place every scene on the master timeline and write ``final_voiceover.wav``.
 
     Scene durations are rounded to whole frames so picture and sound cannot drift.
-    A Short (``vertical``) keeps the voice moving: shorter breaths between scenes and a
-    brief end card (a long silent outro is where Shorts viewers swipe away).
+    Breaths between scenes, the silence after the last word and the end card follow the
+    video's rhythm profile (``rhythm.short`` for 9:16, ``rhythm.long`` for 16:9).
     """
-    gap = float(settings.get("audio.short_scene_gap_seconds", 0.12) if vertical else settings.get("audio.scene_gap_seconds", 0.28))
-    lead_in, tail = (0.25, float(settings.get("audio.short_tail_seconds", 0.6))) if vertical else (0.4, 1.6)
-    min_seconds = {**MIN_SCENE_SECONDS, **({"outro": float(settings.get("audio.short_outro_seconds", 3.0))} if vertical else {})}
+    rh = settings.rhythm(vertical=vertical)
+    gap, tail = rh["scene_gap_seconds"], rh["tail_seconds"]
+    lead_in = 0.25 if vertical else 0.35
+    min_seconds = {**MIN_SCENE_SECONDS, "outro": rh["outro_seconds"]}
     by_n = {m["scene_number"]: m for m in voice["scenes"]}
     total_samples = 0
     placed = []
@@ -258,7 +260,7 @@ def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str,
         m = by_n.get(sc["scene_number"])
         if m is None:
             raise ProviderError(f"No narration audio for scene {sc['scene_number']}.", hint="Re-run the voice step.")
-        offset = lead_in if idx == 0 else (0.06 if vertical else 0.12)
+        offset = lead_in if idx == 0 else min(0.1, gap / 2)
         natural = offset + m["duration"] + (tail if idx == len(scenes) - 1 else gap)
         seconds = max(natural, min_seconds.get(sc["template"], 0.0))
         frames = max(1, int(round(seconds * fps)))

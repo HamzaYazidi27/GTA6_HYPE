@@ -17,9 +17,9 @@ from ...providers.llm import LLMProvider
 SECTION_PLANS: dict[str, list[tuple[str, str, float]]] = {
     # (section id, purpose, share of the word budget)
     "long": [
-        ("hook", "Open on the single most interesting VERIFIED point OF THE MAIN STORY (never a side story). No greeting, no channel intro, no 'in this video'.", 0.08),
+        ("hook", "Open on the single most interesting VERIFIED point OF THE MAIN STORY (never a side story), in about 20 seconds. No greeting, no channel intro, no 'in this video'.", 0.05),
         ("context", "What happened and why it matters right now. Orient a viewer who missed the news.", 0.13),
-        ("story", "The main story in a logical order. One idea per sentence. Attribute every reported claim.", 0.27),
+        ("story", "The main story in a logical order. One idea per sentence. Attribute every reported claim.", 0.30),
         ("evidence", "Where the information comes from and what is actually confirmed versus reported versus rumoured.", 0.15),
         ("analysis", "Original analysis: consequences for GTA 6, comparisons, what follows logically. Mark inference as inference.", 0.18),
         ("community", "Why players should care: what changes for them in practice.", 0.09),
@@ -35,18 +35,18 @@ SECTION_PLANS: dict[str, list[tuple[str, str, float]]] = {
 }
 SECTION_PLANS["announcement"] = SECTION_PLANS["analysis"] = SECTION_PLANS["long"]
 SECTION_PLANS["breaking"] = [
-    ("hook", "The news itself, verified, in the first sentence.", 0.12),
+    ("hook", "The news itself, verified, in the first sentence. About 15 seconds.", 0.07),
     ("context", "What happened and when.", 0.16),
-    ("story", "The details with attribution.", 0.32),
+    ("story", "The details with attribution.", 0.37),
     ("evidence", "What is confirmed and what is not.", 0.16),
     ("analysis", "The immediate consequence for GTA 6 players.", 0.16),
     ("conclusion", "What to watch next.", 0.05),
     ("cta", "One natural question for the comments.", 0.03),
 ]
 SECTION_PLANS["recap"] = [
-    ("hook", "The biggest verified development of the week, stated plainly.", 0.07),
+    ("hook", "The biggest verified development of the week, stated plainly, in about 20 seconds.", 0.04),
     ("context", "How the week fits into the road to launch.", 0.08),
-    ("story", "Each story in turn, most important first, with attribution and a one-line 'why it matters'.", 0.45),
+    ("story", "Each story in turn, most important first, with attribution and a one-line 'why it matters'.", 0.48),
     ("evidence", "Scorecard: what is confirmed, reported, rumoured across the week's stories.", 0.13),
     ("analysis", "The pattern across the stories.", 0.14),
     ("community", "What players should do or watch for next week.", 0.07),
@@ -54,9 +54,9 @@ SECTION_PLANS["recap"] = [
     ("cta", "One question for the comments.", 0.02),
 ]
 SECTION_PLANS["guide"] = [
-    ("hook", "The practical promise of the guide, grounded in a verified fact.", 0.08),
+    ("hook", "The practical promise of the guide, grounded in a verified fact, in about 20 seconds.", 0.05),
     ("context", "What is known and from where, so viewers can trust the steps.", 0.12),
-    ("story", "The explanation or steps in order. Concrete and specific.", 0.40),
+    ("story", "The explanation or steps in order. Concrete and specific.", 0.43),
     ("evidence", "Which parts are confirmed and which are provisional until hands-on verification.", 0.12),
     ("analysis", "Tips, trade-offs and common misunderstandings.", 0.16),
     ("community", "Who benefits most from this.", 0.06),
@@ -74,13 +74,14 @@ BANNED_PHRASES = [
     "remains to be seen", "shaping how future", "shaping the future", "embracing new technolog", "the series' legacy", "the future of gaming",
     "a new era", "raises the bar", "sets a new standard", "exciting times ahead",
 ]
-SHORT_CTA_MAX_WORDS = 14
+
 CERTAINTY_WORDS = re.compile(r"\b(confirmed|confirms|officially|official|it's official|verified fact|100%)\b", re.I)
 HEDGE_WORDS = re.compile(r"\b(reportedly|report|reports|reported|according to|says|said|claims?|claimed|alleged|allegedly|rumou?r|rumou?red|leak|leaked|suggests?|appears?|seems?|could|may|might|if (that|this)|unconfirmed|not confirmed|hasn't confirmed|has not confirmed|estimate[sd]?|projects?|expect(s|ed)?|analyst|told|tells|per |writes|wrote|preview|interview)\b", re.I)
 
 WRITER_SYSTEM = """You are the head writer of an independent YouTube channel covering Grand Theft Auto VI.
 Voice: an experienced gaming-news commentator talking to fellow GTA fans - energetic, clear, natural, professional.
-You write for the ear: short sentences, contractions, concrete nouns, smooth spoken transitions.
+You write for the ear: short sentences (most under 18 words), contractions, concrete nouns, smooth spoken transitions.
+Keep it moving: a new fact or idea in every sentence, never two sentences that say the same thing.
 
 Non-negotiable editorial rules
 - Use ONLY the facts in the fact sheet. Nothing from memory. If it is not in the fact sheet, it does not exist.
@@ -230,8 +231,21 @@ def _numbers(text: str) -> set[str]:
 _WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 
 
-def lint_script(sections: list[dict[str, Any]], fact_check: list[dict[str, Any]], quotes: list[dict[str, Any]], allowed_text: str, *, min_words: int, max_words: int, short: bool = False) -> list[dict[str, Any]]:
-    """Cheap deterministic checks. Returns issue dicts (empty list = clean)."""
+def lint_script(
+    sections: list[dict[str, Any]],
+    fact_check: list[dict[str, Any]],
+    quotes: list[dict[str, Any]],
+    allowed_text: str,
+    *,
+    min_words: int,
+    max_words: int,
+    cta_max_words: int | None = None,
+    max_sentence_words: int | None = None,
+) -> list[dict[str, Any]]:
+    """Cheap deterministic checks. Returns issue dicts (empty list = clean).
+
+    ``cta_max_words`` / ``max_sentence_words`` come from the video's rhythm profile (``settings.rhythm``).
+    """
     issues: list[dict[str, Any]] = []
     by_id = {c["id"]: c for c in fact_check}
     full = " ".join(s["narration"] for s in sections)
@@ -273,8 +287,13 @@ def lint_script(sections: list[dict[str, Any]], fact_check: list[dict[str, Any]]
             core = ", ".join(c["id"] for c in fact_check if c.get("relevance") == "core")
             issues.append({"type": "off_topic_hook", "section": "hook", "detail": f"The hook must open on the main story: build it on one of the core claims ({core}) and list that id in claim_ids."})
     cta = next((s for s in sections if s["id"] == "cta"), None)
-    if cta and short and word_count(cta["narration"]) > SHORT_CTA_MAX_WORDS:
-        issues.append({"type": "cta_too_long", "section": "cta", "detail": f"The question for the comments is {word_count(cta['narration'])} words; keep it to {SHORT_CTA_MAX_WORDS} or fewer."})
+    if cta and cta_max_words and word_count(cta["narration"]) > cta_max_words:
+        issues.append({"type": "cta_too_long", "section": "cta", "detail": f"The question for the comments is {word_count(cta['narration'])} words; keep it to {int(cta_max_words)} or fewer."})
+    if max_sentence_words:
+        for s in sections:
+            long_ones = [sent for sent in split_sentences(s["narration"]) if word_count(sent) > max_sentence_words]
+            for sent in long_ones[:2]:
+                issues.append({"type": "long_sentence", "section": s["id"], "detail": f"Split this {word_count(sent)}-word sentence in two (max {int(max_sentence_words)} words to be followed by ear): \"{sent[:120]}\""})
     return issues
 
 
@@ -301,7 +320,7 @@ def write_script(
     words = int(round(target_seconds * wpm / 60))
     min_words, max_words = int(words * 0.86), int(words * 1.12)
     plan = _format_plan(fmt)
-    short = fmt == "short" or settings.format(fmt).get("aspect") == "9:16"
+    rh = settings.rhythm(fmt)
     headline = analysis.get("story_headline") or story.get("working_title") or ""
     sections_txt = "\n".join(f"- {sid} [{int(round(words * share))} words]: {purpose}" for sid, purpose, share in plan)
     quotes = analysis.get("quotes") or []
@@ -379,7 +398,7 @@ def write_script(
 
     history: list[dict[str, Any]] = []
     script = call("")
-    lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words, short=short)
+    lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words, cta_max_words=rh["cta_max_words"], max_sentence_words=rh["max_sentence_words"])
     audit_result: dict[str, Any] = {"verdict": "skipped", "issues": []}
     for round_no in range(2):
         audit_issues: list[dict[str, Any]] = []
@@ -407,7 +426,7 @@ def write_script(
             problems.append(f"- [{i.get('type')}] \"{sent[:140]}\": {i.get('detail')} Fix: {i.get('fix')}")
         previous = "\n".join(f"[{s['id']}] {s['narration']}" for s in script["sections"])
         script = call("\nREVISION REQUIRED. Your previous draft is below, followed by the problems the standards editor found. Rewrite the full script, fixing every problem and keeping what worked.\n\nPREVIOUS DRAFT\n" + previous + "\n\nPROBLEMS\n" + "\n".join(problems))
-        lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words, short=short)
+        lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words, cta_max_words=rh["cta_max_words"], max_sentence_words=rh["max_sentence_words"])
 
     labels = {sid: purpose for sid, purpose, _ in plan}
     for s in script["sections"]:

@@ -85,18 +85,37 @@ def _types(issues):
 
 def test_hook_on_a_side_story_is_flagged():
     fc = [CORE, SIDE]
-    bad = lint_script(_sections(["C2"], hook="Xbox and DJ Khaled offered fans doctor's notes for launch day."), fc, [], "", min_words=1, max_words=999, short=True)
+    bad = lint_script(_sections(["C2"], hook="Xbox and DJ Khaled offered fans doctor's notes for launch day."), fc, [], "", min_words=1, max_words=999, cta_max_words=14)
     assert "off_topic_hook" in _types(bad)
-    good = lint_script(_sections(["C1"]), fc, [], "", min_words=1, max_words=999, short=True)
+    good = lint_script(_sections(["C1"]), fc, [], "", min_words=1, max_words=999, cta_max_words=14)
     assert "off_topic_hook" not in _types(good)
 
 
 def test_generic_wrap_up_and_long_short_cta_are_flagged():
     secs = _sections(["C1"], cta="So tell me down below what you think about all of this and which tools you would like to see used next?")
     secs[2]["narration"] = "This approach balances innovation with tradition, shaping how future games evolve."
-    issues = lint_script(secs, [CORE, SIDE], [], "", min_words=1, max_words=999, short=True)
+    issues = lint_script(secs, [CORE, SIDE], [], "", min_words=1, max_words=999, cta_max_words=14)
     assert {"banned_phrase", "cta_too_long"} <= _types(issues)
-    assert "cta_too_long" not in _types(lint_script(secs, [CORE, SIDE], [], "", min_words=1, max_words=999, short=False))
+    assert "cta_too_long" not in _types(lint_script(secs, [CORE, SIDE], [], "", min_words=1, max_words=999, cta_max_words=25))  # 16:9 allows a longer question
+
+
+def test_sentences_too_long_to_follow_by_ear_are_flagged():
+    secs = _sections(["C1"])
+    secs[1]["narration"] = ("Insider Gaming reports that the chief executive of the company explained during a long call with investors that every single street "
+                            "and every building of the new state was placed by hand by artists rather than produced by any kind of automated tool.")
+    assert "long_sentence" in _types(lint_script(secs, [CORE], [], "", min_words=1, max_words=999, max_sentence_words=30))
+    assert "long_sentence" not in _types(lint_script(_sections(["C1"]), [CORE], [], "", min_words=1, max_words=999, max_sentence_words=30))
+
+
+def test_every_format_has_a_rhythm_profile(project):
+    s = project["settings"]
+    long_rh, short_rh = s.rhythm("long"), s.rhythm("short")
+    for fmt in ("breaking", "recap", "guide", "analysis", "details", "versus", "toplist"):
+        assert s.rhythm(fmt) == long_rh
+    assert short_rh["max_scene_seconds"] < long_rh["max_scene_seconds"] <= 9
+    assert long_rh["scene_gap_seconds"] < 0.28 and long_rh["tail_seconds"] < 1.6  # tighter than before for 16:9 too
+    assert long_rh["outro_seconds"] >= 5.0  # YouTube end screens need the last 5 s
+    assert long_rh["voice_speed_factor"] > 1.0
 
 
 # ----------------------------------------------------------------- storyboard
@@ -250,3 +269,17 @@ def test_shots_where_the_vision_model_saw_subtitles_are_not_used(project):
     before = len(load_items(s, index)["shots"])
     write_json(autotags_path(s), {"items": {shot_key(v["file"], v["size"], usable[0]): {"tags": [], "objects": [], "caption": "", "overlay": True}}})
     assert len(load_items(s, index)["shots"]) == before - 1
+
+
+def test_long_form_scenes_are_split_too(project):
+    sentences = [f"Sentence number {i} adds one more concrete detail about the map, the cars and the people of Leonida." for i in range(1, 9)]
+    script = {"sections": [{"id": "hook", "narration": sentences[0], "claim_ids": []}, {"id": "story", "narration": " ".join(sentences[1:7]), "claim_ids": []}, {"id": "cta", "narration": sentences[7], "claim_ids": []}]}
+
+    class OneCard:
+        def complete_json(self, system, prompt, **kw):
+            return {"scenes": [{"sentences": [1, 1], "template": "kinetic", "data": {"lines": ["LEONIDA"]}}, {"sentences": [2, 7], "template": "kinetic", "data": {"lines": ["THE MAP"]}}, {"sentences": [8, 8], "template": "outro", "data": {"question": "Which detail matters most?"}}]}
+
+    scenes = plan_scenes(OneCard(), project["settings"], script=script, fact_check=[], quotes=[], articles=[], fmt="long", today="2026-11-18")
+    limit = project["settings"].rhythm("long")["max_scene_seconds"] * 165 / 60
+    assert all(len(sc["narration"].split()) <= max(limit, 19) for sc in scenes)  # one 18-word sentence per scene at most here
+    assert len(scenes) >= 7

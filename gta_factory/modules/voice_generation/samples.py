@@ -84,11 +84,12 @@ def sample(settings: Any, tts_name: str, voice: str, *, out_dir: Path, text: str
     from .engine import load_lexicon, synthesize_scene, whole_scene, write_wav
 
     check_choice(tts_name, voice)
-    tts = get_tts(settings, tts_name, voice or None)
+    rh = settings.rhythm(vertical=False)  # the sample sounds like a 16:9 video
+    tts = get_tts(settings, tts_name, voice or None, speed_factor=rh["voice_speed_factor"])
     tts.check()
     lexicon = load_lexicon(settings)
     whole = whole_scene(settings, tts)
-    pause = float(settings.get("audio.sentence_pause_seconds", 0.24))
+    pause = rh["sentence_pause_seconds"]
     dest = out_dir / f"{tts_name}_{voice or 'default'}_{stable_hash({'sig': tts.signature(), 'text': text, 'whole': whole, 'pause': pause})[:8]}.wav"
     if not dest.exists():
         result = synthesize_scene(tts, text, lexicon, sentence_pause=pause, whole=whole)

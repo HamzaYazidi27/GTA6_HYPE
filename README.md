@@ -93,11 +93,25 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
 - **Pas de re-upload d'une autre chaîne.** Une vidéo dont l'image garde un logo ou un watermark au même endroit (ex. le logo d'une chaîne fan) est détectée à l'indexation et n'est pas utilisée ; un plan ou un screenshot où le modèle de vision voit un watermark ou des **sous-titres incrustés** non plus. Les trailers téléchargés depuis Rockstar ne sont pas concernés. Si c'est en fait le HUD du jeu, mets `"allow_overlay": true` dans le fichier `<vidéo>.json` à côté. Le `REVIEW.md` liste les fichiers écartés. Pour revérifier les plans tagués avant cette version : `python -m gta_factory footage autotag --force`.
 - ⚠️ Les images appartiennent à Rockstar/Take-Two. Les chaînes d'actu les utilisent couramment, mais YouTube peut poser une **revendication Content ID** (monétisation reversée à Rockstar) ; c'est rare qu'une vidéo soit bloquée, mais c'est possible.
 
-## Shorts : un seul sujet, du rythme
+## Un seul sujet et du rythme (toutes les vidéos)
 
 - **Un seul sujet.** L'analyse marque chaque affirmation et chaque citation : `core` (le sujet de l'article), `context` ou `off_topic` (une autre news dans la page : encadrés « related », promos, anniversaires…). Les `off_topic` sortent de la vidéo et sont listées dans le `REVIEW.md`. Le hook doit s'appuyer sur une affirmation `core` (sinon le script est réécrit, et le contrôle qualité `script.focus` bloque le statut `completed`).
 - **Le titre est une promesse.** L'audit vérifie que le script donne ce que le titre annonce (`title_not_delivered`) et réécrit les phrases creuses (« this approach balances innovation with tradition »…), qui étaient ignorées avant.
-- **Rythme.** En 9:16, une scène dure **6 s maximum** (`script.short_max_scene_seconds`), les respirations entre scènes sont plus courtes (`audio.short_scene_gap_seconds`), l'écran de fin dure ~3 s au lieu de 5,5 s (`audio.short_outro_seconds`), la question finale fait 14 mots maximum, et Kokoro lit 6 % plus vite (`audio.short_voice_speed_factor`).
+- **Le rythme est réglé au même endroit pour toutes les vidéos** : section `rhythm` de `config.yaml`, profil `long` pour tout le 16:9 (news, breaking, recap, guide, analyse, details, comparaisons, top listes) et `short` pour tout le 9:16.
+
+| Réglage (`rhythm.*`) | 16:9 (`long`) | 9:16 (`short`) | Avant |
+|---|---|---|---|
+| `target_scene_seconds` : une nouvelle image ou un nouveau graphique toutes les… | 6 s | 3,5 s | 8 s / 4 s |
+| `max_scene_seconds` : une carte ou une image ne reste jamais plus de… | 9 s | 6 s | 14 s pour tout |
+| `scene_gap_seconds` : respiration entre deux scènes | 0,18 s | 0,12 s | 0,28 s |
+| `sentence_pause_seconds` : respiration entre deux phrases | 0,2 s | 0,14 s | 0,24 s |
+| `tail_seconds` : silence après le dernier mot | 1 s | 0,6 s | 1,6 s |
+| `outro_seconds` : écran de fin (les écrans de fin YouTube demandent 5 s) | 5,5 s | 3 s | 5,5 s |
+| `voice_speed_factor` : Kokoro lit plus vite que `providers.tts.kokoro.speed` | +3 % | +6 % | — |
+| `max_sentence_words` : une phrase plus longue est coupée en deux | 30 | 22 | — |
+| `cta_max_words` : la question finale | 25 | 14 | — |
+
+- **Des hooks plus courts en 16:9** : environ 20 s (avant : 30 à 40 s du budget de mots), les mots gagnés vont à l'histoire.
 - **Pas de « BREAKING » sur une vieille news** : le label n'est gardé que si la source a 2 jours ou moins. Les lignes de la carte « What it means » doivent venir de la narration, sinon la scène redevient de la typographie.
 - **Prononciation.** « GTA 6 » est lu « GTA Six » (et non « G T A Six », que la voix lisait « gee tee *uh* six »). Ajoutés : Strauss (Zelnick), DJ Khaled.
 
@@ -161,7 +175,7 @@ Dans le dashboard, carte **Voix de la narration** : choisis une voix et clique s
 | OpenAI `gpt-4o-mini-tts` | ~0,015 $ par minute de voix (~0,15 $ pour 10 min) | voix US naturelles, guidées par `providers.tts.openai.instructions` (narrateur américain détendu) ; clé `OPENAI_API_KEY` dans `.env` |
 | ElevenLabs | abonnement ElevenLabs | le plus humain ; clé `ELEVENLABS_API_KEY` dans `.env`, les voix de ton compte apparaissent dans la liste |
 
-Les voix OpenAI et ElevenLabs lisent **toute la scène d'un coup** (l'intonation enchaîne d'une phrase à l'autre comme un vrai narrateur) ; Kokoro lit phrase par phrase avec une respiration naturelle entre deux (`audio.synthesis`, `audio.sentence_pause_seconds`).
+Les voix OpenAI et ElevenLabs lisent **toute la scène d'un coup** (l'intonation enchaîne d'une phrase à l'autre comme un vrai narrateur) ; Kokoro lit phrase par phrase avec une respiration naturelle entre deux (`audio.synthesis`, `rhythm.*.sentence_pause_seconds`).
 
 ## Le logo de la chaîne
 

@@ -147,10 +147,10 @@ def plan_scenes(
     total = len(sentences)
     is_short = settings.format(fmt).get("aspect") == "9:16"
     wpm = float(settings.get("script.words_per_minute", 165))
-    target_s = float(settings.get("script.short_target_scene_seconds" if is_short else "script.target_scene_seconds", 8))
+    rh = settings.rhythm(vertical=is_short)
+    target_s = rh["target_scene_seconds"]
     scene_words = int(round(target_s * wpm / 60))
-    # a Short holds one picture/card for a few seconds at most (the long-form ceiling would let one card sit for 10 s+)
-    max_scene_s = float(settings.get("script.short_max_scene_seconds", 6) if is_short else settings.get("script.max_scene_seconds", 14))
+    max_scene_s = rh["max_scene_seconds"]  # no card or picture stays longer than this, in any format
     max_words = max(scene_words, int(max_scene_s * wpm / 60))
     age = newest_source_age(articles, today)
     fresh = age is not None and age <= 2
