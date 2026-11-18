@@ -11,8 +11,6 @@
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
     voices                     list the voices of the TTS provider
     brand [IMAGE] [--square]   the channel logo (watermark of every video): install a new one, write the YouTube Studio images
-    radar status|scan|tick|worker|list|show|set|sources|schedule
-                               GTA VI Content Radar: finds new GTA VI topics and turns them into video ideas
     footage [list|update|add|tag|autotag|find|concepts|remove|fetch|stills] [--game rdr2]
                                real GTA 6 footage library (or another game's, for comparisons): add footage, tag it, see what a sentence shows
     competitors CHANNEL_URL    refresh the competitor reference database
@@ -513,99 +511,6 @@ def cmd_brand(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_radar(args: argparse.Namespace) -> int:
-    from ...modules.radar import engine
-    from ...modules.radar.store import STATUSES, RadarStore
-
-    s = get_settings()
-    store = RadarStore.of(s)
-    store.seed_sources(engine.configured_sources(s))
-    action = args.action or "status"
-    if action == "scan":
-        res = engine.run_scan(s, trigger=args.trigger, log=_radar_log(s))
-        _print(json.dumps({k: v for k, v in res.items() if k != "errors"}, indent=1))
-        for e in res.get("errors") or []:
-            _print(f"  ! {e['source']}: {e['error']}")
-        return 0 if res["status"] in ("success", "partial", "busy") else 1
-    if action == "tick":  # what launchd / cron call every 15 minutes: scans only when one is due
-        res = engine.tick(s, via=args.via, log=_radar_log(s))
-        _print("radar: nothing due" if res is None else f"radar: scan {res['status']}")
-        return 0
-    if action == "worker":
-        from ...modules.radar.worker import run_forever
-
-        _print(f"radar worker: checking every minute, scanning every {engine.config(s, store)['interval_hours']} h (Ctrl+C to stop)")
-        run_forever(s, via="worker")
-        return 0
-    if action == "schedule":
-        from ...modules.radar.worker import ensure_schedule, install_schedule, schedule_status, uninstall_schedule
-
-        sub = (args.args or ["status"])[0]
-        if sub == "install":
-            _print(install_schedule(s))
-        elif sub == "ensure":  # start.sh: install once
-            _print(ensure_schedule(s) if s.get("radar.install_service", True) and engine.config(s, store)["enabled"] else "background service not wanted (radar.install_service: false)")
-        elif sub == "uninstall":
-            _print(uninstall_schedule(s))
-        else:
-            _print(json.dumps(schedule_status(s), indent=1))
-        return 0
-    if action == "sources":
-        sub = (args.args or ["list"])[0]
-        if sub == "add":
-            from ...modules.radar.sources import normalize_source
-
-            src = normalize_source({"kind": args.kind, "target": " ".join(args.args[1:]), "name": args.name, "trust": args.trust, "topic_only": args.topic_only})
-            row = store.add_source(**src)
-            _print(f"added source #{row['id']}: {row['name']} ({row['kind']}: {row['target']})")
-            return 0
-        if sub in ("enable", "disable", "remove") and len(args.args) > 1:
-            sid = int(args.args[1])
-            if sub == "remove":
-                store.delete_source(sid)
-            else:
-                store.update_source(sid, enabled=int(sub == "enable"), next_attempt_at=None)
-            _print(f"source #{sid}: {sub}d")
-            return 0
-        for src in store.list_sources():
-            health = "off" if not src["enabled"] else ("ok" if not src.get("last_error") else f"FAILING x{src['consecutive_failures']}: {src['last_error'][:60]}")
-            _print(f"#{src['id']:<3} {src['trust']:<9} {src['kind']:<11} {src['name'][:34]:<34} {health}")
-        return 0
-    if action == "list":
-        rows, total = store.list_opportunities(status=args.status, include_low=args.all, limit=args.limit)
-        for o in rows:
-            _print(f"#{o['id']:<4} {str(o.get('score') if o.get('score') is not None else '-'):>3} {str(o.get('priority') or o['analysis_status']):<8} {o['status']:<9} {str(o.get('format') or '-'):<5} {o['title'][:80]}")
-        _print(f"({len(rows)} of {total})")
-        return 0
-    if action == "show":
-        from ...modules.radar.api import opportunity_payload
-
-        _print(json.dumps(opportunity_payload(s, int(args.args[0])), indent=1, ensure_ascii=False))
-        return 0
-    if action == "set":
-        oid, status = int(args.args[0]), args.args[1]
-        if status not in STATUSES:
-            raise FactoryError(f"unknown status '{status}'", hint="Use one of: " + ", ".join(STATUSES))
-        store.set_status(oid, status)
-        _print(f"#{oid}: {status}")
-        return 0
-    info = engine.schedule(s, store)
-    from ...modules.radar.worker import schedule_status
-
-    c = store.counts()
-    _print(f"radar: {info['status']} · every {info['interval_hours']} h · last success {info['last_success_at'] or 'never'} · next {info['next_scan_at'] or '-'}")
-    _print(f"  {c['discoveries']} discoveries · {c['new']} new · {c['high_priority']} high priority · {c['pending_analysis']} waiting for analysis · {len(store.list_sources())} sources")
-    sched = schedule_status(s)
-    _print(f"  system schedule ({sched['system']}): {'installed' if sched['installed'] else 'not installed - run `python -m gta_factory radar schedule install` to scan with the dashboard closed'}")
-    return 0
-
-
-def _radar_log(settings: Any):
-    from ...modules.radar.engine import radar_logger
-
-    return radar_logger(settings)
-
-
 def cmd_footage(args: argparse.Namespace) -> int:
     from ...modules.footage import library as lib
     from ...modules.footage.games import game_settings
@@ -911,20 +816,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("image", nargs="?", help="a square image of the logo (PNG, JPG or WEBP); a logo on a black or white square is cut to its circle")
     sp.add_argument("--square", action="store_true", help="keep the whole square instead of cutting the circle")
     sp.set_defaults(fn=cmd_brand)
-
-    sp = sub.add_parser("radar", help="GTA VI Content Radar: watch the sources, find new topics, propose videos")
-    sp.add_argument("action", nargs="?", choices=["status", "scan", "tick", "worker", "list", "show", "set", "sources", "schedule"], default="status")
-    sp.add_argument("args", nargs="*", help="show ID | set ID STATUS | sources [list|add TARGET|enable ID|disable ID|remove ID] | schedule [status|install|ensure|uninstall]")
-    sp.add_argument("--trigger", default="cli", choices=["cli", "manual", "schedule"], help=argparse.SUPPRESS)
-    sp.add_argument("--via", default="cron", help=argparse.SUPPRESS)
-    sp.add_argument("--status", help="list: only this status (new, to_review, approved, rejected, published)")
-    sp.add_argument("--all", action="store_true", help="list: include low-priority discoveries")
-    sp.add_argument("--limit", type=int, default=30)
-    sp.add_argument("--kind", default="rss", help="sources add: rss | reddit | youtube | news_search")
-    sp.add_argument("--name", default="", help="sources add: display name")
-    sp.add_argument("--trust", default="", help="sources add: official | press | community | creator")
-    sp.add_argument("--topic-only", action="store_true", help="sources add: every entry is about GTA VI")
-    sp.set_defaults(fn=cmd_radar)
 
     sp = sub.add_parser("footage", help="real GTA 6 footage: add new footage, tag it, see what the narration will show")
     sp.add_argument("action", choices=("list", "update", "add", "tag", "autotag", "find", "concepts", "remove", "fetch", "stills"), nargs="?", default="list",

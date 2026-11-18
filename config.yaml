@@ -276,10 +276,3 @@ youtube:
 dashboard:
   host: "127.0.0.1"
   port: 8600
-
-# GTA VI Content Radar (dashboard > GTA VI Content Radar). The sources and every
-# other setting are in gta_factory/app/config/defaults.yaml (radar:); sources can
-# be added, paused or removed in the dashboard.
-radar:
-  enabled: true
-  interval_hours: 2

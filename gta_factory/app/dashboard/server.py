@@ -1,5 +1,4 @@
-"""Local dashboard: start jobs, follow progress, read the fact-check, edit the script, review the package,
-and the GTA VI Content Radar (its scheduler runs in this process while the dashboard is open).
+"""Local dashboard: start jobs, follow progress, read the fact-check, edit the script, review the package.
 
 Standard library only (``http.server``). It binds to 127.0.0.1 by default and
 protects every state-changing request:
@@ -364,84 +363,6 @@ class Handler(BaseHTTPRequestHandler):
             lib.set_tags(gs, dest, add=tags)
         self._json({"file": dest.relative_to(lib.footage_dir(gs)).as_posix()}, 201)
 
-    # ------------------------------------------------------------------ GTA VI Content Radar
-    def _radar(self, method: str, parts: list[str], query: dict[str, list[str]]) -> bool:
-        """/api/radar/... routes. Returns False when the path is not a radar route."""
-        if parts[:2] != ["api", "radar"]:
-            return False
-        from ...modules.radar import api as radar
-        from ...modules.radar.store import RadarStore
-
-        s = self.settings
-        store = RadarStore.of(s)
-        rest = parts[2:]
-        q = {k: v[0] for k, v in query.items()}
-        oid = int(rest[1]) if len(rest) >= 2 and rest[0] == "opportunities" and rest[1].isdigit() else None
-        sid = int(rest[1]) if len(rest) == 2 and rest[0] == "sources" and rest[1].isdigit() else None
-        if method == "GET":
-            if not rest:
-                self._json(radar.overview(s))
-            elif rest == ["opportunities"]:
-                self._json(radar.list_payload(s, q))
-            elif oid is not None and len(rest) == 2:
-                self._json(radar.opportunity_payload(s, oid))
-            elif rest == ["sources"]:
-                self._json({"sources": store.list_sources()})
-            elif rest == ["notifications"]:
-                self._json({"notifications": store.list_notifications(limit=40), "unread": store.unread_count()})
-            elif rest == ["scans"]:
-                self._json({"scans": store.list_scans(25)})
-            else:
-                self._error(404, "not found")
-            return True
-        body = self._body()
-        if method == "POST" and rest == ["scan"]:
-            from ...modules.radar.worker import spawn_scan
-
-            if store.running_scan() and store.lock_info():
-                raise FactoryError("A scan is already running.", hint="Its results appear here as soon as it finishes.")
-            self._json({"ok": True, "pid": spawn_scan(s)}, 202)
-        elif method == "POST" and oid is not None and rest[2:] == ["reanalyze"]:
-            radar.reanalyze(s, oid)
-            self._json({"ok": True})
-        elif method == "POST" and oid is not None and rest[2:] == ["video"]:
-            job_id = radar.start_video(s, oid, str(body.get("format") or "") or None)
-            spawn_runner(s, job_id)
-            self._json({"id": job_id}, 201)
-        elif method == "PUT" and oid is not None and len(rest) == 2:
-            self._json(radar.set_status(s, oid, str(body.get("status") or "")))
-        elif method == "POST" and rest == ["sources"]:
-            from ...modules.radar.sources import normalize_source
-
-            try:
-                row = store.add_source(**normalize_source(body))
-            except ValueError as exc:
-                raise FactoryError(str(exc)) from exc
-            self._json({"source": row}, 201)
-        elif method == "PUT" and sid is not None:
-            if store.get_source(sid) is None:
-                raise FactoryError("unknown source")
-            if "enabled" in body:
-                store.update_source(sid, enabled=int(bool(body["enabled"])), next_attempt_at=None, consecutive_failures=0)
-            self._json({"source": store.get_source(sid)})
-        elif method == "DELETE" and sid is not None:
-            src = store.get_source(sid)
-            if src is None:
-                raise FactoryError("unknown source")
-            if src["origin"] == "config":
-                raise FactoryError("This source comes from config.yaml.", hint="Pause it instead (it stays paused), or remove it from radar.sources in the config.")
-            store.delete_source(sid)
-            self._json({"ok": True})
-        elif method == "PUT" and rest == ["settings"]:
-            self._json(radar.update_settings(s, body))
-        elif method == "POST" and rest == ["notifications", "read"]:
-            ids = body.get("ids")
-            store.mark_read([int(i) for i in ids] if isinstance(ids, list) else None)
-            self._json({"ok": True, "unread": store.unread_count()})
-        else:
-            self._error(404, "not found")
-        return True
-
     # ------------------------------------------------------------------ routes
     def do_HEAD(self) -> None:
         self.do_GET()
@@ -453,8 +374,6 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in url.path.split("/") if p]
         s = self.settings
         try:
-            if self._radar("GET", parts, parse_qs(url.query)):
-                return
             if not parts:
                 self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8", {"Content-Security-Policy": "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"})
             elif parts == ["api", "jobs"]:
@@ -486,10 +405,7 @@ class Handler(BaseHTTPRequestHandler):
             elif parts == ["brand", "logo"]:  # the channel logo, for the dashboard header
                 from ...modules.branding import logo_file
 
-                try:
-                    logo = logo_file(s)
-                except FactoryError:  # configured but missing: the header simply shows no logo
-                    logo = None
+                logo = logo_file(s)
                 if logo and logo.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
                     self._serve_file(logo)
                 else:
@@ -516,8 +432,6 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parts == ["api", "footage", "upload"]:
                 self._upload(parse_qs(url.query))
-                return
-            if self._radar("POST", parts, parse_qs(url.query)):
                 return
             body = self._body()
             if parts == ["api", "voices", "sample"]:  # the sample sentence read by one voice
@@ -627,8 +541,6 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in urlparse(self.path).path.split("/") if p]
         s = self.settings
         try:
-            if self._radar("PUT", parts, {}):
-                return
             if parts == ["api", "footage", "tags"]:
                 from ...modules.footage import library as lib
 
@@ -674,12 +586,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         url = urlparse(self.path)
         parts = [p for p in url.path.split("/") if p]
-        if parts[:2] == ["api", "radar"]:
-            try:
-                self._radar("DELETE", parts, {})
-            except FactoryError as exc:
-                self._error(400, exc.message, exc.hint)
-            return
         if parts == ["api", "footage"]:
             from ...modules.footage import library as lib
 
@@ -706,20 +612,8 @@ def make_server(settings: Any, host: str = "127.0.0.1", port: int = 8600) -> Thr
     return ThreadingHTTPServer((host, port), handler)
 
 
-def start_radar(settings: Any) -> Any:
-    """The Content Radar's scheduler, running as long as the dashboard runs (scans need no open browser tab)."""
-    if not settings.get("radar.run_in_dashboard", True):
-        return None
-    from ...modules.radar.worker import RadarWorker
-
-    worker = RadarWorker(settings, via="dashboard")
-    worker.start()
-    return worker
-
-
 def serve(settings: Any, host: str = "127.0.0.1", port: int = 8600) -> None:
     httpd = make_server(settings, host, port)
-    radar = start_radar(settings)
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"warning: the dashboard is listening on {host}; anyone on that network can start jobs.")
     print(f"dashboard: http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}  (Ctrl+C to stop)")
@@ -728,6 +622,4 @@ def serve(settings: Any, host: str = "127.0.0.1", port: int = 8600) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        if radar is not None:
-            radar.stop()
         httpd.server_close()

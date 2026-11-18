@@ -72,38 +72,11 @@
   .pgrid img, td img { width:100%; border-radius:6px; display:block; aspect-ratio:16/9; object-fit:cover; background:#000; }
   .pgrid .fn { font-size:11px; color:var(--mute); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:4px 0; }
   .auto { font-size:11px; color:var(--violet); }
-  /* GTA VI Content Radar */
-  .badge { display:inline-block; min-width:18px; padding:0 6px; margin-left:6px; border-radius:99px; background:var(--coral); color:var(--ink); font-size:11px; font-weight:800; line-height:18px; text-align:center; }
-  .badge:empty { display:none; }
-  .rgrid { display:grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap:12px; }
-  .rcard { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; cursor:pointer; display:flex; flex-direction:column; gap:8px; }
-  .rcard:hover { border-color:rgba(255,255,255,.25); }
-  .rcard.p-high { border-left:4px solid var(--coral); } .rcard.p-medium { border-left:4px solid var(--sun); } .rcard.p-low { border-left:4px solid var(--line); }
-  .rcard .t { font-weight:700; font-size:15px; line-height:1.3; }
-  .rcard .sum { color:var(--mute); font-size:13px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
-  .rscore { font:800 34px/1 "Barlow Condensed", sans-serif; min-width:52px; text-align:right; }
-  .rscore.high { color:var(--coral); } .rscore.medium { color:var(--sun); } .rscore.low { color:var(--mute); }
-  .kpis { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
-  .kpi { background:var(--ink2); border-radius:10px; padding:10px 12px; }
-  .kpi .v { font:800 26px/1.1 "Barlow Condensed", sans-serif; } .kpi .l { color:var(--mute); font-size:12px; }
-  .ver-official { background:rgba(46,229,157,.15); color:var(--lime); } .ver-credible { background:rgba(45,226,230,.15); color:var(--cyan); }
-  .ver-community { background:rgba(138,107,255,.18); color:var(--violet); } .ver-rumor { background:rgba(255,170,43,.15); color:var(--amber); }
-  .st-new { background:rgba(45,226,230,.15); color:var(--cyan); } .st-to_review { background:rgba(255,210,63,.15); color:var(--sun); }
-  .st-approved { background:rgba(46,229,157,.15); color:var(--lime); } .st-rejected { background:rgba(155,166,204,.15); color:var(--mute); } .st-published { background:rgba(138,107,255,.18); color:var(--violet); }
-  .tabs { display:flex; gap:6px; margin-bottom:12px; } .tabs button.on { border-color:var(--coral); color:var(--coral); }
-  .filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:8px; align-items:center; }
-  .script { background:var(--ink2); border-radius:10px; padding:10px 12px; margin:6px 0; }
-  .script b { color:var(--sun); font-size:12px; letter-spacing:.08em; text-transform:uppercase; display:block; margin-bottom:2px; }
-  .notif { padding:8px 10px; border-radius:8px; background:var(--ink2); margin-bottom:6px; cursor:pointer; border-left:3px solid var(--coral); }
-  .notif.read { border-left-color:var(--line); opacity:.7; }
-  .health-ok { color:var(--lime); } .health-bad { color:var(--coral); } .health-off { color:var(--mute); }
-  #detail a, #detail a:visited { color:var(--cyan); text-decoration:none; } #detail a:hover { text-decoration:underline; }
-  ul.tight { margin:4px 0; padding-left:18px; } ul.tight li { margin:2px 0; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { position:static; max-height:none; } .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<header><h1><img class="brand-logo" src="/brand/logo" alt="" onerror="this.remove()">GHOST <span>PLATES</span> · USINE GTA 6</h1><nav><button class="ghost small" id="nav-radar" title="Nouveaux sujets GTA VI détectés automatiquement">GTA VI Content Radar<span class="badge" id="radar-badge"></span></button><button class="ghost small" id="nav-footage">Footage GTA 6</button></nav><div class="counts" id="counts"></div></header>
+<header><h1><img class="brand-logo" src="/brand/logo" alt="" onerror="this.remove()">GHOST <span>PLATES</span> · USINE GTA 6</h1><nav><button class="ghost small" id="nav-footage">Footage GTA 6</button></nav><div class="counts" id="counts"></div></header>
 <main>
   <aside>
     <div class="card">
@@ -155,7 +128,7 @@ async function api(method, path, body) {
 const STATUS_FR = {completed:'terminé', running:'en cours', queued:'en attente', failed:'échec', needs_review:'à relire', paused:'en pause', stopped:'arrêté'};
 const STEP_FR = {research:'Sources', outline:'Items', details:'Détails', details_script:'Script', details_scenes:'Storyboard', extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
 const VERDICT_FR = {confirmed:'CONFIRMÉ', reported:'RAPPORTÉ', rumor:'RUMEUR', speculation:'SPÉCULATION'};
-let current = null, timer = null, formats = {}, games = [], radarOpen = false;
+let current = null, timer = null, formats = {}, games = [];
 
 async function loadJobs() {
   const data = await api('GET', '/api/jobs');
@@ -261,7 +234,7 @@ function qcCard(qc) {
 async function openJob(id) {
   current = id;
   clearTimeout(timer);
-  $('#nav-footage').classList.remove('on'); $('#nav-radar').classList.remove('on'); radarOpen = false;
+  $('#nav-footage').classList.remove('on');
   let d;
   try { d = await api('GET', '/api/jobs/' + id); } catch (e) { $('#detail').replaceChildren(el('div', {class: 'err'}, e.message)); return; }
   const log = await api('GET', `/api/jobs/${id}/log?lines=120`).catch(() => ({lines: []}));
@@ -340,8 +313,7 @@ async function uploadFiles(list, tags, msg, game) {
 }
 
 async function openFootage() {
-  current = null; clearTimeout(timer); radarOpen = false;
-  $('#nav-radar').classList.remove('on');
+  current = null; clearTimeout(timer);
   $('#nav-footage').classList.add('on');
   document.querySelectorAll('.job.active').forEach((x) => x.classList.remove('active'));
   let d;
@@ -457,288 +429,8 @@ $('#t-go').addEventListener('click', () => act(async () => {
   $('#t-topic').value = ''; $('#t-sources').value = ''; $('#t-msg').textContent = 'job lancé';
   current = r.id;
 }));
-// ---------------------------------------------------------------- GTA VI Content Radar
-const R_STATUS = {new: 'Nouveau', to_review: 'À revoir', approved: 'Approuvé', rejected: 'Rejeté', published: 'Déjà publié'};
-const R_VER = {official: 'OFFICIEL', credible: 'SOURCE FIABLE', community: 'COMMUNAUTÉ', rumor: 'RUMEUR'};
-const R_VER_HELP = {official: 'Rockstar / Take-Two l\'a dit ou montré', credible: 'rapporté par un média reconnu', community: 'trouvé ou affirmé par des joueurs / créateurs', rumor: 'non vérifié : rumeur, fuite ou théorie'};
-const R_PRIO = {high: 'HAUTE', medium: 'MOYENNE', low: 'BASSE'};
-const R_FMT = {short: 'Short', long: 'Vidéo longue'};
-const R_TRUST = {official: 'officiel', press: 'presse', community: 'communauté', creator: 'créateur', web: 'web'};
-const R_KIND = {rss: 'RSS', reddit: 'Reddit', youtube: 'YouTube', news_search: 'Recherche actu'};
-const R_SCHED = {active: 'actif', scanning: 'scan en cours', paused: 'en pause', no_scheduler: 'aucun planificateur'};
-let radarCats = {}, radarTab = 'feed', radarTimer = null;
-const store = {get(k, d) { try { const v = localStorage.getItem('radar.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('radar.' + k, JSON.stringify(v)); } catch (e) {} }};
-let radarFilters = store.get('filters', {status: '', category: '', priority: '', format: '', period: '7', include_low: false, q: ''});
-
-function ago(iso) {
-  if (!iso) return '—';
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < -60) { const m = -s / 60; return m < 90 ? `dans ${Math.round(m)} min` : `dans ${Math.round(m / 60)} h`; }
-  if (s < 90) return "à l'instant";
-  if (s < 5400) return `il y a ${Math.round(s / 60)} min`;
-  if (s < 172800) return `il y a ${Math.round(s / 3600)} h`;
-  return `il y a ${Math.round(s / 86400)} j`;
-}
-function when(iso) { return iso ? new Date(iso).toLocaleString('fr-FR', {dateStyle: 'medium', timeStyle: 'short'}) : '—'; }
-function extLink(url, text) { return /^https?:\/\//.test(url || '') ? el('a', {href: url, target: '_blank', rel: 'noopener noreferrer', onclick: (e) => e.stopPropagation()}, text || url) : el('span', {}, text || ''); }
-function pill(cls, text, title) { return el('span', {class: 'pill ' + cls, title: title || null}, text); }
-function catChips(cats) { return el('div', {class: 'chips'}, (cats || []).map((c) => el('span', {class: 'chip have'}, radarCats[c] || c))); }
-function navRadarOn() {
-  current = null; clearTimeout(timer); radarOpen = true;
-  $('#nav-footage').classList.remove('on'); $('#nav-radar').classList.add('on');
-  document.querySelectorAll('.job.active').forEach((x) => x.classList.remove('active'));
-}
-async function radarBadge() {
-  try { const d = await api('GET', '/api/radar/notifications'); $('#radar-badge').textContent = d.unread ? String(d.unread) : ''; } catch (e) {}
-}
-function show(view) {
-  const focused = document.activeElement && document.activeElement.closest('#detail');
-  if (!(focused && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName))) $('#detail').replaceChildren(view);
-}
-async function radarAct(fn, after) {
-  try { await fn(); } catch (e) { alert(e.message); }
-  if (after) after(); else openRadar();
-}
-
-function overviewCard(o) {
-  const sc = o.schedule, c = o.counts;
-  const statusCls = {active: 'qc-pass', scanning: 'qc-pass', paused: 'qc-warning', no_scheduler: 'qc-critical'}[sc.status] || 'muted';
-  const last = sc.last_scan;
-  const kpis = el('div', {class: 'kpis'},
-    [['Découvertes', c.discoveries], ['Nouvelles opportunités', c.new], ['Haute priorité', c.high_priority], ['En attente d\'analyse', c.pending_analysis],
-     [o.sources.failing ? `Sources surveillées · ${o.sources.failing} en échec` : 'Sources surveillées', `${o.sources.enabled}/${o.sources.total}`],
-     ['Dernier scan réussi', ago(sc.last_success_at)], ['Prochain scan', sc.enabled ? ago(sc.next_scan_at) : '—']]
-      .map(([l, v]) => el('div', {class: 'kpi'}, el('div', {class: 'v'}, String(v)), el('div', {class: 'l'}, l))));
-  const interval = el('select', {style: 'width:auto', onchange: (e) => radarAct(() => api('PUT', '/api/radar/settings', {interval_hours: parseFloat(e.target.value)}))},
-    [0.5, 1, 2, 3, 4, 6, 12, 24].map((h) => el('option', {value: h, selected: Math.abs(h - sc.interval_hours) < 0.01}, `toutes les ${h < 1 ? h * 60 + ' min' : h + ' h'}`)));
-  if (![0.5, 1, 2, 3, 4, 6, 12, 24].some((h) => Math.abs(h - sc.interval_hours) < 0.01)) interval.prepend(el('option', {value: sc.interval_hours, selected: true}, `toutes les ${sc.interval_hours} h`));
-  const notes = [];
-  if (sc.status === 'no_scheduler') notes.push(el('p', {class: 'qc-critical'}, 'Aucun planificateur actif ces 40 dernières minutes : les scans automatiques ne tournent que si le dashboard est ouvert, ou si le service est installé (`python -m gta_factory radar schedule install`, une seule fois).'));
-  if (o.system_schedule && !o.system_schedule.installed && o.system_schedule.system !== 'none') notes.push(el('p', {class: 'muted', style: 'font-size:12px'}, `Pour scanner même dashboard fermé et après un redémarrage : python -m gta_factory radar schedule install (${o.system_schedule.system}).`));
-  if (last && last.status !== 'success' && (last.errors || []).length) notes.push(el('p', {class: 'qc-warning', style: 'font-size:12px'}, `Dernier scan : ${last.status} · ` + last.errors.slice(0, 2).map((e) => `${e.source}: ${e.error}`).join(' · ')));
-  if (!o.channels.telegram && !o.channels.email) notes.push(el('p', {class: 'muted', style: 'font-size:12px'}, 'Alertes : dans ce dashboard. Telegram / e-mail : ajoute TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID ou RADAR_SMTP_* dans .env.'));
-  return el('div', {class: 'card'}, el('h2', {}, 'Vue d\'ensemble'), kpis,
-    el('div', {class: 'row', style: 'margin-top:12px'},
-      el('span', {class: statusCls}, '● Surveillance : ' + (R_SCHED[sc.status] || sc.status) + (sc.scheduler && sc.scheduler.kind ? ` (${sc.scheduler.kind})` : '')),
-      el('button', {disabled: sc.status === 'scanning', onclick: () => radarAct(async () => { await api('POST', '/api/radar/scan', {}); }, () => setTimeout(openRadar, 800))}, sc.status === 'scanning' ? 'Scan en cours…' : 'Scanner maintenant'),
-      interval,
-      el('button', {class: 'ghost small', onclick: () => radarAct(() => api('PUT', '/api/radar/settings', {enabled: !sc.enabled}))}, sc.enabled ? 'Mettre en pause' : 'Reprendre')),
-    notes);
-}
-
-function notificationsCard(list) {
-  const unread = list.filter((n) => !n.read_at);
-  if (!unread.length) return null;
-  return el('div', {class: 'card'}, el('div', {class: 'row'}, el('h2', {style: 'margin:0'}, `Alertes (${unread.length})`),
-      el('button', {class: 'ghost small', style: 'margin-left:auto', onclick: () => radarAct(() => api('POST', '/api/radar/notifications/read', {}))}, 'Tout marquer comme lu')),
-    unread.slice(0, 8).map((n) => el('div', {class: 'notif', onclick: () => { api('POST', '/api/radar/notifications/read', {ids: [n.id]}).catch(() => null); if (n.opportunity_id) openRadarDetail(n.opportunity_id); else openRadar(); }},
-      el('div', {style: 'font-weight:600'}, n.title), el('div', {class: 'muted', style: 'font-size:12px;white-space:pre-wrap'}, n.body.split('\n').slice(0, 2).join(' · ') + ' · ' + ago(n.created_at)))));
-}
-
-function filtersCard() {
-  const f = radarFilters;
-  const sel = (key, opts) => el('select', {onchange: (e) => { f[key] = e.target.value; store.set('filters', f); openRadar(); }}, opts.map(([v, l]) => el('option', {value: v, selected: f[key] === v}, l)));
-  const search = el('input', {placeholder: 'Rechercher…', value: f.q, onkeydown: (e) => { if (e.key === 'Enter') { f.q = e.target.value; store.set('filters', f); openRadar(); } }});
-  return el('div', {class: 'card'}, el('div', {class: 'filters'},
-    sel('status', [['', 'Tous les statuts'], ...Object.entries(R_STATUS)]),
-    sel('category', [['', 'Toutes catégories'], ...Object.entries(radarCats)]),
-    sel('priority', [['', 'Toutes priorités'], ['high', 'Haute'], ['medium', 'Moyenne'], ['low', 'Basse']]),
-    sel('format', [['', 'Tous formats'], ['short', 'Short'], ['long', 'Vidéo longue']]),
-    sel('period', [['1', '24 dernières heures'], ['7', '7 derniers jours'], ['30', '30 derniers jours'], ['', 'Toute la période']]),
-    search,
-    el('label', {class: 'chk'}, el('input', {type: 'checkbox', checked: f.include_low, onchange: (e) => { f.include_low = e.target.checked; store.set('filters', f); openRadar(); }}), 'Inclure les sujets faibles')));
-}
-
-function statusButtons(o, after) {
-  return el('div', {class: 'row'}, Object.entries(R_STATUS).filter(([k]) => k !== o.status).map(([k, l]) =>
-    el('button', {class: 'ghost small', onclick: (e) => { e.stopPropagation(); radarAct(() => api('PUT', `/api/radar/opportunities/${o.id}`, {status: k}), after); }}, l)));
-}
-
-function radarCard(o) {
-  const waiting = o.analysis_status === 'pending' ? 'Analyse IA au prochain scan…' : o.analysis_status === 'failed' ? 'Analyse impossible : ' + (o.analysis_error || '') : null;
-  return el('div', {class: 'rcard p-' + (o.priority || 'low'), onclick: () => openRadarDetail(o.id)},
-    el('div', {class: 'row', style: 'flex-wrap:nowrap;align-items:flex-start'},
-      el('div', {style: 'flex:1'}, el('div', {class: 't'}, o.title), el('div', {class: 'muted', style: 'font-size:12px;margin-top:3px'},
-        'découvert ' + ago(o.discovered_at) + (o.published_at ? ' · publié le ' + when(o.published_at) : ''))),
-      el('div', {class: 'rscore ' + (o.priority || 'low'), title: 'Score d\'opportunité /100'}, o.score === null || o.score === undefined ? '–' : String(o.score))),
-    catChips(o.categories),
-    el('div', {class: 'row'},
-      o.verification ? pill('ver-' + o.verification, R_VER[o.verification], R_VER_HELP[o.verification]) : null,
-      o.priority ? pill('s-' + (o.priority === 'high' ? 'failed' : o.priority === 'medium' ? 'needs_review' : 'stopped'), 'Priorité ' + R_PRIO[o.priority]) : null,
-      o.format ? pill('s-running', R_FMT[o.format]) : null,
-      pill('st-' + o.status, R_STATUS[o.status])),
-    el('div', {class: 'sum'}, waiting ? el('span', {class: o.analysis_status === 'failed' ? 'qc-critical' : 'muted'}, waiting) : o.summary),
-    o.source ? el('div', {class: 'muted', style: 'font-size:12px'}, 'Source : ', extLink(o.source.url, o.source.name || o.source.url), ` (${R_TRUST[o.source.trust] || o.source.trust})` + (o.source_count > 1 ? ` · +${o.source_count - 1} autre(s)` : '')) : null,
-    statusButtons(o));
-}
-
-async function openRadar(tab) {
-  navRadarOn();
-  if (tab) radarTab = tab;
-  if (location.hash !== '#radar') history.replaceState(null, '', '#radar');
-  let o;
-  try { o = await api('GET', '/api/radar'); } catch (e) { show(el('div', {class: 'err'}, e.message)); return; }
-  radarCats = o.categories || {};
-  const view = el('div', {}, el('h2', {style: 'margin:0 0 14px;font:800 26px/1.1 "Barlow Condensed",sans-serif'}, 'GTA VI Content Radar'), overviewCard(o));
-  const tabs = el('div', {class: 'tabs'}, [['feed', 'Découvertes'], ['sources', 'Sources'], ['scans', 'Historique des scans']].map(([k, l]) =>
-    el('button', {class: 'ghost small' + (radarTab === k ? ' on' : ''), onclick: () => openRadar(k)}, l)));
-  view.append(tabs);
-  if (radarTab === 'feed') {
-    const notifs = await api('GET', '/api/radar/notifications').catch(() => ({notifications: []}));
-    const nc = notificationsCard(notifs.notifications || []); if (nc) view.append(nc);
-    view.append(filtersCard());
-    const f = radarFilters, qs = new URLSearchParams();
-    for (const k of ['status', 'category', 'priority', 'format', 'q']) if (f[k]) qs.set(k, f[k]);
-    if (f.period) qs.set('since', new Date(Date.now() - parseInt(f.period) * 86400000).toISOString());
-    if (f.include_low) qs.set('include_low', '1');
-    const list = await api('GET', '/api/radar/opportunities?' + qs.toString()).catch((e) => ({items: [], total: 0, error: e.message}));
-    if (list.error) view.append(el('div', {class: 'err'}, list.error));
-    view.append(list.items.length ? el('div', {class: 'rgrid'}, list.items.map(radarCard))
-      : el('div', {class: 'empty'}, o.counts.discoveries ? 'Aucune découverte pour ces filtres.' : 'Pas encore de découverte : lance « Scanner maintenant » (le premier scan lit toutes les sources).'));
-    if (list.total > list.items.length) view.append(el('p', {class: 'muted'}, `${list.items.length} sur ${list.total} affichées (affine les filtres).`));
-  } else if (radarTab === 'sources') {
-    view.append(await sourcesView());
-  } else {
-    view.append(await scansView());
-  }
-  show(view);
-  radarBadge();
-  clearTimeout(radarTimer);
-  radarTimer = setTimeout(() => { if (radarOpen && location.hash === '#radar') openRadar(); }, o.schedule.status === 'scanning' ? 4000 : 30000);
-}
-
-async function sourcesView() {
-  const d = await api('GET', '/api/radar/sources');
-  const kind = el('select', {}, Object.entries(R_KIND).map(([k, l]) => el('option', {value: k}, l)));
-  const target = el('input', {placeholder: 'URL du flux RSS · subreddit (GTA6) · chaîne YouTube (UC… ou @handle) · mots-clés'});
-  const name = el('input', {placeholder: 'Nom affiché (optionnel)'});
-  const trust = el('select', {}, [['', 'Fiabilité par défaut'], ['official', 'Officiel (Rockstar / Take-Two)'], ['press', 'Presse'], ['creator', 'Créateur'], ['community', 'Communauté']].map(([v, l]) => el('option', {value: v}, l)));
-  const topicOnly = el('input', {type: 'checkbox'});
-  const add = el('div', {class: 'card'}, el('h2', {}, 'Ajouter une source'),
-    el('div', {class: 'filters'}, kind, target, name, trust),
-    el('label', {class: 'chk'}, topicOnly, 'Tout ce que publie cette source parle de GTA VI'),
-    el('p', {class: 'muted', style: 'font-size:12px'}, 'Seulement des flux publics (RSS / Atom, Reddit RSS, flux officiel YouTube, recherche Bing News RSS) : pas de scraping. Les comptes X / Instagram de Rockstar n\'ont pas de flux public : leurs annonces arrivent par le Newswire, YouTube et la presse.'),
-    el('button', {onclick: () => radarAct(() => api('POST', '/api/radar/sources', {kind: kind.value, target: target.value, name: name.value, trust: trust.value || null, topic_only: topicOnly.checked || null}), () => openRadar('sources'))}, 'Ajouter'));
-  const rows = d.sources.map((s) => {
-    const health = !s.enabled ? el('span', {class: 'health-off'}, 'en pause')
-      : s.last_error ? el('span', {class: 'health-bad', title: s.last_error}, `échec ×${s.consecutive_failures} : ${s.last_error.slice(0, 70)}` + (s.next_attempt_at ? ` · réessai ${ago(s.next_attempt_at)}` : ''))
-      : s.last_success_at ? el('span', {class: 'health-ok'}, 'ok · ' + ago(s.last_success_at)) : el('span', {class: 'muted'}, 'pas encore lu');
-    return el('tr', {},
-      el('td', {}, el('div', {style: 'font-weight:600'}, s.name), el('div', {class: 'muted', style: 'font-size:11px;word-break:break-all'}, s.target)),
-      el('td', {}, R_KIND[s.kind] || s.kind), el('td', {}, R_TRUST[s.trust] || s.trust), el('td', {}, health), el('td', {}, String(s.items_total || 0)),
-      el('td', {}, el('div', {class: 'row'},
-        el('button', {class: 'ghost small', onclick: () => radarAct(() => api('PUT', `/api/radar/sources/${s.id}`, {enabled: !s.enabled}), () => openRadar('sources'))}, s.enabled ? 'Pause' : 'Activer'),
-        s.origin === 'dashboard' ? el('button', {class: 'ghost small', onclick: () => { if (confirm('Supprimer cette source ?')) radarAct(() => api('DELETE', `/api/radar/sources/${s.id}`), () => openRadar('sources')); }}, 'Supprimer') : null)));
-  });
-  return el('div', {}, add, el('div', {class: 'card'}, el('h2', {}, `Sources (${d.sources.length})`),
-    el('table', {}, el('thead', {}, el('tr', {}, ['Source', 'Type', 'Fiabilité', 'État', 'Entrées', ''].map((h) => el('th', {}, h)))), el('tbody', {}, rows))));
-}
-
-async function scansView() {
-  const d = await api('GET', '/api/radar/scans');
-  const S = {success: 'qc-pass', partial: 'qc-warning', failed: 'qc-critical', interrupted: 'qc-critical', running: 'muted'};
-  return el('div', {class: 'card'}, el('h2', {}, 'Historique des scans'), el('table', {},
-    el('thead', {}, el('tr', {}, ['Début', 'Déclencheur', 'État', 'Sources', 'Nouvelles entrées', 'Nouveaux sujets', 'Analyses', 'Alertes', 'Erreurs'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, d.scans.map((s) => el('tr', {},
-      el('td', {}, when(s.started_at)), el('td', {}, s.trigger), el('td', {class: S[s.status] || ''}, s.status),
-      el('td', {}, `${s.sources_checked}` + (s.sources_failed ? ` (${s.sources_failed} en échec)` : '')),
-      el('td', {}, String(s.items_new)), el('td', {}, String(s.opportunities_new)), el('td', {}, String(s.analyses)), el('td', {}, String(s.notifications)),
-      el('td', {class: 'muted', style: 'font-size:12px'}, (s.errors || []).slice(0, 3).map((e) => `${e.source}: ${e.error}`).join(' · ')))))));
-}
-
-function block(title, ...kids) { return el('div', {class: 'sec'}, el('div', {class: 'h'}, title), ...kids); }
-function bullet(list) { return el('ul', {class: 'tight'}, (list || []).filter(Boolean).map((x) => el('li', {}, x))); }
-
-async function openRadarDetail(id) {
-  navRadarOn();
-  clearTimeout(radarTimer);
-  if (location.hash !== '#radar/' + id) history.replaceState(null, '', '#radar/' + id);
-  let o;
-  try { o = await api('GET', '/api/radar/opportunities/' + id); } catch (e) { show(el('div', {class: 'err'}, e.message)); return; }
-  if (!Object.keys(radarCats).length) { try { radarCats = (await api('GET', '/api/radar')).categories || {}; } catch (e) {} }
-  const a = o.analysis || {}, ideas = o.ideas || {}, bd = a.score_breakdown || {};
-  const srcById = Object.fromEntries((a.sources || []).map((s) => [s.id, s]));
-  const after = () => openRadarDetail(id);
-  const head = el('div', {class: 'card'},
-    el('div', {class: 'row', style: 'flex-wrap:nowrap;align-items:flex-start'},
-      el('div', {style: 'flex:1'},
-        el('button', {class: 'ghost small', onclick: () => openRadar('feed')}, '← Découvertes'),
-        el('h2', {style: 'margin:10px 0 6px;font:800 26px/1.15 "Barlow Condensed",sans-serif;text-transform:none;letter-spacing:0;color:var(--paper)'}, o.title),
-        el('div', {class: 'muted', style: 'font-size:12px'}, `découvert ${ago(o.discovered_at)} (${when(o.discovered_at)})` + (o.published_at ? ` · publication originale ${when(o.published_at)}` : '') + (o.analyzed_at ? ` · analysé ${ago(o.analyzed_at)}` : ''))),
-      el('div', {style: 'text-align:right'}, el('div', {class: 'rscore ' + (o.priority || 'low'), style: 'font-size:52px'}, o.score === null || o.score === undefined ? '–' : String(o.score)), el('div', {class: 'muted', style: 'font-size:11px'}, 'score /100'))),
-    catChips(o.categories),
-    el('div', {class: 'row', style: 'margin-top:8px'},
-      o.verification ? pill('ver-' + o.verification, R_VER[o.verification], R_VER_HELP[o.verification]) : null,
-      o.priority ? pill('s-needs_review', 'Priorité ' + R_PRIO[o.priority]) : null,
-      o.format ? pill('s-running', R_FMT[o.format]) : null,
-      o.urgency ? pill('s-stopped', 'Urgence ' + R_PRIO[o.urgency]) : null,
-      pill('st-' + o.status, R_STATUS[o.status])),
-    el('div', {style: 'margin-top:10px'}, statusButtons(o, after)),
-    el('div', {class: 'row', style: 'margin-top:8px'},
-      el('button', {onclick: () => radarAct(async () => { const r = await api('POST', `/api/radar/opportunities/${id}/video`, {format: o.format === 'short' ? 'short' : 'long'}); openJob(r.id); }, () => null)}, `Créer la vidéo (${R_FMT[o.format] || 'format conseillé'})`),
-      el('button', {class: 'ghost small', onclick: () => radarAct(() => api('POST', `/api/radar/opportunities/${id}/reanalyze`, {}), after)}, 'Ré-analyser au prochain scan'),
-      o.job_id ? el('button', {class: 'ghost small', onclick: () => openJob(o.job_id)}, 'Ouvrir le job ' + o.job_id) : null));
-  const view = el('div', {}, head);
-  if (o.analysis_status !== 'done') {
-    view.append(el('div', {class: 'card'}, el('h2', {}, 'Analyse'),
-      el('p', {class: o.analysis_status === 'failed' ? 'qc-critical' : 'muted'}, {pending: 'En attente de l\'analyse IA (prochain scan).', failed: 'L\'analyse a échoué : ' + (o.analysis_error || '') + ' — « Ré-analyser » la remet dans la file.', skipped: 'Jugé peu intéressant au premier tri : ' + ((o.triage || {}).reason || '') + ' — « Ré-analyser » force une analyse complète.'}[o.analysis_status] || ''),
-      el('p', {}, o.summary || '')));
-  } else {
-    view.append(el('div', {class: 'grid2'},
-      el('div', {class: 'card'}, el('h2', {}, 'Analyse'),
-        block('Ce qui est nouveau', el('div', {}, a.what_is_new || '')),
-        block('Pourquoi c\'est intéressant', el('div', {}, a.why_interesting || '')),
-        block('Vérification', el('div', {}, el('b', {class: 'v-' + ({credible: 'reported', community: 'speculation'}[a.verification] || a.verification)}, R_VER[a.verification] || ''), ' — ', a.verification_note || ''),
-          a.caution ? el('div', {class: 'qc-warning', style: 'margin-top:4px'}, 'À ne pas présenter comme un fait : ' + a.caution) : null),
-        block('Déjà couvert ailleurs ?', el('div', {}, {low: 'Peu couvert', medium: 'Moyennement couvert', high: 'Largement couvert'}[a.coverage] || a.coverage || '—', a.overlaps_our_videos ? ' · ⚠ recoupe une de nos vidéos / idées' : '')),
-        block('Angle original', el('div', {}, a.unique_angle || '')),
-        block('Format conseillé', el('div', {}, (R_FMT[a.format] || '') + ' — ' + (a.format_reason || ''))),
-        block('Urgence', el('div', {}, (R_PRIO[o.urgency] || '') + ' — ' + (a.urgency_reason || ''))),
-        block('Calcul du score', el('div', {class: 'muted', style: 'font-size:12px'}, `base ${bd.base} × vérification ${bd.verification} × couverture ${bd.coverage} × déjà fait ${bd.already_ours} × fraîcheur ${bd.freshness} (${bd.age_hours} h) · ${bd.outlets} média(s)`))),
-      el('div', {class: 'card'}, el('h2', {}, 'Idée de vidéo'),
-        block('Titres proposés', bullet(ideas.titles)),
-        block('Accroches (3 premières secondes)', bullet(ideas.hooks)),
-        block('Explication', el('div', {}, ideas.explanation || '')),
-        block('Pourquoi maintenant', el('div', {}, ideas.why_now || '')),
-        block('Miniature', el('div', {}, ideas.thumbnail || '')))));
-    if (ideas.short) {
-      const sh = ideas.short;
-      const words = [sh.hook, sh.body, sh.ending].join(' ').split(/\s+/).filter(Boolean).length;
-      view.append(el('div', {class: 'card'}, el('h2', {}, `Script Short (${words} mots ≈ ${Math.round(words / 2.5)} s)`),
-        el('div', {class: 'script'}, el('b', {}, 'Accroche (0-3 s)'), sh.hook),
-        el('div', {class: 'script'}, el('b', {}, 'Information'), sh.body),
-        el('div', {class: 'script'}, el('b', {}, 'Images / gameplay à montrer'), bullet(sh.visuals)),
-        el('div', {class: 'script'}, el('b', {}, 'Fin'), sh.ending)));
-    }
-    if (ideas.long) {
-      const lg = ideas.long;
-      view.append(el('div', {class: 'card'}, el('h2', {}, 'Vidéo longue : ' + (lg.title || '')),
-        block('Structure', el('ol', {class: 'tight'}, (lg.structure || []).map((s) => el('li', {}, el('b', {}, s.section || ''), bullet(s.points))))),
-        block('Points clés', bullet(lg.talking_points)),
-        block('Sources à citer', bullet((lg.source_ids || []).map((sid) => srcById[sid] ? extLink(srcById[sid].url, `${srcById[sid].name} — ${srcById[sid].title}`) : null)))));
-    }
-  }
-  view.append(el('div', {class: 'card'}, el('h2', {}, `Sources (${o.sources.length})`), el('table', {},
-    el('thead', {}, el('tr', {}, ['Source', 'Fiabilité', 'Article / post', 'Publié', 'Vu par le radar'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, o.sources.map((s) => el('tr', {},
-      el('td', {}, s.name || ''), el('td', {}, R_TRUST[s.trust] || s.trust || ''), el('td', {}, extLink(s.url, s.title)),
-      el('td', {}, when(s.published_at)), el('td', {}, when(s.discovered_at) + (s.updated_at ? ` · modifié ${ago(s.updated_at)}` : ''))))))));
-  show(view);
-}
-
-$('#nav-radar').addEventListener('click', () => openRadar('feed'));
-function routeHash() {
-  const m = /^#radar(?:\/(\d+))?$/.exec(location.hash);
-  if (!m) return false;
-  if (m[1]) openRadarDetail(parseInt(m[1])); else openRadar();
-  return true;
-}
-window.addEventListener('hashchange', routeHash);
-radarBadge();
-setInterval(radarBadge, 30000);
-
 loadVoices();
-loadJobs().then(() => { if (routeHash()) return; const first = document.querySelector('.job'); if (first) first.click(); });
+loadJobs().then(() => { const first = document.querySelector('.job'); if (first) first.click(); });
 setInterval(() => { if (!current) loadJobs(); }, 8000);
 </script>
 </body>
