@@ -2,7 +2,7 @@
 import React from 'react';
 import {interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {MediaBackdrop} from '../motion_graphics/backgrounds';
-import {BrandMark} from '../motion_graphics/overlays';
+import {ChannelLogo} from '../motion_graphics/overlays';
 import {Kicker, Panel, Reveal, SlamWords, Wipe, clamp, cueFrame, easeOut, useProgress, useSpring} from '../motion_graphics/primitives';
 import {C, F, hexA, useLayout} from '../motion_graphics/theme';
 import {SceneProps, Stage} from './shared';
@@ -309,7 +309,7 @@ export const ChapterScene: React.FC<SceneProps> = ({scene, accent}) => {
 };
 
 /** Closing question. Leaves the right side calm for YouTube end-screen elements. */
-export const OutroScene: React.FC<SceneProps> = ({scene, accent}) => {
+export const OutroScene: React.FC<SceneProps> = ({scene, accent, brand}) => {
   const {u, vertical} = useLayout();
   const frame = useCurrentFrame();
   const bob = Math.sin(frame / 9) * 8 * u;
@@ -317,7 +317,7 @@ export const OutroScene: React.FC<SceneProps> = ({scene, accent}) => {
     <Stage>
       <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 34 * u, maxWidth: (vertical ? 940 : 1400) * u}}>
         <Reveal delay={2} from="scale">
-          <BrandMark size={120 * u} color={accent} />
+          <ChannelLogo logo={brand?.logo} size={(brand?.logo ? (vertical ? 300 : 200) : 120) * u} color={accent} />
         </Reveal>
         <Kicker color={accent} delay={6}>
           Your call

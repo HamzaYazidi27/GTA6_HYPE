@@ -28,7 +28,7 @@ def thumbnail_concepts(llm: Any, settings: Any, *, script: dict[str, Any], fact_
     from ..footage.games import game_settings
     from ..footage.select import thumbnail_photos
 
-    brand = settings.get("channel.name", "NEON DISPATCH")
+    brand = settings.get("channel.name", "Ghost Plates")
     count = int(settings.get("thumbnail.concepts", 3))
     items = script.get("items") or []
     titles = " ".join(it["title"] for it in items)

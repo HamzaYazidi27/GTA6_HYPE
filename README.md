@@ -2,7 +2,7 @@
 
 Tu donnes l'URL d'un article sur GTA 6. L'usine produit un **paquet prêt à relire** : la vidéo MP4 (format long 16:9 ou Short 9:16), trois miniatures, les sous-titres, le titre, la description avec chapitres et sources, le script et un rapport de fact-check.
 
-Chaîne : **NEON DISPATCH**, « GTA 6 news, verified. » Chaque affirmation à l'écran porte son statut : CONFIRMED, REPORTED, RUMOR ou SPECULATION.
+Chaîne : **Ghost Plates**, « Run the plates on GTA 6. » Le logo de la chaîne est le watermark de chaque vidéo (voir « Le logo de la chaîne »). Chaque affirmation à l'écran porte son statut : CONFIRMED, REPORTED, RUMOR ou SPECULATION.
 
 Coût : **0 $, sans aucun abonnement ni clé API.** Tout tourne sur ta machine : le LLM est un modèle open-source servi par [Ollama](https://ollama.com) (gratuit), la voix (Kokoro) et l'alignement des sous-titres (Whisper) sont locaux, et la musique et les effets sont synthétisés par le projet. Un abonnement Claude ou une clé API restent possibles en option, jamais nécessaires.
 
@@ -153,6 +153,21 @@ Dans le dashboard, carte **Voix de la narration** : choisis une voix et clique s
 | ElevenLabs | abonnement ElevenLabs | le plus humain ; clé `ELEVENLABS_API_KEY` dans `.env`, les voix de ton compte apparaissent dans la liste |
 
 Les voix OpenAI et ElevenLabs lisent **toute la scène d'un coup** (l'intonation enchaîne d'une phrase à l'autre comme un vrai narrateur) ; Kokoro lit phrase par phrase avec une respiration naturelle entre deux (`audio.synthesis`, `audio.sentence_pause_seconds`).
+
+## Le logo de la chaîne
+
+Le logo rond de la chaîne (`assets/brand/logo.png`, réglé par `channel.logo` dans `config.yaml`) est :
+
+- le **watermark** en haut à gauche de chaque vidéo (format long et Shorts), du début à la fin, comme le logo d'une chaîne de télé ;
+- le grand logo de l'écran de fin ;
+- le badge en haut à droite de chaque miniature.
+
+Changer de logo : `python -m gta_factory brand mon_logo.png`. Une image carrée suffit : un logo rond livré sur un carré noir ou blanc est découpé à son cercle (`--square` garde tout le carré). La commande écrit aussi les deux images à mettre dans YouTube Studio, menu Personnalisation, onglet Branding :
+
+- `assets/brand/youtube_profile_800.png` : la photo de profil (800 x 800) ;
+- `assets/brand/youtube_watermark_150.png` : le filigrane vidéo (150 x 150, à afficher pendant toute la vidéo).
+
+Réglages : `channel.watermark_opacity` (0.2 discret … 1.0 plein), et `channel.logo: ""` pour ne mettre aucun logo. Les vidéos déjà rendues gardent l'ancienne image : `python -m gta_factory resume <job> --from render` les met à jour.
 
 ## Utilisation
 

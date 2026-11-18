@@ -6,7 +6,7 @@ import React from 'react';
 import {AbsoluteFill, Sequence, useCurrentFrame} from 'remotion';
 import {Atmosphere, Background, FootageBackdrop} from '../motion_graphics/backgrounds';
 import {ensureFonts} from '../motion_graphics/fonts';
-import {BrandBug, Captions, FootageCredit, ProgressRail, SceneOut, SourceStrip, StatusTag, TransitionIn} from '../motion_graphics/overlays';
+import {Captions, FootageCredit, ProgressRail, SceneOut, SourceStrip, StatusTag, TransitionIn, Watermark} from '../motion_graphics/overlays';
 import {CameraDrift} from '../motion_graphics/primitives';
 import {C, STATUS, Status, accentFor, hexA} from '../motion_graphics/theme';
 import {BarsScene, ClaimScene, HeadlineScene, KineticScene, QuoteScene, StatScene, TitleScene} from './scenesA';
@@ -57,10 +57,9 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
           <Background kind={scene.background} accent={accent} seed={scene.seed} />
         </CameraDrift>
         <AbsoluteFill style={{background: hexA(C.ink, 0.45)}} />
-        <Comp scene={scene} accent={accent} today={timeline.today} />
+        <Comp scene={scene} accent={accent} today={timeline.today} brand={timeline.brand} />
         <Atmosphere />
-        <BrandBug name={timeline.brand.name} />
-        {scene.footage || scene.footageB ? <FootageCredit credit={(scene.footage ?? scene.footageB)!.credit} /> : null}
+        {scene.footage || scene.footageB ? <FootageCredit credit={(scene.footage ?? scene.footageB)!.credit} besideLogo={!!timeline.brand.logo} /> : null}
         {timeline.burnCaptions ? <Captions phrases={scene.phrases} accent={accent} emphasis={scene.emphasisText} /> : null}
         <SceneOut durationInFrames={scene.durationFrames} />
         <TransitionIn kind={scene.transition} accent={accent} />
@@ -71,10 +70,9 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
     // the detail scene drives the footage itself (freeze, zoom, ring): no backdrop, no drift
     return (
       <AbsoluteFill style={{background: C.ink}}>
-        <Comp scene={scene} accent={accent} today={timeline.today} />
+        <Comp scene={scene} accent={accent} today={timeline.today} brand={timeline.brand} />
         <Atmosphere />
-        <BrandBug name={timeline.brand.name} />
-        {scene.footage ? <FootageCredit credit={scene.footage.credit} /> : null}
+        {scene.footage ? <FootageCredit credit={scene.footage.credit} besideLogo={!!timeline.brand.logo} /> : null}
         {timeline.burnCaptions ? <Captions phrases={scene.phrases} accent={accent} emphasis={scene.emphasisText} /> : null}
         <SceneOut durationInFrames={scene.durationFrames} />
         <TransitionIn kind={scene.transition} accent={accent} />
@@ -99,13 +97,12 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
         </>
       )}
       <CameraDrift durationInFrames={scene.durationFrames} seed={scene.seed + 1} amount={0.022}>
-        <Comp scene={scene} accent={accent} today={timeline.today} />
+        <Comp scene={scene} accent={accent} today={timeline.today} brand={timeline.brand} />
       </CameraDrift>
       <Atmosphere />
-      <BrandBug name={timeline.brand.name} />
       {showStatus ? <StatusTag status={status} /> : null}
       <SourceStrip source={scene.source} />
-      {scene.footage ? <FootageCredit credit={scene.footage.credit} /> : null}
+      {scene.footage ? <FootageCredit credit={scene.footage.credit} besideLogo={!!timeline.brand.logo && scene.template !== 'outro'} /> : null}
       {timeline.burnCaptions ? <Captions phrases={scene.phrases} accent={accent} emphasis={scene.emphasisText} /> : null}
       <SceneOut durationInFrames={scene.durationFrames} />
       <TransitionIn kind={scene.transition} accent={accent} />
@@ -115,6 +112,8 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
 
 export const Video: React.FC<{timeline: Timeline}> = ({timeline}) => {
   const frame = useCurrentFrame();
+  // the end screen shows the logo big: the corner watermark steps aside meanwhile
+  const outro = timeline.scenes.find((s) => s.template === 'outro');
   return (
     <AbsoluteFill style={{background: C.ink}}>
       {timeline.scenes.map((scene) => (
@@ -122,6 +121,7 @@ export const Video: React.FC<{timeline: Timeline}> = ({timeline}) => {
           <SceneFrame scene={scene} timeline={timeline} />
         </Sequence>
       ))}
+      <Watermark brand={timeline.brand} hideFrom={outro?.startFrame} hideTo={outro ? outro.startFrame + outro.durationFrames : undefined} />
       <ProgressRail frame={frame} total={timeline.totalFrames} chapters={timeline.chapters} />
     </AbsoluteFill>
   );

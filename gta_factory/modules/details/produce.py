@@ -245,7 +245,7 @@ def thumbnail_concepts(settings: Any, script: dict[str, Any], details: list[dict
     """Three thumbnails, each a close-up of one of the strongest details with a neon ring around it."""
     from .find import score
 
-    brand = settings.get("channel.name", "NEON DISPATCH")
+    brand = settings.get("channel.name", "Ghost Plates")
     best = sorted(details, key=lambda d: -score(d))[: int(settings.get("thumbnail.concepts", 3))]
     lines = script.get("thumb_lines") or [f"{len(details)} DETAILS", "YOU MISSED"]
     variants = [("stamp", lines, "coral"), ("split", ["LOOK", "CLOSER"], "cyan"), ("stamp", [(details and str(details[0].get("short_title", "GTA 6")).upper()[:12]) or "GTA 6", "DETAILS"], "sun")]

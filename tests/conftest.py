@@ -52,6 +52,8 @@ def project(tmp_path: Path, audio_assets: Path):
         for f in src.glob("*.wav"):
             shutil.copyfile(f, dst / f.name)
     (root / "assets" / "licensed_visuals").mkdir(parents=True)
+    (root / "assets" / "brand").mkdir(parents=True)
+    shutil.copyfile(REPO / "assets" / "brand" / "logo.png", root / "assets" / "brand" / "logo.png")  # the channel watermark
     (root / "knowledge").mkdir()
     # rendering needs the real templates and node_modules
     (root / "templates").symlink_to(REPO / "templates")

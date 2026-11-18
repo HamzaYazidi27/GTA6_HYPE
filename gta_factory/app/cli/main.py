@@ -10,6 +10,7 @@
     list | status JOB | log JOB | delete JOB
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
     voices                     list the voices of the TTS provider
+    brand [IMAGE] [--square]   the channel logo (watermark of every video): install a new one, write the YouTube Studio images
     footage [list|update|add|tag|autotag|find|concepts|remove|fetch|stills] [--game rdr2]
                                real GTA 6 footage library (or another game's, for comparisons): add footage, tag it, see what a sentence shows
     competitors CHANNEL_URL    refresh the competitor reference database
@@ -488,6 +489,28 @@ def _footage_listing(s: Any, index: dict[str, Any]) -> None:
     _print(f"new videos show real footage on {lo:.0%}-{hi:.0%} of the running time (footage.ratio_min / ratio_max in config.yaml)")
 
 
+def cmd_brand(args: argparse.Namespace) -> int:
+    from ...modules.branding import BRAND_DIR, PROFILE_NAME, WATERMARK_NAME, install_logo, logo_file
+
+    s = get_settings()
+    if args.image:
+        out = install_logo(s, Path(args.image).expanduser(), square=args.square)
+        _print(f"logo installed: {out['logo']}")
+        configured = str(s.get("channel.logo") or "")
+        if Path(configured) != BRAND_DIR / "logo.png" and Path(configured).expanduser() != out["logo"]:
+            _print(f'  note: config.yaml uses channel.logo: "{configured}". Set it to "assets/brand/logo.png" to use the new logo.')
+    logo = logo_file(s)
+    _print(f"channel: {s.get('channel.name', '')} - {s.get('channel.tagline', '')}")
+    _print(f"logo (watermark of every video, end screen, thumbnails): {logo or 'none (channel.logo is empty)'}")
+    folder = s.root / BRAND_DIR
+    if (folder / PROFILE_NAME).exists():
+        _print("YouTube Studio > Customization > Branding:")
+        _print(f"  Picture          {folder / PROFILE_NAME}")
+        _print(f"  Video watermark  {folder / WATERMARK_NAME}  (display: entire video)")
+    _print("Videos already rendered keep their old picture: resume them from the render step to update them.")
+    return 0
+
+
 def cmd_footage(args: argparse.Namespace) -> int:
     from ...modules.footage import library as lib
     from ...modules.footage.games import game_settings
@@ -788,6 +811,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--provider", help="kokoro | elevenlabs | openai")
     sp.add_argument("--sample", action="store_true", help="read the same sentence with each voice into outputs/voice_samples/ to compare them")
     sp.set_defaults(fn=cmd_voices)
+
+    sp = sub.add_parser("brand", help="the channel logo: install a new one (watermark of every video) and write the YouTube Studio images")
+    sp.add_argument("image", nargs="?", help="a square image of the logo (PNG, JPG or WEBP); a logo on a black or white square is cut to its circle")
+    sp.add_argument("--square", action="store_true", help="keep the whole square instead of cutting the circle")
+    sp.set_defaults(fn=cmd_brand)
 
     sp = sub.add_parser("footage", help="real GTA 6 footage: add new footage, tag it, see what the narration will show")
     sp.add_argument("action", choices=("list", "update", "add", "tag", "autotag", "find", "concepts", "remove", "fetch", "stills"), nargs="?", default="list",

@@ -1,7 +1,7 @@
 /** Types and layout wrapper shared by all scene templates. */
 import React from 'react';
 import {useLayout} from '../motion_graphics/theme';
-import type {Phrase, TransitionKind} from '../motion_graphics/overlays';
+import type {Brand, Phrase, TransitionKind} from '../motion_graphics/overlays';
 import type {BackgroundKind} from '../motion_graphics/backgrounds';
 
 export type SceneData = {
@@ -39,13 +39,13 @@ export type Timeline = {
   totalFrames: number;
   title: string;
   today: string;
-  brand: {name: string; tagline: string};
+  brand: Brand;
   burnCaptions: boolean;
   chapters: {title: string; startFrame: number}[];
   scenes: SceneData[];
 };
 
-export type SceneProps = {scene: SceneData; accent: string; today: string};
+export type SceneProps = {scene: SceneData; accent: string; today: string; brand?: Brand};
 
 /** Places scene content inside the title-safe area, clear of the captions zone. */
 export const Stage: React.FC<{children: React.ReactNode; align?: 'center' | 'top'}> = ({children, align = 'center'}) => {

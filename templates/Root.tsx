@@ -6,7 +6,7 @@ import {Video} from './video/Video';
 import type {Timeline} from './video/shared';
 import {SAMPLE_TIMELINE} from './video/sample';
 
-const SAMPLE_THUMB: ThumbProps = {concept: 'stamp', lines: ['SMALL-TIME', 'CRIMINALS'], accent: 'CRIMINALS', status: 'reported', motif: 'sunset', bigText: '', label: '', brand: 'NEON DISPATCH', color: 'coral', calendar: null};
+const SAMPLE_THUMB: ThumbProps = {concept: 'stamp', lines: ['SMALL-TIME', 'CRIMINALS'], accent: 'CRIMINALS', status: 'reported', motif: 'sunset', bigText: '', label: '', brand: 'Ghost Plates', color: 'coral', calendar: null};
 
 const meta = ({props}: {props: {timeline: Timeline}}) => ({
   durationInFrames: Math.max(1, props.timeline.totalFrames),

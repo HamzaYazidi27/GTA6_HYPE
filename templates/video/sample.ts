@@ -63,7 +63,7 @@ export const SAMPLE_TIMELINE: Timeline = {
   totalFrames: cursor,
   title: 'Template preview',
   today: '2030-01-01',
-  brand: {name: 'NEON DISPATCH', tagline: 'GTA 6 news, verified.'},
+  brand: {name: 'Ghost Plates', tagline: 'Run the plates on GTA 6.'},
   burnCaptions: true,
   chapters: [
     {title: 'Hook', startFrame: 0},

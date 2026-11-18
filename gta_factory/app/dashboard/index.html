@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NEON DISPATCH · usine vidéo GTA 6</title>
+<title>Ghost Plates · usine vidéo GTA 6</title>
 <style>
   :root { --ink:#06070E; --ink2:#0C0F1F; --panel:#12162E; --panel2:#1A2040; --line:rgba(255,255,255,.10); --paper:#F6F8FF; --mute:#9BA6CC;
           --coral:#FF4D6D; --cyan:#2DE2E6; --sun:#FFD23F; --violet:#8A6BFF; --lime:#2EE59D; --amber:#FFAA2B; }
@@ -12,6 +12,7 @@
   header { display:flex; align-items:center; gap:18px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--ink2); position:sticky; top:0; z-index:5; }
   header h1 { margin:0; font:800 20px/1 "Barlow Condensed", "Arial Narrow", sans-serif; letter-spacing:.08em; }
   header h1 span { color:var(--coral); }
+  header h1 .brand-logo { width:34px; height:34px; border-radius:50%; vertical-align:middle; margin-right:10px; }
   .counts { color:var(--mute); font-size:12px; margin-left:auto; }
   main { display:grid; grid-template-columns: 380px 1fr; min-height: calc(100vh - 52px); }
   aside { border-right:1px solid var(--line); padding:16px; overflow:auto; max-height: calc(100vh - 52px); position:sticky; top:52px; }
@@ -75,7 +76,7 @@
 </style>
 </head>
 <body>
-<header><h1>NEON <span>DISPATCH</span> · USINE GTA 6</h1><nav><button class="ghost small" id="nav-footage">Footage GTA 6</button></nav><div class="counts" id="counts"></div></header>
+<header><h1><img class="brand-logo" src="/brand/logo" alt="" onerror="this.remove()">GHOST <span>PLATES</span> · USINE GTA 6</h1><nav><button class="ghost small" id="nav-footage">Footage GTA 6</button></nav><div class="counts" id="counts"></div></header>
 <main>
   <aside>
     <div class="card">

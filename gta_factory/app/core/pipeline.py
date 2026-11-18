@@ -631,6 +631,7 @@ def step_voice(ctx: JobContext) -> dict[str, Any]:
 def step_timeline(ctx: JobContext) -> dict[str, Any]:
     from ...modules.subtitles.align import align_scene, build_captions, to_srt, to_vtt
     from ...modules.footage.select import cut_scene_clips
+    from ...modules.branding import stage_brand
     from ...modules.video_editing.render import stage_footage, stage_media
     from ...modules.video_editing.timeline import build_render_props, scene_local_words
     from ...modules.voice_generation.engine import build_timeline
@@ -669,15 +670,18 @@ def step_timeline(ctx: JobContext) -> dict[str, Any]:
     media = stage_media(s, ctx.job_id, scenes)
     footage = stage_footage(s, ctx.job_id, scenes)
     props = build_render_props(s, job_id=ctx.job_id, fmt=ctx.fmt, title=script["title"], today=ctx.today, scenes=scenes, master=master, alignments=alignments, media_urls=media, footage=footage)
+    props["brand"] = stage_brand(s)  # channel name + logo (the watermark of the video)
     write_json(ctx.paths.props, props)
     ctx.log(f"timeline: {master['total_seconds']:.1f}s, {len(scenes)} scenes, {len(cues)} subtitle cues, alignment {methods}, voice {master['voiceover']['lufs']:.1f} LUFS")
     return {"seconds": master["total_seconds"], "frames": master["total_frames"], "cues": len(cues), "alignment": methods}
 
 
 def step_render(ctx: JobContext) -> dict[str, Any]:
+    from ...modules.branding import stage_brand
     from ...modules.video_editing.render import render_video, stage_footage, stage_media
 
     props = ctx.need(ctx.paths.props)
+    props["brand"] = stage_brand(ctx.settings)  # always the current logo, also when an older job is rendered again
     stage_media(ctx.settings, ctx.job_id, ctx.need(ctx.paths.scenes))
     stage_footage(ctx.settings, ctx.job_id, ctx.need(ctx.paths.scenes))
     t0 = time.time()
@@ -698,6 +702,7 @@ def step_mix(ctx: JobContext) -> dict[str, Any]:
 
 
 def step_thumbnail(ctx: JobContext) -> dict[str, Any]:
+    from ...modules.branding import stage_brand
     from ...modules.footage.select import thumbnail_photos
     from ...modules.thumbnail_generation.concepts import design_thumbnails
     from ...modules.video_editing.render import bundle_dir
@@ -722,6 +727,9 @@ def step_thumbnail(ctx: JobContext) -> dict[str, Any]:
         # real GTA 6 pictures behind the thumbnail text (from the footage library), one per concept
         pics = thumbnail_photos(ctx.settings, f"{script.get('title', '')} " + " ".join(" ".join(c["props"]["lines"]) for c in concepts), len(concepts), out_dir=ctx.paths.thumbnails / "photos")
     public = bundle_dir(ctx.settings) / "public" / "job_media" / ctx.job_id
+    logo = stage_brand(ctx.settings)["logo"]
+    for c in concepts:
+        c["props"]["logo"] = logo or None  # the channel logo in the corner of every thumbnail
     for i, (c, pic) in enumerate(zip(concepts, pics), 1):
         if not pic.exists():
             continue

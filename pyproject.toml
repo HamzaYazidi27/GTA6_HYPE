@@ -13,6 +13,7 @@ dependencies = [
     "feedparser>=6.0",
     "python-dateutil>=2.9",
     "kokoro-onnx>=0.4",
+    "pillow>=10",
 ]
 
 [project.optional-dependencies]

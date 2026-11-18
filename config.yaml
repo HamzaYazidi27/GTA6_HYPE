@@ -3,8 +3,11 @@
 # Every value here has a built-in default, so you can delete what you do not change.
 
 channel:
-  name: "NEON DISPATCH"            # shown in the brand bug, bumper and thumbnails
-  tagline: "GTA 6 news, verified."
+  name: "Ghost Plates"             # shown in the thumbnails, the end screen and the dashboard
+  tagline: "Run the plates on GTA 6."
+  logo: "assets/brand/logo.png"    # round logo (transparent PNG): watermark of every video, end screen, thumbnails.
+                                   # Change it with `python -m gta_factory brand <image>`; "" = no logo
+  watermark_opacity: 0.92          # 0.2 (discreet) .. 1.0 (solid)
   language: "en"
   playlist_prefix: "GTA 6"
 

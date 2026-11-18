@@ -12,7 +12,7 @@
 import React from 'react';
 import {AbsoluteFill, Img, staticFile} from 'remotion';
 import {ensureFonts} from '../motion_graphics/fonts';
-import {BrandMark} from '../motion_graphics/overlays';
+import {BrandMark, ChannelLogo} from '../motion_graphics/overlays';
 import {C, F, STATUS, Status, hexA} from '../motion_graphics/theme';
 
 ensureFonts();
@@ -26,6 +26,8 @@ export type ThumbProps = {
   bigText: string;
   label: string;
   brand: string;
+  /** the round channel logo (public path), shown in the top-right corner instead of the name */
+  logo?: string | null;
   color: 'coral' | 'cyan' | 'sun' | 'violet' | 'lime';
   calendar: {month: string; day: string} | null;
   /** optional real GTA 6 screenshot / trailer still (public path); replaces the drawn motif */
@@ -194,15 +196,21 @@ const Chip: React.FC<{children: React.ReactNode; color: string}> = ({children, c
   <div style={{display: 'inline-block', padding: '6px 20px 4px', borderRadius: 10, background: color, color: C.ink, fontFamily: F.display, fontWeight: 900, fontSize: 46, letterSpacing: '0.04em', lineHeight: 1.05}}>{children}</div>
 );
 
-const Frame: React.FC<{children: React.ReactNode; color: string; brand: string}> = ({children, color, brand}) => (
+const Frame: React.FC<{children: React.ReactNode; color: string; brand: string; logo?: string | null}> = ({children, color, brand, logo}) => (
   <AbsoluteFill style={{background: C.ink, overflow: 'hidden'}}>
     {children}
     <AbsoluteFill style={{backgroundImage: `url(${staticFile('grain.png')})`, backgroundSize: '256px 256px', opacity: 0.06, mixBlendMode: 'overlay'}} />
     <div style={{position: 'absolute', left: 0, right: 0, bottom: 0, height: 12, background: `linear-gradient(90deg, ${color}, ${C.sun})`}} />
-    <div style={{position: 'absolute', right: 28, top: 24, display: 'flex', alignItems: 'center', gap: 10, opacity: 0.95}}>
-      <BrandMark size={44} color={color} />
-      <div style={{fontFamily: F.mono, fontWeight: 700, fontSize: 17, letterSpacing: '0.2em', color: C.paper}}>{brand.toUpperCase()}</div>
-    </div>
+    {logo ? (
+      <div style={{position: 'absolute', right: 26, top: 22}}>
+        <ChannelLogo logo={logo} size={88} />
+      </div>
+    ) : (
+      <div style={{position: 'absolute', right: 28, top: 24, display: 'flex', alignItems: 'center', gap: 10, opacity: 0.95}}>
+        <BrandMark size={44} color={color} />
+        <div style={{fontFamily: F.mono, fontWeight: 700, fontSize: 17, letterSpacing: '0.2em', color: C.paper}}>{brand.toUpperCase()}</div>
+      </div>
+    )}
   </AbsoluteFill>
 );
 
@@ -220,7 +228,7 @@ const ThumbnailBody: React.FC<ThumbProps> = (p) => {
     const big = p.bigText || p.lines[0] || 'GTA 6';
     const size = Math.min(430, 1560 / Math.max(3, big.length));
     return (
-      <Frame color={color} brand={p.brand}>
+      <Frame color={color} brand={p.brand} logo={p.logo}>
         {p.photo ? (
           <Photo src={p.photo} color={color} side="left" />
         ) : (
@@ -263,7 +271,7 @@ const ThumbnailBody: React.FC<ThumbProps> = (p) => {
       <div style={{position: 'absolute', ...style, padding: '10px 26px 4px', background: bg, color: C.ink, fontFamily: F.display, fontWeight: 900, fontStyle: 'italic', fontSize: Math.min(110, 1100 / Math.max(6, text.length)), lineHeight: 1, transform: 'rotate(-3deg)', textTransform: 'uppercase', whiteSpace: 'nowrap', boxShadow: `0 10px 0 ${C.ink}`}}>{text}</div>
     );
     return (
-      <Frame color={color} brand={p.brand}>
+      <Frame color={color} brand={p.brand} logo={p.logo}>
         {half(p.photo2, 'polygon(0 0, 57% 0, 43% 100%, 0 100%)', C.cyan, left)}
         {half(p.photo, 'polygon(57% 0, 100% 0, 100% 100%, 43% 100%)', C.coral, 'GTA 6')}
         <div style={{position: 'absolute', left: 625, top: -60, width: 22, height: 860, background: C.sun, transform: 'rotate(10.6deg)', boxShadow: `0 0 40px ${hexA(C.sun, 0.8)}`}} />
@@ -275,7 +283,7 @@ const ThumbnailBody: React.FC<ThumbProps> = (p) => {
   }
   if (p.concept === 'split') {
     return (
-      <Frame color={color} brand={p.brand}>
+      <Frame color={color} brand={p.brand} logo={p.logo}>
         <AbsoluteFill style={{background: `linear-gradient(135deg, ${C.ink2} 0%, ${C.ink} 100%)`}} />
         {p.photo ? (
           <div style={{position: 'absolute', left: 560, top: 0, right: 0, bottom: 0}}>
@@ -317,7 +325,7 @@ const ThumbnailBody: React.FC<ThumbProps> = (p) => {
   }
   // stamp concept
   return (
-    <Frame color={color} brand={p.brand}>
+    <Frame color={color} brand={p.brand} logo={p.logo}>
       {p.photo ? (
         <Photo src={p.photo} color={color} side="left" />
       ) : (

@@ -175,7 +175,7 @@ def build_render_props(
         "totalFrames": int(master["total_frames"]),
         "title": title,
         "today": today[:10],
-        "brand": {"name": settings.get("channel.name", "NEON DISPATCH"), "tagline": settings.get("channel.tagline", "")},
+        "brand": {"name": settings.get("channel.name", "Ghost Plates"), "tagline": settings.get("channel.tagline", "")},
         "burnCaptions": bool(settings.get("video.burn_captions", True)),
         "chapters": [{"title": c["title"], "startFrame": c["startFrame"]} for c in chapters],
         "scenes": out_scenes,

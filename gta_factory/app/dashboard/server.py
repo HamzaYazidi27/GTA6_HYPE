@@ -402,6 +402,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(catalog(s))
             elif len(parts) == 2 and parts[0] == "voice-samples" and re.match(r"^[A-Za-z0-9_.\-]+\.wav$", parts[1]):
                 self._serve_file(s.jobs_dir / ".cache" / "voice_samples" / parts[1])
+            elif parts == ["brand", "logo"]:  # the channel logo, for the dashboard header
+                from ...modules.branding import logo_file
+
+                logo = logo_file(s)
+                if logo and logo.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                    self._serve_file(logo)
+                else:
+                    self._error(404, "no channel logo")
             elif parts == ["api", "footage"]:
                 self._json(footage_payload(s))
             elif parts == ["api", "footage", "task"]:

@@ -125,7 +125,7 @@ def _fallback_lines(title: str) -> list[str]:
 
 
 def design_thumbnails(llm: LLMProvider | None, settings: Any, *, script: dict[str, Any], story: dict[str, Any], fact_check: list[dict[str, Any]], log=lambda m: None) -> list[dict[str, Any]]:
-    brand = settings.get("channel.name", "NEON DISPATCH")
+    brand = settings.get("channel.name", "Ghost Plates")
     fallback = _fallback_lines(script.get("title") or story.get("working_title") or "")
     raw_concepts: list[dict[str, Any]] = []
     if llm is not None:

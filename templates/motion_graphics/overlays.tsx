@@ -1,10 +1,12 @@
-/** Persistent overlays: brand bug, status tag, source strip, chapter rail, captions, transitions. */
+/** Persistent overlays: channel watermark, status tag, source strip, chapter rail, captions, transitions. */
 import React from 'react';
-import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+import {AbsoluteFill, Img, interpolate, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {clamp, easeInOut, easeOut} from './primitives';
 import {C, F, STATUS, Status, hexA, useLayout} from './theme';
 
-/** Original channel mark: three signal bars inside a rounded tile. */
+export type Brand = {name: string; tagline: string; logo?: string; watermarkOpacity?: number};
+
+/** Fallback mark, used only when no channel logo is configured (channel.logo: ""): three signal bars in a rounded tile. */
 export const BrandMark: React.FC<{size: number; color?: string}> = ({size, color = C.coral}) => (
   <svg width={size} height={size} viewBox="0 0 64 64">
     <rect x="2" y="2" width="60" height="60" rx="14" fill={C.ink} stroke={color} strokeWidth="4" />
@@ -14,15 +16,45 @@ export const BrandMark: React.FC<{size: number; color?: string}> = ({size, color
   </svg>
 );
 
-export const BrandBug: React.FC<{name: string}> = ({name}) => {
+/** The channel logo (round, from channel.logo), or the fallback mark. */
+export const ChannelLogo: React.FC<{logo?: string; size: number; color?: string; shadow?: boolean}> = ({logo, size, color, shadow = true}) =>
+  logo ? (
+    <Img
+      src={logo.startsWith('http') ? logo : staticFile(logo)}
+      style={{width: size, height: size, borderRadius: '50%', objectFit: 'cover', display: 'block', filter: shadow ? `drop-shadow(0 ${size * 0.05}px ${size * 0.14}px rgba(0,0,0,0.55))` : undefined}}
+    />
+  ) : (
+    <BrandMark size={size} color={color} />
+  );
+
+/**
+ * The channel watermark, in the top-left corner for the whole video (one fade-in at the start, no
+ * re-animation at each scene, like a TV channel bug). Hidden during the end screen, which shows the logo big.
+ */
+export const Watermark: React.FC<{brand: Brand; hideFrom?: number; hideTo?: number}> = ({brand, hideFrom, hideTo}) => {
   const {u, pad, vertical} = useLayout();
   const frame = useCurrentFrame();
-  const p = interpolate(frame, [8, 26], [0, 1], {...clamp, easing: easeOut});
+  let p = interpolate(frame, [6, 24], [0, 1], {...clamp, easing: easeOut});
+  if (hideFrom !== undefined && hideTo !== undefined) {
+    p *= 1 - interpolate(frame, [hideFrom - 8, hideFrom, hideTo, hideTo + 8], [0, 1, 1, 0], clamp);
+  }
+  if (p <= 0.001) return null;
+  const opacity = (brand.watermarkOpacity ?? 0.92) * p;
+  const left = pad * (vertical ? 1 : 0.55);
+  const top = (vertical ? 92 : 36) * u;
+  if (brand.logo) {
+    const size = (vertical ? 116 : 84) * u; // ends at the title-safe line (safeTop)
+    return (
+      <div style={{position: 'absolute', left, top, opacity, transform: `scale(${0.9 + 0.1 * p})`, transformOrigin: 'top left'}}>
+        <ChannelLogo logo={brand.logo} size={size} />
+      </div>
+    );
+  }
   const size = (vertical ? 54 : 46) * u;
   return (
-    <div style={{position: 'absolute', left: pad * (vertical ? 1 : 0.55), top: (vertical ? 96 : 46) * u, display: 'flex', alignItems: 'center', gap: 14 * u, opacity: p * 0.95, transform: `translateY(${(1 - p) * -20 * u}px)`}}>
+    <div style={{position: 'absolute', left, top: top + 6 * u, display: 'flex', alignItems: 'center', gap: 14 * u, opacity}}>
       <BrandMark size={size} />
-      <div style={{fontFamily: F.mono, fontWeight: 700, fontSize: (vertical ? 26 : 22) * u, letterSpacing: '0.2em', color: C.paper}}>{name.toUpperCase()}</div>
+      <div style={{fontFamily: F.mono, fontWeight: 700, fontSize: (vertical ? 26 : 22) * u, letterSpacing: '0.2em', color: C.paper}}>{brand.name.toUpperCase()}</div>
     </div>
   );
 };
@@ -75,13 +107,13 @@ export const SourceStrip: React.FC<{source: string}> = ({source}) => {
   );
 };
 
-/** Small credit for the real footage on screen (bottom-right in 16:9, under the brand bug in 9:16). */
-export const FootageCredit: React.FC<{credit: string}> = ({credit}) => {
+/** Small credit for the real footage on screen (bottom-right in 16:9, beside the watermark in 9:16). */
+export const FootageCredit: React.FC<{credit: string; besideLogo?: boolean}> = ({credit, besideLogo = false}) => {
   const {u, pad, vertical} = useLayout();
   const frame = useCurrentFrame();
   const p = interpolate(frame, [6, 20], [0, 1], {...clamp, easing: easeOut});
   if (!credit) return null;
-  const pos: React.CSSProperties = vertical ? {left: pad, top: 168 * u} : {right: pad * 0.55, bottom: 34 * u};
+  const pos: React.CSSProperties = vertical ? (besideLogo ? {left: pad + 132 * u, top: 138 * u} : {left: pad, top: 168 * u}) : {right: pad * 0.55, bottom: 34 * u};
   return (
     <div style={{position: 'absolute', ...pos, fontFamily: F.mono, fontWeight: 500, fontSize: (vertical ? 20 : 17) * u, letterSpacing: '0.14em', color: C.paper, opacity: p * 0.7, textShadow: '0 1px 6px rgba(0,0,0,0.8)'}}>
       {credit.toUpperCase()}

@@ -1,5 +1,5 @@
 /**
- * NEON DISPATCH design system - the single source of truth for colour, type and
+ * Ghost Plates design system - the single source of truth for colour, type and
  * spacing used by every scene, the Shorts layout and the thumbnails.
  *
  * Identity in one line: an ink-dark newsroom with neon signal colours, where

@@ -188,7 +188,7 @@ class _CodeCatcher(BaseHTTPRequestHandler):
         type(self).result.update(q)
         ok = "code" in q
         body = (
-            "<!doctype html><meta charset=utf-8><title>NEON DISPATCH</title>"
+            "<!doctype html><meta charset=utf-8><title>YouTube connection</title>"
             "<body style='background:#06070E;color:#F6F8FF;font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0'>"
             f"<div><h1 style='color:{'#2EE59D' if ok else '#FF4D6D'}'>{'Channel connected' if ok else 'Authorization refused'}</h1>"
             "<p>You can close this tab and go back to the terminal.</p></div>"
