@@ -52,6 +52,9 @@ if curl -s -o /dev/null --max-time 2 "$URL/api/jobs"; then
   open_url
   exit 0
 fi
+# 6. the GTA VI Content Radar keeps scanning with the dashboard closed (launchd / cron, installed once;
+#    remove it with: .venv/bin/python -m gta_factory radar schedule uninstall)
+.venv/bin/python -m gta_factory radar schedule ensure 2>&1 | sed 's/^/radar: /' || true
 ( for _ in $(seq 1 60); do curl -s -o /dev/null --max-time 1 "$URL/api/jobs" && break; sleep 0.5; done; open_url ) &
 echo "dashboard: $URL  (close this window or press Ctrl+C to stop it)"
 exec .venv/bin/python -m gta_factory dashboard

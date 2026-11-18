@@ -1,4 +1,4 @@
-"""SQLite persistence: jobs, pipeline steps, the story memory and the asset ledger.
+"""SQLite persistence: jobs, pipeline steps, the story memory, the asset ledger and the Content Radar.
 
 The database is the single source of truth for job state (the dashboard and the
 CLI both read it) and for *story memory*: every produced story stores its
@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from ..core.utils import now_iso
+from .migrations import apply_migrations
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -104,6 +105,7 @@ class Database:
         self._lock = threading.RLock()
         with self.connect() as con:
             con.executescript(SCHEMA)
+            apply_migrations(con)  # later schema changes (Content Radar ...), applied once, in order
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

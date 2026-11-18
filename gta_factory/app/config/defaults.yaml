@@ -311,3 +311,67 @@ youtube:
 dashboard:
   host: "127.0.0.1"
   port: 8600
+
+# ---------------------------------------------------------------------------
+# GTA VI Content Radar: watches the sources below, finds new GTA VI topics and
+# turns the best ones into video ideas (dashboard > GTA VI Content Radar).
+# The interval and the pause switch can also be changed in the dashboard.
+# ---------------------------------------------------------------------------
+radar:
+  enabled: true
+  interval_hours: 2              # one scan every 2 hours (0.25 .. 48)
+  run_in_dashboard: true         # the dashboard keeps the schedule while it runs
+  install_service: true          # start.sh installs a launchd agent (macOS) / cron line (Linux) once, so scans go on with the
+                                 # dashboard closed and after a reboot. Remove: `python -m gta_factory radar schedule uninstall`
+  retry_minutes: 20              # after a failed scan (no internet ...), try again sooner than the interval
+  max_entry_age_days: 7          # older entries (first read of a feed) are stored but not proposed
+  same_story_days: 7             # an entry is matched with the stories of the last N days
+  same_story_threshold: 0.5      # 0..1: how close two headlines must be to count as the same story
+  max_entries_per_source: 60
+  request_timeout_seconds: 25
+  backoff_minutes: 15            # a failing source waits 15, 30, 60 ... minutes
+  max_backoff_hours: 12
+  analysis_enabled: true         # AI analysis with providers.llm.default (free, local Ollama by default)
+  triage_batch: 30               # headlines judged per AI call in the first pass
+  triage_batches_per_scan: 3
+  triage_min_interest: 5         # 0..10: below this, a discovery is kept as low priority without full analysis
+  max_analyses_per_scan: 8       # full analyses per scan (the rest wait for the next scan, best first)
+  max_analysis_attempts: 3
+  read_articles: true            # read the full text of official / press articles before analysing
+  article_fetches_per_story: 3
+  high_priority_score: 75
+  medium_priority_score: 55
+  rejudge_at_outlets: 3          # a low-priority story covered by this many outlets is judged again
+  lock_minutes: 30
+  heartbeat_stale_minutes: 40
+  notifications:
+    enabled: true
+    min_score: 75                # any opportunity scoring at least this
+    min_score_official: 50       # a fresh official announcement
+    min_score_mechanic: 60       # a new gameplay mechanic
+    min_score_detail: 60         # a significant hidden detail
+    max_per_hour: 4              # more than this: grouped into one digest alert
+    external_min_score: 80       # Telegram / e-mail only for official news or a score >= this (.env)
+  # kind: rss (feed URL) | reddit (subreddit) | youtube (channel id UC... or @handle) | news_search (Bing News RSS query)
+  # trust: official | press | community | creator. topic_only: every entry is about GTA VI.
+  # Sources can also be added, paused or removed in the dashboard.
+  sources:
+    - {key: rockstar_youtube, name: "Rockstar Games (YouTube)", kind: youtube, target: "@RockstarGames", trust: official}
+    - {key: rockstar_newswire, name: "Rockstar Newswire (Bing News)", kind: news_search, target: 'site:rockstargames.com "Grand Theft Auto VI"', trust: official}
+    - {key: ign, name: "IGN", kind: rss, target: "https://feeds.feedburner.com/ign/all", trust: press}
+    - {key: gamespot, name: "GameSpot", kind: rss, target: "https://www.gamespot.com/feeds/news/", trust: press}
+    - {key: pcgamer, name: "PC Gamer", kind: rss, target: "https://www.pcgamer.com/rss/", trust: press}
+    - {key: gamesradar, name: "GamesRadar+", kind: rss, target: "https://www.gamesradar.com/feeds.xml", trust: press}
+    - {key: eurogamer, name: "Eurogamer", kind: rss, target: "https://www.eurogamer.net/feed", trust: press}
+    - {key: vgc, name: "Video Games Chronicle", kind: rss, target: "https://www.videogameschronicle.com/feed/", trust: press}
+    - {key: kotaku, name: "Kotaku", kind: rss, target: "https://kotaku.com/rss", trust: press}
+    - {key: insider_gaming, name: "Insider Gaming", kind: rss, target: "https://insider-gaming.com/feed/", trust: press}
+    - {key: news_gta6, name: "News search: GTA 6 gameplay", kind: news_search, target: '"GTA 6" OR "GTA VI" gameplay', trust: press}
+    - {key: news_gta6_world, name: "News search: GTA 6 map & secrets", kind: news_search, target: '"GTA 6" map OR "Vice City" OR "easter egg" OR secret', trust: press}
+    - {key: news_gta6_crime, name: "News search: GTA 6 heists & police", kind: news_search, target: '"GTA 6" heist OR robbery OR police OR "wanted level"', trust: press}
+    - {key: reddit_gta6, name: "r/GTA6 (top of the day)", kind: reddit, target: "GTA6", trust: community, topic_only: true, options: {listing: top, t: day}}
+    - {key: yt_gtabites, name: "GTAbites (YouTube)", kind: youtube, target: "UCJvUEELQilCGdh-2riqqukQ", trust: creator}
+    - {key: yt_breeze, name: "BreeZe GTA (YouTube)", kind: youtube, target: "UCtwCPBrqh935sdHb2DmA3gQ", trust: creator}
+    - {key: yt_nought, name: "Nought (YouTube)", kind: youtube, target: "UCSh__r5HS4Y1xBkccWnV0TA", trust: creator}
+    - {key: yt_mrbossftw, name: "MrBossFTW (YouTube)", kind: youtube, target: "UC0PMQXAwF6O6aeTpv962miA", trust: creator}
+    - {key: yt_kully52, name: "Kully52 (YouTube)", kind: youtube, target: "UCt2y07j0T9ML4C4obWq0XVQ", trust: creator}
