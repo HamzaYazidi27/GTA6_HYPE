@@ -44,7 +44,7 @@ Return a JSON object:
     "first_known_date": ISO date when it first became public according to the provided material, or null
     "note": one short sentence a script writer must know (nuance, caveat, wording to avoid); "" if none
 "contradictions": list of {{"claim_ids": [...], "description": "...", "sources": [source indexes]}} for genuinely conflicting reporting; [] if none.
-"additional_facts": up to 6 relevant facts found ONLY in the corroborating sources that add context:
+"additional_facts": up to 6 facts found ONLY in the corroborating sources that add context to THIS story (never other news from the same page):
     {{"fact": "...", "source_index": n, "evidence": verbatim sentence, "cites_official": true|false}}
 """
 
@@ -192,6 +192,7 @@ def classify(claim: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
         "first_known_date": check.get("first_known_date"),
         "note": check.get("note") or "",
         "importance": claim.get("importance", 3),
+        **({"relevance": claim["relevance"]} if claim.get("relevance") else {}),
     }
 
 

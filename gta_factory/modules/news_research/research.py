@@ -31,7 +31,8 @@ SOURCE ARTICLES
 
 Produce a JSON object with exactly these keys:
 
-"story_headline": neutral one-line description of the story (max 110 characters, no hype).
+"story_headline": neutral one-line description of the MAIN story (max 110 characters, no hype). The main story is what ARTICLE 1 is
+    about; the other articles only count where they cover that same story.
 "summary": 3-5 sentences, plain language, what the sources establish and what remains unconfirmed.
 "topic_tags": 3-8 short lowercase tags (e.g. "release date", "pre-orders", "gameplay", "take-two earnings").
 "claims": list of the 6-14 most important distinct claims. For each:
@@ -48,7 +49,11 @@ Produce a JSON object with exactly these keys:
              "analysis" (analyst estimate, author's interpretation or opinion)
     "event_date": ISO date the claim is about if stated or clearly implied, else null
     "importance": 1-5 (5 = the core of the story for GTA players)
-"quotes": list of up to 6 notable direct quotations: {{"text": verbatim quote without the quote marks, "speaker": name and role, "source_index": n}}.
+    "relevance": "core" (the main story itself) | "context" (background a viewer needs to understand the main story) |
+                 "off_topic" (a different story: "related news" headlines and sidebars inside the page, other announcements,
+                 promotions, anniversaries or reviews that are not about the main story, even if they mention GTA)
+"quotes": list of up to 6 notable direct quotations: {{"text": verbatim quote without the quote marks, "speaker": name and role, "source_index": n,
+    "relevance": "core" | "context" | "off_topic" (same meaning as for claims)}}.
     Only quotes that appear inside quotation marks in the article. If there are none, return [].
 "entities": {{"people": [], "organizations": [], "games": [], "places": [], "products": []}}
 "key_dates": list of {{"date": ISO date or null, "label": what happens / happened, "kind": "past" | "upcoming"}}
@@ -94,10 +99,31 @@ def analyze_sources(llm: LLMProvider, articles: list[Article], today: str) -> di
     return verify_evidence(data, articles)
 
 
+RELEVANCE = ("core", "context", "off_topic")
+
+
+def split_off_topic(items: list[dict[str, Any]], *, keep_at_least: int = 0) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(kept, off_topic). Items the analyst marked "off_topic" leave the pipeline (a side story never becomes the hook).
+
+    When too few items would remain, nothing is dropped: a mislabelled analysis must not empty the video.
+    """
+    kept = [x for x in items if str(x.get("relevance") or "").lower() != "off_topic"]
+    off = [x for x in items if str(x.get("relevance") or "").lower() == "off_topic"]
+    if off and len(kept) < keep_at_least:
+        return items, []
+    return kept, off
+
+
 def verify_evidence(data: dict[str, Any], articles: list[Article]) -> dict[str, Any]:
-    """Number the claims and keep only evidence and quotes found verbatim in their article."""
+    """Number the claims and keep only evidence and quotes found verbatim in their article.
+
+    Claims and quotes marked "off_topic" (sidebars, other news on the same page) are moved to
+    ``off_topic_claims`` / ``off_topic_quotes``: kept for the fact-check report, never used in the video.
+    """
+    raw_claims, off_claims = split_off_topic([c for c in data["claims"] if isinstance(c, dict)], keep_at_least=3)
+    data["off_topic_claims"] = [{"claim": normalize_ws(str(c.get("claim") or "")), "source_index": c.get("source_index")} for c in off_claims]
     claims = []
-    for n, c in enumerate(data["claims"], 1):
+    for n, c in enumerate(raw_claims, 1):
         art = articles[c["source_index"] - 1]
         evidence = normalize_ws(str(c.get("evidence") or ""))
         verified = contains_quote(art.text, evidence, min_len=20) if evidence else False
@@ -119,11 +145,14 @@ def verify_evidence(data: dict[str, Any], articles: list[Article]) -> dict[str, 
                 "basis": c.get("basis") or "relayed_report",
                 "event_date": c.get("event_date"),
                 "importance": int(c.get("importance") or 3),
+                **({"relevance": str(c["relevance"]).lower()} if str(c.get("relevance") or "").lower() in RELEVANCE else {}),
                 **({"subject": normalize_ws(str(c["subject"]))[:60]} if c.get("subject") else {}),
             }
         )
     quotes = []
-    for q in data.get("quotes") or []:
+    raw_quotes, off_quotes = split_off_topic([q for q in data.get("quotes") or [] if isinstance(q, dict)])
+    data["off_topic_quotes"] = [{"text": normalize_ws(str(q.get("text") or ""))[:200], "speaker": q.get("speaker") or ""} for q in off_quotes]
+    for q in raw_quotes:
         idx = q.get("source_index")
         if not isinstance(idx, int) or not 1 <= idx <= len(articles):
             continue

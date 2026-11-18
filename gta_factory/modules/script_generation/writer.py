@@ -17,7 +17,7 @@ from ...providers.llm import LLMProvider
 SECTION_PLANS: dict[str, list[tuple[str, str, float]]] = {
     # (section id, purpose, share of the word budget)
     "long": [
-        ("hook", "Open on the single most interesting VERIFIED point. No greeting, no channel intro, no 'in this video'.", 0.08),
+        ("hook", "Open on the single most interesting VERIFIED point OF THE MAIN STORY (never a side story). No greeting, no channel intro, no 'in this video'.", 0.08),
         ("context", "What happened and why it matters right now. Orient a viewer who missed the news.", 0.13),
         ("story", "The main story in a logical order. One idea per sentence. Attribute every reported claim.", 0.27),
         ("evidence", "Where the information comes from and what is actually confirmed versus reported versus rumoured.", 0.15),
@@ -27,10 +27,10 @@ SECTION_PLANS: dict[str, list[tuple[str, str, float]]] = {
         ("cta", "One natural question for the comments tied to the story. No begging for likes.", 0.03),
     ],
     "short": [
-        ("hook", "One arresting verified fact in the first sentence. No greeting.", 0.22),
-        ("story", "The essential facts with attribution, tight.", 0.48),
-        ("payoff", "Why it matters for players, in one or two sentences.", 0.22),
-        ("cta", "One short question for the comments.", 0.08),
+        ("hook", "The most striking verified fact OF THE MAIN STORY, in the first sentence: the thing the title promises. Never open on a side story. No greeting.", 0.22),
+        ("story", "Deliver the title's promise with concrete facts and attribution: who said what, which tools, numbers or dates. Tight.", 0.48),
+        ("payoff", "One concrete consequence for players, in plain words, built on the facts above. No abstract wrap-up line.", 0.22),
+        ("cta", "One short question (12 words max) about the main story.", 0.08),
     ],
 }
 SECTION_PLANS["announcement"] = SECTION_PLANS["analysis"] = SECTION_PLANS["long"]
@@ -69,7 +69,12 @@ BANNED_PHRASES = [
     "let's dive into", "buckle up", "smash that like", "smash the like", "hit that like", "don't forget to subscribe",
     "make sure to subscribe", "hit the bell", "stay tuned", "it's worth noting", "it is worth noting", "in conclusion",
     "as an ai", "game-changer", "game changer", "delve", "mind-blowing", "you won't believe", "in the ever-evolving", "let me know what you think in the comments below",
+    # empty wrap-up lines: they sound like a conclusion and say nothing
+    "innovation with tradition", "innovation and tradition", "tradition and innovation", "only time will tell", "time will tell",
+    "remains to be seen", "shaping how future", "shaping the future", "embracing new technolog", "the series' legacy", "the future of gaming",
+    "a new era", "raises the bar", "sets a new standard", "exciting times ahead",
 ]
+SHORT_CTA_MAX_WORDS = 14
 CERTAINTY_WORDS = re.compile(r"\b(confirmed|confirms|officially|official|it's official|verified fact|100%)\b", re.I)
 HEDGE_WORDS = re.compile(r"\b(reportedly|report|reports|reported|according to|says|said|claims?|claimed|alleged|allegedly|rumou?r|rumou?red|leak|leaked|suggests?|appears?|seems?|could|may|might|if (that|this)|unconfirmed|not confirmed|hasn't confirmed|has not confirmed|estimate[sd]?|projects?|expect(s|ed)?|analyst|told|tells|per |writes|wrote|preview|interview)\b", re.I)
 
@@ -86,6 +91,9 @@ Non-negotiable editorial rules
 - Numbers and dates: only those in the fact sheet. Do not round them differently, do not compute new ones except simple day counts from today's date.
 - Your analysis is welcome, but label it as your reading ("my read", "that suggests", "the logical consequence").
 - Never rewrite an article sentence by sentence. Build your own structure around the chosen angle.
+- One story per video: every sentence serves the MAIN STORY. Never open on, or wander into, a different news item, even a GTA one.
+- The title is a promise. The narration must deliver it plainly: a title about "what Rockstar uses" names what Rockstar uses.
+- Every sentence carries a concrete fact, name, number or consequence. No empty abstractions such as "this approach balances innovation with tradition" or "shaping the future".
 - No greeting, no channel intro, no "in this video", no filler, no fake excitement, no repeated points, no engagement bait.
 - Do not imitate any existing creator's catchphrases.
 - Plain spoken text only: no markdown, no bullet symbols, no parentheses, no URLs, no emoji, no stage directions."""
@@ -93,6 +101,7 @@ Non-negotiable editorial rules
 WRITER_PROMPT = """Today's date: {today}
 Channel: {channel}
 Format: {format_label}. Total narration budget: {words} words (stay within {min_words}-{max_words}).
+MAIN STORY: {headline}
 
 EDITORIAL ANGLE (this is what makes the video original)
 Working title: {working_title}
@@ -141,12 +150,18 @@ BACKGROUND TIMELINE (verified)
 
 Today's date: {today}
 
+MAIN STORY: {headline}
+VIDEO TITLE (the promise made to the viewer): {title}
+
 SCRIPT (numbered sentences)
 {sentences}
 
 Return a JSON object:
 "sentences": for EVERY sentence number: {{"n": number, "kind": "fact" | "attributed_report" | "rumor" | "analysis" | "context" | "transition" | "cta", "claim_ids": [supporting claim ids or []]}}
-"issues": list of problems, each {{"n": sentence number, "type": "unsupported_fact" | "overstated_certainty" | "invented_quote" | "wrong_number_or_date" | "missing_attribution" | "repetition" | "filler" | "misleading", "detail": what is wrong, "fix": how to fix it in one sentence}}
+"issues": list of problems, each {{"n": sentence number, "type": "unsupported_fact" | "overstated_certainty" | "invented_quote" | "wrong_number_or_date" | "missing_attribution" | "repetition" | "filler" | "misleading" | "off_topic" | "title_not_delivered", "detail": what is wrong, "fix": how to fix it in one sentence}}
+    "off_topic": the sentence is about a different story than the MAIN STORY (always an issue for sentence 1).
+    "filler": the sentence carries no concrete fact, name, number or consequence (generic wrap-up, vague "this approach" lines).
+    "title_not_delivered": the script never gives what the VIDEO TITLE promises (use n = the last sentence of the story).
 Return "issues": [] if the script is clean. Do not flag clearly labelled analysis or simple day-count arithmetic from today's date.
 "verdict": "pass" | "revise"
 """
@@ -189,6 +204,8 @@ def build_fact_sheet(fact_check: list[dict[str, Any]], new_ids: list[str] | None
             flags.append("NEW" if c["id"] in new_ids else "ALREADY COVERED IN AN EARLIER VIDEO")
         if c.get("is_old_news"):
             flags.append("OLD NEWS")
+        if c.get("relevance") == "core":
+            flags.append("MAIN STORY")
         line = f"{c['id']} [{tag}{'; ' + ', '.join(flags) if flags else ''}] {c['claim']}\n    source: {c['original_publisher']}; attributed to: {c.get('attributed_to')}"
         also = sorted({s["publisher"] for s in c.get("corroborating_sources", [])})
         if also:
@@ -213,7 +230,7 @@ def _numbers(text: str) -> set[str]:
 _WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 
 
-def lint_script(sections: list[dict[str, Any]], fact_check: list[dict[str, Any]], quotes: list[dict[str, Any]], allowed_text: str, *, min_words: int, max_words: int) -> list[dict[str, Any]]:
+def lint_script(sections: list[dict[str, Any]], fact_check: list[dict[str, Any]], quotes: list[dict[str, Any]], allowed_text: str, *, min_words: int, max_words: int, short: bool = False) -> list[dict[str, Any]]:
     """Cheap deterministic checks. Returns issue dicts (empty list = clean)."""
     issues: list[dict[str, Any]] = []
     by_id = {c["id"]: c for c in fact_check}
@@ -250,6 +267,14 @@ def lint_script(sections: list[dict[str, Any]], fact_check: list[dict[str, Any]]
     hook = sections[0]["narration"].strip().lower() if sections else ""
     if re.match(r"^(hey|hi|hello|what's up|welcome|so,? today|today we|today i)", hook):
         issues.append({"type": "weak_hook", "section": sections[0]["id"], "detail": "The opening is a greeting or generic intro. Start with the verified news itself."})
+    if sections and sections[0]["id"] == "hook" and any(c.get("relevance") == "core" for c in fact_check):
+        cited = [by_id[i] for i in sections[0].get("claim_ids") or [] if i in by_id]
+        if not any(c.get("relevance") == "core" for c in cited):
+            core = ", ".join(c["id"] for c in fact_check if c.get("relevance") == "core")
+            issues.append({"type": "off_topic_hook", "section": "hook", "detail": f"The hook must open on the main story: build it on one of the core claims ({core}) and list that id in claim_ids."})
+    cta = next((s for s in sections if s["id"] == "cta"), None)
+    if cta and short and word_count(cta["narration"]) > SHORT_CTA_MAX_WORDS:
+        issues.append({"type": "cta_too_long", "section": "cta", "detail": f"The question for the comments is {word_count(cta['narration'])} words; keep it to {SHORT_CTA_MAX_WORDS} or fewer."})
     return issues
 
 
@@ -276,6 +301,8 @@ def write_script(
     words = int(round(target_seconds * wpm / 60))
     min_words, max_words = int(words * 0.86), int(words * 1.12)
     plan = _format_plan(fmt)
+    short = fmt == "short" or settings.format(fmt).get("aspect") == "9:16"
+    headline = analysis.get("story_headline") or story.get("working_title") or ""
     sections_txt = "\n".join(f"- {sid} [{int(round(words * share))} words]: {purpose}" for sid, purpose, share in plan)
     quotes = analysis.get("quotes") or []
     quotes_txt = "\n".join(f"- \"{q['text']}\" - {q['speaker']} (via {q['publisher']})" for q in quotes) or "(none - do not use direct quotations)"
@@ -321,6 +348,7 @@ def write_script(
                 today=today,
                 channel=settings.get("channel.name"),
                 format_label=settings.format(fmt).get("label", fmt),
+                headline=headline,
                 words=words,
                 min_words=min_words,
                 max_words=max_words,
@@ -351,7 +379,7 @@ def write_script(
 
     history: list[dict[str, Any]] = []
     script = call("")
-    lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words)
+    lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words, short=short)
     audit_result: dict[str, Any] = {"verdict": "skipped", "issues": []}
     for round_no in range(2):
         audit_issues: list[dict[str, Any]] = []
@@ -360,12 +388,12 @@ def write_script(
             numbered = "\n".join(f"{i}. [{sid}] {sent}" for i, (sid, sent) in enumerate(sentences, 1))
             audit_result = llm.complete_json(
                 AUDIT_SYSTEM,
-                AUDIT_PROMPT.format(fact_sheet=fact_sheet, quotes=quotes_txt, context=ctx_txt, timeline=tl_txt, today=today, sentences=numbered),
+                AUDIT_PROMPT.format(fact_sheet=fact_sheet, quotes=quotes_txt, context=ctx_txt, timeline=tl_txt, today=today, sentences=numbered, headline=headline, title=script.get("title") or story.get("working_title") or ""),
                 max_tokens=8000,
                 label=f"audit_script_r{round_no + 1}",
                 required_keys=("issues", "verdict"),
             )
-            audit_issues = [i for i in audit_result.get("issues") or [] if isinstance(i, dict) and i.get("type") not in ("filler",)]
+            audit_issues = [i for i in audit_result.get("issues") or [] if isinstance(i, dict)]
         history.append({"round": round_no + 1, "lint_issues": lint, "audit_issues": audit_issues, "words": word_count(" ".join(s["narration"] for s in script["sections"]))})
         if not lint and not audit_issues:
             break
@@ -379,7 +407,7 @@ def write_script(
             problems.append(f"- [{i.get('type')}] \"{sent[:140]}\": {i.get('detail')} Fix: {i.get('fix')}")
         previous = "\n".join(f"[{s['id']}] {s['narration']}" for s in script["sections"])
         script = call("\nREVISION REQUIRED. Your previous draft is below, followed by the problems the standards editor found. Rewrite the full script, fixing every problem and keeping what worked.\n\nPREVIOUS DRAFT\n" + previous + "\n\nPROBLEMS\n" + "\n".join(problems))
-        lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words)
+        lint = lint_script(script["sections"], fact_check, quotes, allowed_text, min_words=min_words, max_words=max_words, short=short)
 
     labels = {sid: purpose for sid, purpose, _ in plan}
     for s in script["sections"]:

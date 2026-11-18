@@ -227,7 +227,8 @@ def provider_names() -> list[str]:
     return sorted({**REGISTRY, **_EXTRA})
 
 
-def get_tts(settings: Any, name: str | None = None, voice: str | None = None) -> TTSProvider:
+def get_tts(settings: Any, name: str | None = None, voice: str | None = None, *, speed_factor: float = 1.0) -> TTSProvider:
+    """The configured voice. ``speed_factor`` (Shorts read a little faster) applies to Kokoro, the only engine with a speed knob here."""
     chosen = name or settings.get("providers.tts.default", "kokoro")
     pool = {**REGISTRY, **_EXTRA}
     if chosen not in pool:
@@ -235,4 +236,6 @@ def get_tts(settings: Any, name: str | None = None, voice: str | None = None) ->
     cfg = dict(settings.get(f"providers.tts.{chosen}", {}) or {})
     if voice:
         cfg["voice_id" if chosen == "elevenlabs" else "voice"] = voice
+    if chosen == "kokoro" and speed_factor and abs(speed_factor - 1.0) > 1e-3:
+        cfg["speed"] = round(min(1.35, float(cfg.get("speed") or 1.0) * speed_factor), 3)
     return pool[chosen](cfg, settings.root)

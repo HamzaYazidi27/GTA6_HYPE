@@ -214,7 +214,9 @@ class JobContext:
     def tts(self):
         from ...providers.tts import get_tts
 
-        return get_tts(self.settings, self.tts_name, self.options.get("voice"))
+        vertical = self.settings.format(self.fmt).get("aspect") == "9:16"
+        factor = float(self.settings.get("audio.short_voice_speed_factor", 1.06)) if vertical else 1.0
+        return get_tts(self.settings, self.tts_name, self.options.get("voice"), speed_factor=factor)
 
     def save_llm_usage(self) -> None:
         """Append this run's model calls to ``llm_usage.json`` (kept across resumes)."""
@@ -640,7 +642,7 @@ def step_timeline(ctx: JobContext) -> dict[str, Any]:
     scenes = ctx.need(ctx.paths.scenes)
     voice = ctx.need(ctx.paths.voice_manifest)
     fps = int(s.video_profile(ctx.fmt)["fps"])
-    master = build_timeline(s, scenes, voice, ctx.paths.audio, fps)
+    master = build_timeline(s, scenes, voice, ctx.paths.audio, fps, vertical=s.format(ctx.fmt).get("aspect") == "9:16")
     write_json(ctx.paths.master, master)
     by_n = {m["scene_number"]: m for m in voice["scenes"]}
     placed = {p["scene_number"]: p for p in master["scenes"]}
@@ -883,6 +885,20 @@ def _footage_point(ctx: JobContext) -> str:
     return point
 
 
+def _focus_point(ctx: JobContext) -> str:
+    """What was kept out of the video: side stories found in the sources, re-uploads with another channel's logo."""
+    point = ""
+    analysis = read_json(ctx.paths.analysis, {}) or {}
+    off = [c["claim"] for c in analysis.get("off_topic_claims") or [] if c.get("claim")]
+    off += [f"citation de {q['speaker']}" if q.get("speaker") else q["text"][:80] for q in analysis.get("off_topic_quotes") or [] if q.get("text")]
+    if off:
+        point += "\n- [ ] Écarté comme hors sujet (une autre histoire dans la page) : " + " ; ".join(f"« {x[:120]} »" for x in off[:8]) + ". Si l'une d'elles était le vrai sujet, relance avec un article qui en parle."
+    marked = ((read_json(ctx.paths.rights, {}) or {}).get("footage") or {}).get("reuploads") or []
+    if marked:
+        point += "\n- [ ] Footage non utilisé car un logo / watermark d'une autre chaîne y est incrusté : " + ", ".join(f"`{f}`" for f in marked[:10]) + " (remplace-le par les trailers officiels : `python -m gta_factory footage update`)."
+    return point
+
+
 def step_package(ctx: JobContext) -> dict[str, Any]:
     from ...app.core.utils import fmt_duration
 
@@ -928,7 +944,7 @@ def step_package(ctx: JobContext) -> dict[str, Any]:
             n_thumbs=len(list((out / "thumbnails").glob("*.png"))),
             n_titles=len(meta.get("title_options") or []),
             qc_points="\n".join(points) or "Aucun point bloquant ni avertissement.",
-        ).replace("- [ ] Vérifier les points du contrôle qualité ci-dessous", "- [ ] Vérifier les points du contrôle qualité ci-dessous" + _footage_point(ctx), 1),
+        ).replace("- [ ] Vérifier les points du contrôle qualité ci-dessous", "- [ ] Vérifier les points du contrôle qualité ci-dessous" + _footage_point(ctx) + _focus_point(ctx), 1),
     )
     if ctx.kind == "topic":
         from ...modules.footage.games import facts_path

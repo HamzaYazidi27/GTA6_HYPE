@@ -54,7 +54,7 @@ Return a JSON object:
       "lead_claim_ids": [ids that carry the angle], "risk": what could make it misleading and how to avoid it}}
 "chosen_angle": index 0-2 of the best angle. It must differ in thesis from the previous videos' angles.
 "working_title": a factual working title (max 70 characters)
-"hook_idea": the single most interesting VERIFIED point to open with (one sentence, cite the claim id in brackets)
+"hook_idea": the single most interesting VERIFIED point OF THE MAIN STORY to open with (one sentence, cite the claim id in brackets; a MAIN STORY claim when the list marks them)
 "what_we_do_not_know": 2-4 open questions the script should state honestly
 "recommended_format": one of {formats}
 "editor_notes": 1-3 sentences for the writer (tone, things to avoid)
@@ -130,7 +130,7 @@ def select_story(
     history = compare_with_history(analysis, fact_check, stories)
     fmt_cfg = settings.format(fmt)
     claims_txt = "\n".join(
-        f"{c['id']} [{c['classification'].upper()}, confidence {c['confidence']}{', OLD NEWS' if c['is_old_news'] else ''}] {c['claim']} (source: {c['original_publisher']}; attributed to {c.get('attributed_to')})"
+        f"{c['id']} [{c['classification'].upper()}, confidence {c['confidence']}{', OLD NEWS' if c['is_old_news'] else ''}{', MAIN STORY' if c.get('relevance') == 'core' else ''}] {c['claim']} (source: {c['original_publisher']}; attributed to {c.get('attributed_to')})"
         for c in fact_check
     )
     ctx_txt = "\n".join(f"- {f['fact']} ({f['publisher']})" for f in verification.get("additional_facts") or []) or "(none)"

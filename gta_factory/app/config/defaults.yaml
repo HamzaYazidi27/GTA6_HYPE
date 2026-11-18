@@ -143,6 +143,7 @@ script:
   max_scene_seconds: 14            # hard ceiling for one visual scene in long-form
   target_scene_seconds: 8
   short_target_scene_seconds: 4
+  short_max_scene_seconds: 6        # a Short never holds one card or picture longer than this (long-form: max_scene_seconds)
 
 novelty:
   duplicate_threshold: 0.72        # claim overlap above this = same story
@@ -175,6 +176,10 @@ audio:
   music_duck_db: -9.0              # extra reduction while the voice is speaking (sidechain)
   sfx_gain_db: -9.0
   scene_gap_seconds: 0.28          # breath between scenes
+  short_scene_gap_seconds: 0.12    # Shorts: shorter breaths keep the voice moving
+  short_tail_seconds: 0.6          # Shorts: silence after the last word
+  short_outro_seconds: 3.0         # Shorts: the end card ("your call") stays this long at least (long-form: 5.5 s)
+  short_voice_speed_factor: 1.06   # Shorts: Kokoro reads this much faster than providers.tts.kokoro.speed
   sentence_pause_seconds: 0.24     # breath between two sentences read separately (a bit more after ? and !)
   synthesis: "auto"                # auto: premium voices read a whole scene at once (natural melody), Kokoro sentence by sentence; or scene / sentence
   music_mood: "pulse"              # pulse | tension | drive  (original generated beds in assets/music)

@@ -218,12 +218,12 @@ def write_topic_script(
             numbered = "\n".join(f"{i}. [{sid}] {sent}" for i, (sid, sent) in enumerate(sentences, 1))
             audit_result = llm.complete_json(
                 AUDIT_SYSTEM,
-                AUDIT_PROMPT.format(fact_sheet=audit_sheet, quotes=quotes_txt, context="(none)", timeline=tl_txt, today=today, sentences=numbered),
+                AUDIT_PROMPT.format(fact_sheet=audit_sheet, quotes=quotes_txt, context="(none)", timeline=tl_txt, today=today, sentences=numbered, headline=outline["topic"], title=script.get("title") or outline["topic"]),
                 max_tokens=9000,
                 label=f"audit_topic_script_r{round_no + 1}",
                 required_keys=("issues", "verdict"),
             )
-            audit_issues = [i for i in audit_result.get("issues") or [] if isinstance(i, dict) and i.get("type") not in ("filler",)]
+            audit_issues = [i for i in audit_result.get("issues") or [] if isinstance(i, dict)]
         history.append({"round": round_no + 1, "lint_issues": lint, "audit_issues": audit_issues, "words": word_count(" ".join(s["narration"] for s in script["sections"]))})
         if (not lint and not audit_issues) or round_no == 1:
             break

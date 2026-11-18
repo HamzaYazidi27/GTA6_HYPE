@@ -18,16 +18,21 @@ rules:
   - ['\bGrand Theft Auto VI\b', 'Grand Theft Auto Six']
   - ['\bGrand Theft Auto V\b', 'Grand Theft Auto Five']
   - ['\bGrand Theft Auto IV\b', 'Grand Theft Auto Four']
-  - ['\bGTA\s?VI\b', 'G T A Six']
-  - ['\bGTA\s?6\b', 'G T A Six']
-  - ['\bGTA\s?V\b', 'G T A Five']
-  - ['\bGTA\s?5\b', 'G T A Five']
-  - ['\bGTA\s?IV\b', 'G T A Four']
-  - ['\bGTA\s?4\b', 'G T A Four']
-  - ['\bGTA\b', 'G T A']
+  # "GTA" stays one word: the voice spells it (gee-tee-AY). Spaced letters "G T A" make the
+  # lone "A" an article ("gee tee uh six"), which viewers and YouTube's captions hear as "GT A6".
+  - ['\bGTA\s?VI\b', 'GTA Six']
+  - ['\bGTA\s?6\b', 'GTA Six']
+  - ['\bGTA\s?V\b', 'GTA Five']
+  - ['\bGTA\s?5\b', 'GTA Five']
+  - ['\bGTA\s?IV\b', 'GTA Four']
+  - ['\bGTA\s?4\b', 'GTA Four']
+  - ['\bGTA\s?III\b', 'GTA Three']
+  - ['\bGTA\s?3\b', 'GTA Three']
   - ['\bRDR\s?2\b', 'Red Dead Redemption Two']
   - ['\bLeonida\b', 'Lee-oh-needa']
   - ['\bZelnick\b', 'Zell-nick']
+  - ['\bStrauss\b', 'Strouse']          # not "straws"
+  - ['\bKhaled\b', 'Kah-led']           # DJ Khaled, not "called"
   - ['\bCaminos\b', 'Cah-mee-nos']
   - ['\bDuval\b', 'Doo-vahl']
   # --- platforms and industry ---------------------------------------------------

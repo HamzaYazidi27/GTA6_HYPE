@@ -38,7 +38,10 @@ LABELS
 
 Also give up to 6 other clearly visible things as single lowercase English nouns ("objects"),
 and a one-sentence caption of the picture.
-Answer with JSON only: {{"tags": ["label", ...], "objects": ["noun", ...], "caption": "..."}}"""
+"overlay": true when something was added on top of the game picture: a channel logo or watermark,
+a social-media handle, burned-in subtitles or captions, a video-player interface, a news banner.
+The game's own HUD (minimap, health bar, phone screen) is not an overlay.
+Answer with JSON only: {{"tags": ["label", ...], "objects": ["noun", ...], "caption": "...", "overlay": false}}"""
 
 
 def vision_model(settings: Any) -> str:
@@ -138,7 +141,8 @@ def clean_answer(data: dict[str, Any], vocab: Vocabulary) -> dict[str, Any]:
         n = "_".join(toks)
         if n not in objects:
             objects.append(n)
-    return {"tags": sorted(tags), "objects": objects[:6], "caption": str(data.get("caption") or "")[:200]}
+    overlay = data.get("overlay")
+    return {"tags": sorted(tags), "objects": objects[:6], "caption": str(data.get("caption") or "")[:200], "overlay": overlay is True or str(overlay).strip().lower() == "true"}
 
 
 def pending(settings: Any, index: dict[str, Any] | None = None, *, force: bool = False) -> list[dict[str, Any]]:

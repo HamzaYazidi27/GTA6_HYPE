@@ -404,6 +404,7 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
     summary = {
         "enabled": True,
         "library": {k: v for k, v in lib.items() if k != "skipped"},
+        "reuploads": [x["file"] for x in lib.get("skipped") or [] if "watermark" in str(x.get("reason"))],
         "ratio_target": ratio,
         "ratio_min": lo,
         "ratio_max": hi,

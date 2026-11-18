@@ -240,13 +240,16 @@ def generate_voiceover(
 MIN_SCENE_SECONDS = {"title": 3.2, "chapter": 2.2, "kinetic": 1.8, "outro": 5.5, "countdown": 3.5, "stat": 3.2, "detail": 3.6}
 
 
-def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str, Any], audio_dir: Path, fps: int) -> dict[str, Any]:
+def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str, Any], audio_dir: Path, fps: int, *, vertical: bool = False) -> dict[str, Any]:
     """Place every scene on the master timeline and write ``final_voiceover.wav``.
 
     Scene durations are rounded to whole frames so picture and sound cannot drift.
+    A Short (``vertical``) keeps the voice moving: shorter breaths between scenes and a
+    brief end card (a long silent outro is where Shorts viewers swipe away).
     """
-    gap = float(settings.get("audio.scene_gap_seconds", 0.28))
-    lead_in, tail = 0.4, 1.6
+    gap = float(settings.get("audio.short_scene_gap_seconds", 0.12) if vertical else settings.get("audio.scene_gap_seconds", 0.28))
+    lead_in, tail = (0.25, float(settings.get("audio.short_tail_seconds", 0.6))) if vertical else (0.4, 1.6)
+    min_seconds = {**MIN_SCENE_SECONDS, **({"outro": float(settings.get("audio.short_outro_seconds", 3.0))} if vertical else {})}
     by_n = {m["scene_number"]: m for m in voice["scenes"]}
     total_samples = 0
     placed = []
@@ -255,9 +258,9 @@ def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str,
         m = by_n.get(sc["scene_number"])
         if m is None:
             raise ProviderError(f"No narration audio for scene {sc['scene_number']}.", hint="Re-run the voice step.")
-        offset = lead_in if idx == 0 else 0.12
+        offset = lead_in if idx == 0 else (0.06 if vertical else 0.12)
         natural = offset + m["duration"] + (tail if idx == len(scenes) - 1 else gap)
-        seconds = max(natural, MIN_SCENE_SECONDS.get(sc["template"], 0.0))
+        seconds = max(natural, min_seconds.get(sc["template"], 0.0))
         frames = max(1, int(round(seconds * fps)))
         start = frame_cursor / fps
         placed.append({"scene_number": sc["scene_number"], "start_frame": frame_cursor, "duration_frames": frames, "start_time": round(start, 3), "duration": round(frames / fps, 3), "voice_offset": round(offset, 3), "voice_duration": m["duration"]})

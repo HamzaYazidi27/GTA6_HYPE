@@ -14,7 +14,13 @@ else to do. Optional sidecar next to any file, ``<file>.json`` (the dashboard an
     {"tags": ["lucia", "jason", "vice city", "beach"],
      "credit": "Footage: Rockstar Games",
      "segments": [{"start": 12.0, "end": 19.5, "tags": ["car", "police"]}],
-     "exclude": [[0, 4.5], [151, 165]]}
+     "exclude": [[0, 4.5], [151, 165]],
+     "allow_overlay": false}
+
+Re-uploads by other channels carry their logo, watermark or burned-in subtitles: a video
+whose picture keeps a logo at the same place (``detect_static_overlay``), and any shot or
+photo where the vision tagger saw a watermark or subtitles, is left out. Set
+``"allow_overlay": true`` in the sidecar to use it anyway (for example a game HUD taken for a logo).
 
 Tags are what lets a scene that *says* "Lucia" show Lucia (see ``vocabulary.py``).
 They come from, strongest first: the sidecar (per shot or per photo), the file
@@ -141,6 +147,88 @@ def split_long_shots(shots: list[dict[str, Any]], max_len: float) -> list[dict[s
             b = sh["s"] + (k + 1) * length / n if n > 1 else sh["e"]
             out.append({**sh, "s": round(a, 3), "e": round(b, 3), **({"part": k + 1} if n > 1 else {})})
     return out
+
+
+# ----------------------------------------------------------------------------- burned-in logos (re-uploads)
+OVERLAY_WIDTH = 320  # enough to see a semi-transparent channel logo
+OVERLAY_SAMPLES = 28
+
+
+def _official(settings: Any, side: dict[str, Any]) -> bool:
+    """Downloaded from Rockstar itself (``footage.sources`` / ``footage.channels``): never a re-upload."""
+    url = str(side.get("source_url") or "")
+    sources = {str(u) for u in (settings.get("footage.sources") or DEFAULT_SOURCES)}
+    who = " ".join(str(side.get(k) or "") for k in ("uploader", "channel", "channel_url")).lower()
+    channels = [str(c).lower().split("/videos")[0] for c in (settings.get("footage.channels") or DEFAULT_CHANNELS)]
+    return bool(url and url in sources) or "rockstar games" in who or any(c and c in who for c in channels)
+
+
+def static_overlay_box(frames: Any, *, edge_th: float = 24.0, persist: float = 0.8) -> dict[str, Any] | None:
+    """A logo that stays at the same place while the picture changes: [x0, y0, x1, y1] (0-1) or None.
+
+    ``frames`` is a uint8 array [n, h, w] sampled across the whole video. A pixel belongs to an overlay
+    when it is an edge in most frames although the footage under it keeps changing; straight lines
+    across the frame (letterbox, borders) are ignored. A video that barely moves is not judged.
+    """
+    import numpy as np
+
+    if frames.ndim != 3 or len(frames) < 8:
+        return None
+    f = frames.astype(np.float32)
+    n, h, w = f.shape
+    edge = (np.abs(np.diff(f, axis=2))[:, :-1, :] + np.abs(np.diff(f, axis=1))[:, :, :-1]) > edge_th
+    stable = edge.mean(axis=0) >= persist
+    moving = f.std(axis=0)[:-1, :-1] > 16
+    if moving.mean() < 0.35:  # a still or nearly still video: everything is "static", nothing to conclude
+        return None
+    stable[stable.mean(axis=1) > 0.35, :] = False  # horizontal lines (letterbox edges, borders)
+    stable[:, stable.mean(axis=0) > 0.35] = False
+    hh, ww = stable.shape
+    if stable.sum() < max(10, 0.0008 * stable.size):
+        return None
+    gy, gx = 8, 8
+    best, cell = 0.0, (0, 0)
+    for cy in range(gy):
+        for cx in range(gx):
+            block = stable[cy * hh // gy : (cy + 1) * hh // gy, cx * ww // gx : (cx + 1) * ww // gx]
+            d = float(block.mean()) if block.size else 0.0
+            if d > best:
+                best, cell = d, (cy, cx)
+    if best < 0.035:
+        return None
+    cy, cx = cell
+    y0, y1 = max(0, (cy - 1) * hh // gy), min(hh, (cy + 2) * hh // gy)
+    x0, x1 = max(0, (cx - 1) * ww // gx), min(ww, (cx + 2) * ww // gx)
+    ys, xs = np.nonzero(stable[y0:y1, x0:x1])
+    if len(ys) < 10:
+        return None
+    box = [(x0 + xs.min()) / ww, (y0 + ys.min()) / hh, (x0 + xs.max() + 1) / ww, (y0 + ys.max() + 1) / hh]
+    return {"box": [round(float(v), 3) for v in box], "density": round(best, 3)}
+
+
+def detect_static_overlay(path: Path, duration: float, *, samples: int = OVERLAY_SAMPLES) -> dict[str, Any] | None:
+    """Look for a channel logo / watermark burned into a video (see ``static_overlay_box``)."""
+    import numpy as np
+
+    if duration < 6:
+        return None
+    a, b = 0.08 * duration, 0.88 * duration  # past the intro logo, before the end card
+    fps = samples / max(1.0, b - a)
+    vf = f"fps={fps:.4f},scale={OVERLAY_WIDTH}:-2,format=gray"
+    proc = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{a:.2f}", "-t", f"{b - a:.2f}", "-i", str(path), "-an", "-vf", vf, "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"], capture_output=True)
+    info = _probe(path) if proc.returncode == 0 and proc.stdout else None
+    if not info or not info["width"]:
+        return None
+    sh = int(round(OVERLAY_WIDTH * info["height"] / info["width"] / 2)) * 2
+    n = len(proc.stdout) // (OVERLAY_WIDTH * sh)
+    frames = np.frombuffer(proc.stdout[: n * OVERLAY_WIDTH * sh], dtype=np.uint8).reshape(n, sh, OVERLAY_WIDTH)
+    frames = frames[frames.reshape(len(frames), -1).mean(axis=1) > 22]  # fades and black cards say nothing
+    return static_overlay_box(frames)
+
+
+def _where(box: list[float]) -> str:
+    x, y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    return ("top" if y < 0.34 else "bottom" if y > 0.66 else "middle") + "-" + ("left" if x < 0.34 else "right" if x > 0.66 else "center")
 
 
 # ----------------------------------------------------------------------------- letterbox (black bars)
@@ -304,14 +392,16 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
         if ext in PHOTO_EXT:
             known = old_photos.get((rel, st.st_size))
             crop = known["crop"] if known else photo_crop(p)
-            photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop}
+            photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop, **({"allow_overlay": True} if side.get("allow_overlay") else {})}
             if side.get("from_video"):  # a still pulled from a trailer: same picture as that shot
                 photo.update(from_video=str(side["from_video"]), time=float(side.get("time") or 0), video_tags=canonical_tags(side.get("video_tags"), vocab))
             photos.append(photo)
             continue
         prev = old_videos.get(rel)
         cropped = bool(prev) and all("crop" in sh for sh in prev.get("shots") or [])
-        if prev and cropped and not force and prev.get("size") == st.st_size and prev.get("mtime") == int(st.st_mtime) and prev.get("sidecar") == side and prev.get("tags") == tags:
+        if prev and cropped and "overlay" in prev and not force and prev.get("size") == st.st_size and prev.get("mtime") == int(st.st_mtime) and prev.get("sidecar") == side and prev.get("tags") == tags:
+            if prev["overlay"] and not side.get("allow_overlay"):
+                skipped.append({"file": rel, "reason": f"logo or watermark burned into the picture ({_where(prev['overlay']['box'])}): looks like a re-upload"})
             videos.append(prev)
             continue
         if not which("ffmpeg") or not which("ffprobe"):
@@ -327,10 +417,20 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
             shots = split_long_shots(shots, float(cfg.get("max_clip_seconds") or settings.get("rights_review.max_seconds_per_official_clip", 6)))
         if not all("crop" in sh for sh in shots):  # black bars of each shot (also for videos indexed before this existed)
             detect_letterbox(p, shots, info["width"], info["height"])
+        if same_file and prev and "overlay" in prev:
+            overlay = prev["overlay"]
+        else:  # a re-upload keeps the other channel's logo at the same place for the whole video
+            overlay = None if _official(settings, side) else detect_static_overlay(p, info["duration"])
+            if overlay:
+                log(f"footage: {p.name}: a logo / watermark stays {_where(overlay['box'])} in the picture: not used (re-upload?)."
+                    f" If it is part of the game (HUD), put \"allow_overlay\": true in {sidecar_path(p).name}")
+        blocked_overlay = bool(overlay) and not side.get("allow_overlay")
+        if blocked_overlay:
+            skipped.append({"file": rel, "reason": f"logo or watermark burned into the picture ({_where(overlay['box'])}): looks like a re-upload"})
         seg_tags = [seg for seg in side.get("segments") or [] if isinstance(seg, dict)]
         exclude = [x for x in side.get("exclude") or [] if isinstance(x, list) and len(x) == 2]
         for sh in shots:
-            sh["ok"] = _usable(sh, info["duration"], cfg, exclude)
+            sh["ok"] = _usable(sh, info["duration"], cfg, exclude) and not blocked_overlay
             # a tagged part of the video applies to the shots it really covers (not one it grazes at a cut)
             extra = {t for seg in seg_tags if _overlap(seg, sh) >= min(1.0, 0.5 * (sh["e"] - sh["s"])) for t in canonical_tags(seg.get("tags"), vocab)}
             if extra:
@@ -345,6 +445,7 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
             "credit": credit,
             "source_url": side.get("source_url", ""),
             **info,
+            "overlay": overlay,
             "shots": shots,
         })
         if not same_file:
@@ -418,10 +519,14 @@ def load_items(settings: Any, index: dict[str, Any] | None = None) -> dict[str, 
         add(tags, a.get("tags"), W_AUTO)
         add(tags, [o for o in a.get("objects") or [] if o not in GENERIC_OBJECTS], W_OBJECT)
 
+    def overlaid(key: str, allowed: Any) -> bool:
+        """The vision tagger saw a watermark, channel logo or burned-in subtitles there."""
+        return bool((auto.get(key) or {}).get("overlay")) and not allowed
+
     shots, photos = [], []
     for v in index.get("videos", []):
         for sh in v.get("shots", []):
-            if not sh.get("ok"):
+            if not sh.get("ok") or overlaid(shot_key(v["file"], v.get("size", 0), sh), (v.get("sidecar") or {}).get("allow_overlay")):
                 continue
             tags: dict[str, float] = {}
             add(tags, v.get("tags"), W_VIDEO)
@@ -429,9 +534,11 @@ def load_items(settings: Any, index: dict[str, Any] | None = None) -> dict[str, 
             add(tags, sh.get("tags"), W_ITEM)
             shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "crop": sh.get("crop"), "tags": tags, "key": f"{v['file']}@{sh['s']}"})
     for p in index.get("photos", []):
+        own = photo_key(p["file"], p.get("size", 0))
+        if overlaid(own if own in auto else (still_shot_key(index, p) or own), p.get("allow_overlay")):
+            continue
         tags = {}
         add(tags, p.get("video_tags"), W_VIDEO)
-        own = photo_key(p["file"], p.get("size", 0))
         add_auto(tags, own if own in auto else (still_shot_key(index, p) or own))
         add(tags, p.get("tags"), W_ITEM)
         photos.append({"kind": "photo", **p, "path": str(cropped_photo(root, p["file"], p.get("crop"))), "tags": tags, "key": p["file"]})
@@ -519,10 +626,11 @@ def fetch(settings: Any, urls: list[str] | None = None, *, max_height: int = 108
                 log(f"footage: download failed for {url}: {proc.stderr.strip()[-400:]}{_failure_hint(settings, proc.stderr)}")
                 continue
         new = [p for p in set(out_dir.iterdir()) - before if p.suffix.lower() in VIDEO_EXT]
+        who = {k: str(info.get(k)) for k in ("uploader", "channel", "channel_url") if yt_dlp is not None and info.get(k)}
         for p in new:
             side = sidecar_path(p)
             if not side.exists():
-                write_json(side, {"source_url": url, "credit": str(settings.get("footage.credit") or DEFAULT_CREDIT), "tags": list(tags or [])})
+                write_json(side, {"source_url": url, **who, "credit": str(settings.get("footage.credit") or DEFAULT_CREDIT), "tags": list(tags or [])})
             log(f"footage: added videos/{p.name}")
         done += new
         if not new:

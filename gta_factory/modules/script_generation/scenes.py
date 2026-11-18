@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ...app.core.utils import contains_quote, normalize_ws
+from ...app.core.utils import contains_quote, normalize_ws, tokens
 from ...providers.llm import LLMProvider
 from ..visual_research.catalog import DEFAULT_SFX, SECTION_BACKGROUND, SOUND_EFFECTS, TEMPLATES, TRANSITIONS, catalog_prompt, normalize_scene_data, on_screen_text
 from .writer import split_sentences, word_count
@@ -23,6 +23,7 @@ On-screen text supports the voice; it never contradicts it and never adds facts 
 
 PLANNER_PROMPT = """Today's date: {today}
 Video format: {format_label} ({aspect}). Aim for one scene per {scene_words} words on average; a scene covers 1-2 sentences (3 only if they are very short).
+A scene never lasts longer than about {max_scene_seconds} seconds ({max_scene_words} words): split long passages into several scenes.
 
 SCENE TEMPLATES (name: when to use, and the exact data object to supply)
 {catalog}
@@ -55,7 +56,36 @@ Rules
 - "cues" arrays: for each list item give the exact word or short phrase from the scene narration at which it should appear.
 - "stat"/"bars" values must be numbers the narration states in that scene.
 - Use "claim" for the 3-6 most important claims so viewers always see what is confirmed versus reported or rumoured.
+- Every on-screen word comes from what THIS scene's narration says. "takeaway" effects and causes are short phrases built from its own words,
+  never generic lines ("maintaining the series' legacy", "embracing new technologies").
+- Labels such as "Breaking" or "Just in" only for news published in the last 2 days.
 """
+
+
+# words too common in this channel's narration to prove that on-screen text is grounded in it
+_GENERIC = {"gta", "game", "games", "rockstar", "player", "players", "fans", "series", "new", "future", "big", "more"}
+_HYPE_KICKER = re.compile(r"\b(breaking|just in|just dropped|exclusive|alert)\b", re.I)
+
+
+def _grounded(text: str, narration_stems: set[str]) -> bool:
+    """True when ``text`` shares a meaningful word (by its first 5 letters) with the narration."""
+    return any(t[:5] in narration_stems for t in tokens(text) if t not in _GENERIC and len(t) > 2 and not t.isdigit())
+
+
+def _ground_takeaway(payload: dict[str, Any], narration: str) -> dict[str, Any] | None:
+    """Keep only the takeaway lines the voice actually says; None (-> fallback) when too little is left."""
+    stems = {t[:5] for t in tokens(narration) if t not in _GENERIC}
+    keep = [i for i, e in enumerate(payload["effects"]) if _grounded(e, stems)]
+    if len(keep) < 2 or not _grounded(payload["cause"], stems):
+        return None
+    return {**payload, "effects": [payload["effects"][i] for i in keep], "cues": [payload["cues"][i] for i in keep]}
+
+
+def newest_source_age(articles: list[dict[str, Any]], today: str) -> int | None:
+    from ..fact_checking.verify import days_since
+
+    ages = [d for d in (days_since(a.get("published_at"), today) for a in articles) if d is not None]
+    return min(ages) if ages else None
 
 
 def number_sentences(script: dict[str, Any]) -> list[dict[str, Any]]:
@@ -119,6 +149,11 @@ def plan_scenes(
     wpm = float(settings.get("script.words_per_minute", 165))
     target_s = float(settings.get("script.short_target_scene_seconds" if is_short else "script.target_scene_seconds", 8))
     scene_words = int(round(target_s * wpm / 60))
+    # a Short holds one picture/card for a few seconds at most (the long-form ceiling would let one card sit for 10 s+)
+    max_scene_s = float(settings.get("script.short_max_scene_seconds", 6) if is_short else settings.get("script.max_scene_seconds", 14))
+    max_words = max(scene_words, int(max_scene_s * wpm / 60))
+    age = newest_source_age(articles, today)
+    fresh = age is not None and age <= 2
     by_id = {c["id"]: c for c in fact_check}
     claims_txt = "\n".join(f"{c['id']}: {c['classification']} (confidence {c['confidence']}) - {c['claim']} [source: {c['original_publisher']}]" for c in fact_check)
     quotes_txt = "\n".join(f"- \"{q['text']}\" - {q['speaker']} (via {q['publisher']})" for q in quotes) or "(none - do not use the quote template)"
@@ -153,6 +188,8 @@ def plan_scenes(
             quotes=quotes_txt,
             sources=sources_txt,
             sentences=sent_txt,
+            max_scene_seconds=f"{max_scene_s:g}",
+            max_scene_words=max_words,
             transitions=", ".join(TRANSITIONS),
             sfx=", ".join(SOUND_EFFECTS),
             min_variety=4 if is_short else 7,
@@ -164,7 +201,6 @@ def plan_scenes(
     )
 
     raw = _repair_coverage(data["scenes"], total)
-    max_words = int(float(settings.get("script.max_scene_seconds", 14)) * wpm / 60)
     scenes: list[dict[str, Any]] = []
     fallbacks = 0
     for sc in raw:
@@ -184,6 +220,10 @@ def plan_scenes(
             if emphasis and emphasis.lower() not in narration.lower():
                 emphasis = ""
             claim_ids = [i for i in (sc.get("claim_ids") or []) if i in by_id]
+            if template == "takeaway" and payload:
+                payload = _ground_takeaway(payload, narration)
+            if payload and payload.get("kicker") and _HYPE_KICKER.search(payload["kicker"]) and not fresh:
+                payload["kicker"] = ""  # "BREAKING" on a story that is days old reads as clickbait
             if template == "quote" and payload and not any(contains_quote(q["text"], payload["quote"]) or contains_quote(payload["quote"], q["text"]) for q in quotes):
                 payload = None  # never show a quotation that is not verified
             if template == "claim" and payload:

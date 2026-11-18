@@ -90,7 +90,16 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
 - `footage.enabled: false` revient aux seules animations. Les miniatures utilisent aussi une vraie image du jeu, choisie d'après le titre (`footage.thumbnails`).
 - Les plans sont détectés automatiquement ; les cartons noirs, le logo du début et l'écran de fin sont ignorés.
 - Crédit « Footage: Rockstar Games » à l'écran et dans la description. Les fichiers contenant « leak », « leaked », « datamine » ou « reupload » ne sont jamais utilisés.
+- **Pas de re-upload d'une autre chaîne.** Une vidéo dont l'image garde un logo ou un watermark au même endroit (ex. le logo d'une chaîne fan) est détectée à l'indexation et n'est pas utilisée ; un plan ou un screenshot où le modèle de vision voit un watermark ou des **sous-titres incrustés** non plus. Les trailers téléchargés depuis Rockstar ne sont pas concernés. Si c'est en fait le HUD du jeu, mets `"allow_overlay": true` dans le fichier `<vidéo>.json` à côté. Le `REVIEW.md` liste les fichiers écartés. Pour revérifier les plans tagués avant cette version : `python -m gta_factory footage autotag --force`.
 - ⚠️ Les images appartiennent à Rockstar/Take-Two. Les chaînes d'actu les utilisent couramment, mais YouTube peut poser une **revendication Content ID** (monétisation reversée à Rockstar) ; c'est rare qu'une vidéo soit bloquée, mais c'est possible.
+
+## Shorts : un seul sujet, du rythme
+
+- **Un seul sujet.** L'analyse marque chaque affirmation et chaque citation : `core` (le sujet de l'article), `context` ou `off_topic` (une autre news dans la page : encadrés « related », promos, anniversaires…). Les `off_topic` sortent de la vidéo et sont listées dans le `REVIEW.md`. Le hook doit s'appuyer sur une affirmation `core` (sinon le script est réécrit, et le contrôle qualité `script.focus` bloque le statut `completed`).
+- **Le titre est une promesse.** L'audit vérifie que le script donne ce que le titre annonce (`title_not_delivered`) et réécrit les phrases creuses (« this approach balances innovation with tradition »…), qui étaient ignorées avant.
+- **Rythme.** En 9:16, une scène dure **6 s maximum** (`script.short_max_scene_seconds`), les respirations entre scènes sont plus courtes (`audio.short_scene_gap_seconds`), l'écran de fin dure ~3 s au lieu de 5,5 s (`audio.short_outro_seconds`), la question finale fait 14 mots maximum, et Kokoro lit 6 % plus vite (`audio.short_voice_speed_factor`).
+- **Pas de « BREAKING » sur une vieille news** : le label n'est gardé que si la source a 2 jours ou moins. Les lignes de la carte « What it means » doivent venir de la narration, sinon la scène redevient de la typographie.
+- **Prononciation.** « GTA 6 » est lu « GTA Six » (et non « G T A Six », que la voix lisait « gee tee *uh* six »). Ajoutés : Strauss (Zelnick), DJ Khaled.
 
 ## Vidéos « Details you missed »
 

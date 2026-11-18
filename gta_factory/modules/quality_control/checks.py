@@ -20,6 +20,8 @@ from typing import Any
 from ..voice_generation.engine import measure_loudness
 
 SCRIPT_CRITICAL = {"invented_quote", "overstated_certainty", "unverified_number", "unsupported_fact", "wrong_number_or_date"}
+# a video that opens on another story, or never gives what its title promises, must be read before it goes out
+FOCUS_CRITICAL = {"off_topic_hook", "title_not_delivered"}
 
 
 class Report:
@@ -161,7 +163,10 @@ def run_qc(
     lint = [i for i in quality.get("remaining_lint_issues") or [] if i.get("type") in SCRIPT_CRITICAL]
     audit = [i for i in quality.get("remaining_audit_issues") or [] if i.get("type") in SCRIPT_CRITICAL]
     r.add("script.fact_discipline", "critical", not lint and not audit, "No unresolved fact issues in the script." if not (lint or audit) else f"{len(lint) + len(audit)} unresolved fact issue(s) after revision: review script.md before publishing.", issues=(lint + audit)[:10])
-    other = [i for i in (quality.get("remaining_lint_issues") or []) + (quality.get("remaining_audit_issues") or []) if i.get("type") not in SCRIPT_CRITICAL]
+    remaining = (quality.get("remaining_lint_issues") or []) + (quality.get("remaining_audit_issues") or [])
+    focus = [i for i in remaining if i.get("type") in FOCUS_CRITICAL]
+    r.add("script.focus", "critical", not focus, "The script opens on the main story and delivers its title." if not focus else f"{len(focus)} focus issue(s): the hook is not about the main story, or the title's promise is never delivered. Rewrite the hook (`rewrite <job> hook ...`) or change the title.", issues=focus[:10])
+    other = [i for i in remaining if i.get("type") not in SCRIPT_CRITICAL | FOCUS_CRITICAL]
     r.add("script.style", "warning", not other, f"{len(other)} style note(s) left (length, phrasing, repetition)." if other else "Script passed the style checks.", issues=other[:10])
 
     # --- rights
@@ -183,7 +188,8 @@ def run_qc(
     if scenes:
         fps_p = props["fps"]
         longest = max(scenes, key=lambda s: s["durationFrames"])
-        limit = float(settings.get("script.max_scene_seconds", 14)) + 2.0
+        vertical = int(props.get("height") or 0) > int(props.get("width") or 0)
+        limit = float(settings.get("script.short_max_scene_seconds", 6)) + 1.5 if vertical else float(settings.get("script.max_scene_seconds", 14)) + 2.0
         r.add("edit.scene_length", "warning", longest["durationFrames"] / fps_p <= limit, f"Longest scene: #{longest['n']} {longest['template']} {longest['durationFrames'] / fps_p:.1f}s.")
         templates = [s["template"] for s in scenes]
         r.add("edit.variety", "info", True, f"{len(set(templates))} different templates over {len(scenes)} scenes.", counts={t: templates.count(t) for t in sorted(set(templates))})
