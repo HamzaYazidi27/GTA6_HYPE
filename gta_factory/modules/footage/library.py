@@ -705,8 +705,12 @@ def _download_url(settings: Any, url: str, *, tags: list[str] | None, credit: st
     return got
 
 
-def add_files(settings: Any, paths: list[Any], *, tags: list[str] | None = None, credit: str = "", log: Callable[[str], None] = print) -> list[Path]:
-    """Add trailers / screenshots to the library: local files or folders (copied), or URLs (downloaded)."""
+def add_files(settings: Any, paths: list[Any], *, tags: list[str] | None = None, credit: str = "", own: bool = False, log: Callable[[str], None] = print) -> list[Path]:
+    """Add trailers / screenshots to the library: local files or folders (copied), or URLs (downloaded).
+
+    ``own``: the operator's own gameplay captures. The game's HUD (minimap, health) stays at the same place
+    and would look like a burned-in logo, so these files skip the re-upload check (``allow_overlay``).
+    """
     root = footage_dir(settings)
     added: list[Path] = []
     for item in paths:
@@ -728,8 +732,8 @@ def add_files(settings: Any, paths: list[Any], *, tags: list[str] | None = None,
                 shutil.copyfile(f, dest)
                 if sidecar_path(f).exists() and not sidecar_path(dest).exists():
                     shutil.copyfile(sidecar_path(f), sidecar_path(dest))
-            if tags or credit:
-                write_json(sidecar_path(dest), {**_sidecar(dest), **({"tags": sorted(set(_sidecar(dest).get("tags") or []) | set(tags or []))} if tags else {}), **({"credit": credit} if credit else {})})
+            if tags or credit or own:
+                write_json(sidecar_path(dest), {**_sidecar(dest), **({"tags": sorted(set(_sidecar(dest).get("tags") or []) | set(tags or []))} if tags else {}), **({"credit": credit} if credit else {}), **({"own_capture": True, "allow_overlay": True} if own else {})})
             added.append(dest)
             log(f"footage: added {dest.relative_to(root)}")
     return added

@@ -162,6 +162,9 @@ def best_item(want: dict[str, float], pool: list[dict[str, Any]], used: dict[str
     top = max(s for s, _ in scored)
     # a manual tag (3) and an auto tag (2) are both a real match: prefer variety among good matches
     good = [(s, it) for s, it in scored if s >= top * 0.66]
+    if prefer == "shot":  # moving footage first: a clip that shows it reasonably well beats a screenshot that shows it perfectly
+        clips = [(s, it) for s, it in scored if it["kind"] == "shot" and s >= top * 0.5]
+        good = clips or good
     s, it = min(good, key=lambda x: (used.get(x[1]["key"], 0), -x[0], 0 if x[1]["kind"] == ("shot" if prefer == "shot" else "photo") else 1, _h(seed, x[1]["key"])))
     return it, s
 
@@ -247,7 +250,7 @@ class _Library:
                 pieces.append(_piece(ph, self.max_clip))
                 its.append(ph)
                 used[ph["key"]] = used.get(ph["key"], 0) + 1
-                got += float(self.cfg.get("photo_hold_seconds", 3.5))
+                got += 1.5  # enough screenshots for the fastest rhythm (a Short shows each ~1.6 s)
         return pieces, its
 
     def assign(self, sc: dict[str, Any], est: float, beats_plan: list[dict[str, Any]], matched: list[dict[str, Any]], *, allow_photo: bool = True) -> dict[str, Any] | None:
@@ -452,14 +455,15 @@ def _seg(p: dict[str, Any], t: float, d: float, beat: dict[str, Any] | None = No
 class _Fill:
     """Hands out filler pieces in order (looping), cut to fill a time slot without leaving tiny leftovers."""
 
-    def __init__(self, pieces: list[dict[str, Any]], photo_hold: float, min_piece: float):
+    def __init__(self, pieces: list[dict[str, Any]], photo_hold: float, min_piece: float, max_hold: float | None = None):
         self.pieces = pieces
         self.k = 0
         self.photo_hold = photo_hold
         self.min_piece = min_piece
+        self.max_hold = max_hold or 1e9  # filler cuts as often as the beats (a Short cuts every ~2 s)
 
     def _len(self, p: dict[str, Any]) -> float:
-        return self.photo_hold if p["type"] == "photo" else p["end"] - p["start"]
+        return self.photo_hold if p["type"] == "photo" else min(p["end"] - p["start"], self.max_hold)
 
     def take(self, a: float, b: float) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -471,7 +475,7 @@ class _Fill:
             self.k += 1
             rem = b - t
             avail = self._len(p)
-            if avail >= rem - 1e-6 or (p["type"] == "shot" and _room(p) >= rem) or (p["type"] == "photo" and rem <= avail + self.min_piece):
+            if avail >= rem - 1e-6 or (p["type"] == "shot" and _room(p) >= rem and rem <= self.max_hold + self.min_piece) or (p["type"] == "photo" and rem <= avail + self.min_piece):
                 use = rem
             elif rem - avail >= self.min_piece:
                 use = avail
@@ -492,7 +496,7 @@ def build_segments(fo: dict[str, Any], words: list[dict[str, Any]], duration: fl
     Returns contiguous segments [{"t", "d", "type": "shot"|"photo", "file", "start"?, "said"?}] covering ``duration``.
     """
     marks = sorted(((max(0.0, words[b["word"]]["s"] - lead), b) for b in fo.get("beats") or [] if 0 <= b["word"] < len(words)), key=lambda x: x[0])
-    fill = _Fill(list(fo.get("fill") or []) or [b["piece"] for _, b in marks], photo_hold, min_piece)
+    fill = _Fill(list(fo.get("fill") or []) or [b["piece"] for _, b in marks], photo_hold, min_piece, max_hold)
     segs: list[dict[str, Any]] = []
     cursor = 0.0
     for i, (t, b) in enumerate(marks):
@@ -552,10 +556,11 @@ def cut_scene_clips(
 ) -> int:
     """Render one silent clip per video-footage scene (cached by content). Sets ``footage["clip"]``. Returns clips cut."""
     cfg = settings.get("footage", {}) or {}
+    rh = settings.rhythm(vertical=height > width)  # cut length follows the video's rhythm (a Short cuts every ~2 s)
     lead = float(cfg.get("match_lead_seconds", 0.25))
-    min_piece = float(cfg.get("min_piece_seconds", 1.2))
-    max_hold = float(cfg.get("max_clip_seconds") or settings.get("rights_review.max_seconds_per_official_clip", 6))
-    photo_hold = float(cfg.get("photo_hold_seconds", 3.5))
+    min_piece = min(float(cfg.get("min_piece_seconds", 1.2)), rh["min_cut_seconds"])
+    max_hold = min(float(cfg.get("max_clip_seconds") or settings.get("rights_review.max_seconds_per_official_clip", 6)), rh["shot_hold_seconds"])
+    photo_hold = rh["photo_hold_seconds"]
     words = words or {}
     cut = 0
     cache_dir = settings.jobs_dir / ".cache" / "footage"

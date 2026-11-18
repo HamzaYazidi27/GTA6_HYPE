@@ -37,10 +37,10 @@ CLAIMS = [
 ]
 
 NARRATION = {
-    "hook": "Pre-orders for Grand Theft Auto VI open on December 4, and Rockstar Games has put that date in writing for every platform.",
-    "story": "Rockstar Games says the game launches on November 19, 2026, on PlayStation 5 and Xbox Series X|S. The studio also says a third trailer is planned before launch. Some fans speculate that a PC version could follow later, but that is only speculation for now.",
-    "payoff": "For players, the plan is simple. Mark December 4 for pre-orders, and expect one more trailer before launch day.",
-    "cta": "Will you pre-order on day one, or wait for the third trailer?",
+    "hook": "Pre-orders for Grand Theft Auto VI open on December 4. Rockstar Games has put that date in writing for every platform.",
+    "story": "Rockstar Games says the game launches on November 19, 2026. It comes to PlayStation 5 and Xbox Series X|S. The studio also says a third trailer is planned before launch. Some fans speculate that a PC version could follow later. That is only speculation for now.",
+    "payoff": "For players, the plan is simple. Mark December 4 for pre-orders. Expect one more trailer before launch day.",
+    "cta": "Pre-order on day one, or wait for trailer three?",
 }
 
 
@@ -188,10 +188,10 @@ TOPIC_CLAIMS = [
     {"id": "C5", "subject": "animals", "claim": "Leonida has more than 170 animal species.", "type": "number", "source_index": 1, "evidence": "Leonida is home to more than 170 animal species", "attributed_to": "IGN preview", "basis": "named_source", "event_date": None, "importance": 3},
 ]
 VERSUS_SCRIPT = {
-    "hook": "Leonida is home to more than 170 animal species, and that is not the only thing GTA 6 shares with Red Dead 2. Put the two games side by side, system by system.",
+    "hook": "Leonida is home to more than 170 animal species. That is not the only thing GTA 6 shares with Red Dead 2. Put the two games side by side, system by system.",
     "item_01": "Start with what you can carry. In Red Dead 2, Arthur carries at most two sidearms and two long guns, and every other gun stays on his horse. In GTA 6, IGN's preview says Jason carries two long guns and a sidearm, and the rest goes in the trunk. Red Dead 2 and GTA 6 both keep you light on foot.",
     "item_02": "Then there is how you aim. In Red Dead 2, Dead Eye slows time so you can mark several targets before firing. In GTA 6, Rockstar's Rob Nelson says focus slows time and highlights enemy weak points.",
-    "item_03": "Finally, the law. Red Dead 2 had witnesses report crimes, and stopping one in time prevented the report. A bandana in Red Dead 2 could keep Arthur from being recognised. Crimes in Red Dead 2 put a bounty on Arthur's head in each state, and bounty hunters came after him until it was paid. In GTA 6, according to Rockstar, a crime needs a witness or an alarm before the police respond.",
+    "item_03": "Finally, the law. Red Dead 2 had witnesses report crimes, and stopping one in time prevented the report. A bandana in Red Dead 2 could keep Arthur from being recognised. Crimes in Red Dead 2 put a bounty on Arthur's head in each state. Bounty hunters came after him until it was paid. In GTA 6, according to Rockstar, a crime needs a witness or an alarm before the police respond.",
     "verdict": "Red Dead 2 and GTA 6 clearly share a lot. GTA 6 keeps the weight of Red Dead and adds cars and phones. How far it goes is still to be seen.",
     "cta": "Which Red Dead system are you most glad to see in GTA 6?",
 }

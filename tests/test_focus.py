@@ -173,7 +173,7 @@ def test_short_timeline_is_tighter_than_long_form(project, tmp_path):
     long_form = build_timeline(project["settings"], scenes, voice, tmp_path, 30)
     short = build_timeline(project["settings"], scenes, voice, tmp_path, 30, vertical=True)
     assert short["total_seconds"] < long_form["total_seconds"] - 2.0
-    assert 2.9 <= short["scenes"][-1]["duration"] <= 3.2  # end card ~3 s, not 5.5 s
+    assert 2.4 <= short["scenes"][-1]["duration"] <= 2.7  # end card ~2.5 s, not 5.5 s
     assert long_form["scenes"][-1]["duration"] >= 5.5
 
 
@@ -283,3 +283,67 @@ def test_long_form_scenes_are_split_too(project):
     limit = project["settings"].rhythm("long")["max_scene_seconds"] * 165 / 60
     assert all(len(sc["narration"].split()) <= max(limit, 19) for sc in scenes)  # one 18-word sentence per scene at most here
     assert len(scenes) >= 7
+
+
+
+# ----------------------------------------------------------------- a fast Short: few text cards, clips before screenshots
+class _CardHeavy:
+    def complete_json(self, system, prompt, **kw):
+        assert "FAST 9:16 SHORT" in prompt
+        claim = {"claim": "Generative AI has zero part in GTA 6", "status": "reported", "source": "GamesRadar+"}
+        return {"scenes": [
+            {"sentences": [1, 1], "template": "kinetic", "data": {"lines": ["ZERO PART"]}},
+            {"sentences": [2, 2], "template": "title", "data": {"title": "Take-Two on AI"}},
+            {"sentences": [3, 3], "template": "headline", "data": {"publisher": "Insider Gaming", "headline": "Take-Two Addresses AI"}},
+            {"sentences": [4, 4], "template": "claim", "data": claim},
+            {"sentences": [5, 5], "template": "claim", "data": claim},
+            {"sentences": [6, 6], "template": "claim", "data": claim},
+            {"sentences": [7, 7], "template": "outro", "data": {"question": "Does it matter to you?"}},
+        ]}
+
+
+def test_a_short_keeps_two_text_cards_and_no_title(project):
+    from gta_factory.modules.script_generation.scenes import TEXT_CARDS
+
+    sents = ["Generative AI has zero part in GTA 6.", "That is what Take-Two's boss says.", "Insider Gaming reports it again this week.",
+             "Zelnick says Rockstar builds every street by hand.", "He says Take-Two still runs hundreds of AI pilots.", "None of them is named for GTA 6.", "Does it matter to you?"]
+    script = {"sections": [{"id": "hook", "narration": sents[0], "claim_ids": []}, {"id": "story", "narration": " ".join(sents[1:6]), "claim_ids": []}, {"id": "cta", "narration": sents[6], "claim_ids": []}]}
+    scenes = plan_scenes(_CardHeavy(), project["settings"], script=script, fact_check=[], quotes=[], articles=[], fmt="short", today="2026-11-18")
+    cards = [sc["template"] for sc in scenes if sc["template"] in TEXT_CARDS]
+    assert "title" not in cards and len(cards) == 2 and set(cards) == {"claim"}  # fact-check verdicts are kept first
+    assert scenes[-1]["template"] == "outro"
+
+
+def test_a_clip_beats_a_screenshot_that_matches_better():
+    from gta_factory.modules.footage.select import best_item
+
+    photo = {"kind": "photo", "key": "p", "tags": {"lucia": 3.0}}
+    clip = {"kind": "shot", "key": "s", "tags": {"lucia": 2.0}}
+    weak_clip = {"kind": "shot", "key": "w", "tags": {"lucia": 1.0}}
+    assert best_item({"lucia": 1.0}, [photo, clip], {}, "x")[0] is clip
+    assert best_item({"lucia": 1.0}, [photo, weak_clip], {}, "x")[0] is photo  # a clip that barely shows it does not win
+
+
+def test_filler_cuts_follow_the_rhythm():
+    from gta_factory.modules.footage.select import _Fill
+
+    long_shot = {"type": "shot", "file": "a.mp4", "s": 0.0, "e": 12.0, "start": 0.0, "end": 6.0}
+    other = {"type": "shot", "file": "b.mp4", "s": 0.0, "e": 12.0, "start": 0.0, "end": 6.0}
+    fast = _Fill([long_shot, other], photo_hold=1.6, min_piece=0.9, max_hold=2.2).take(0.0, 8.0)
+    assert len(fast) >= 4 and max(seg["d"] for seg in fast) <= 2.2 + 0.9 + 1e-6
+    slow = _Fill([long_shot, other], photo_hold=3.0, min_piece=1.2).take(0.0, 8.0)
+    assert len(slow) < len(fast)
+
+
+def test_own_gameplay_captures_keep_their_hud(project, tmp_path):
+    from gta_factory.app.core.utils import read_json
+    from gta_factory.modules.footage.library import add_files, sidecar_path
+
+    clip = tmp_path / "my_gameplay_vice_city.mp4"
+    clip.write_bytes(b"not really a video")
+    added = add_files(project["settings"], [str(clip)], own=True, log=lambda m: None)
+    side = read_json(sidecar_path(added[0]), {})
+    assert side.get("allow_overlay") is True and side.get("own_capture") is True
+    other = tmp_path / "someone_else.mp4"
+    other.write_bytes(b"x")
+    assert "allow_overlay" not in (read_json(sidecar_path(add_files(project["settings"], [str(other)], log=lambda m: None)[0]), {}) or {})

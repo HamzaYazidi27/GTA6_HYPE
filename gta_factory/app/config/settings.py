@@ -76,8 +76,8 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 
 # used when a config file has no `rhythm` section (the values of defaults.yaml)
 RHYTHM_FALLBACK: dict[str, dict[str, float]] = {
-    "long": {"target_scene_seconds": 6, "max_scene_seconds": 9, "scene_gap_seconds": 0.18, "sentence_pause_seconds": 0.2, "tail_seconds": 1.0, "outro_seconds": 5.5, "voice_speed_factor": 1.03, "max_sentence_words": 30, "cta_max_words": 25},
-    "short": {"target_scene_seconds": 3.5, "max_scene_seconds": 6, "scene_gap_seconds": 0.12, "sentence_pause_seconds": 0.14, "tail_seconds": 0.6, "outro_seconds": 3.0, "voice_speed_factor": 1.06, "max_sentence_words": 22, "cta_max_words": 14},
+    "long": {"target_scene_seconds": 6, "max_scene_seconds": 9, "scene_gap_seconds": 0.18, "sentence_pause_seconds": 0.2, "tail_seconds": 1.0, "outro_seconds": 5.5, "voice_speed_factor": 1.03, "max_sentence_words": 22, "cta_max_words": 25, "max_text_cards": 99, "shot_hold_seconds": 4.0, "photo_hold_seconds": 3.0, "min_cut_seconds": 1.2},
+    "short": {"target_scene_seconds": 2.5, "max_scene_seconds": 4.5, "scene_gap_seconds": 0.06, "sentence_pause_seconds": 0.08, "tail_seconds": 0.4, "outro_seconds": 2.5, "voice_speed_factor": 1.14, "max_sentence_words": 12, "cta_max_words": 10, "max_text_cards": 2, "shot_hold_seconds": 2.2, "photo_hold_seconds": 1.6, "min_cut_seconds": 0.9},
 }
 
 

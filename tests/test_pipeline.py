@@ -39,8 +39,12 @@ def test_pipeline_until_timeline(project):
     assert all(sc["phrases"] for sc in props["scenes"])
     pc_card = next(sc for sc in props["scenes"] if sc["template"] == "claim" and "PC" in sc["data"]["claim"])
     assert pc_card["data"]["status"] == "speculation"  # the planner said "confirmed": the fact-check wins
-    timeline_scene = next(sc for sc in props["scenes"] if sc["template"] == "timeline")
-    assert all(f >= 0 for f in timeline_scene["cueFrames"])
+    from gta_factory.modules.script_generation.scenes import TEXT_CARDS
+
+    cards = [sc["template"] for sc in props["scenes"] if sc["template"] in TEXT_CARDS]
+    assert len(cards) <= 2 and "title" not in cards  # a fast Short: big words over footage, two text cards at most
+    for timeline_scene in (sc for sc in props["scenes"] if sc["template"] == "timeline"):
+        assert all(f >= 0 for f in timeline_scene["cueFrames"])
     srt = (root / "subtitles" / "captions.srt").read_text()
     assert srt.startswith("1\n00:00:") and "December 4" in srt
     # the voice cache makes a redo of the voice step free

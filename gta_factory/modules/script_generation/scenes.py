@@ -51,7 +51,7 @@ Return a JSON object {{"scenes": [...]}}. Scenes must cover every sentence exact
 "sound_effect": one of {sfx}
 
 Rules
-- First scene: "kinetic" built from the hook. Use "title" exactly once within the first 4 scenes. Last scene: "outro".
+- First scene: "kinetic" built from the hook. Use "title" exactly once within the first 4 scenes (never in a Short). Last scene: "outro".
 - Never the same template three scenes in a row. Use at least {min_variety} different templates.
 - "cues" arrays: for each list item give the exact word or short phrase from the scene narration at which it should appear.
 - "stat"/"bars" values must be numbers the narration states in that scene.
@@ -59,8 +59,14 @@ Rules
 - Every on-screen word comes from what THIS scene's narration says. "takeaway" effects and causes are short phrases built from its own words,
   never generic lines ("maintaining the series' legacy", "embracing new technologies").
 - Labels such as "Breaking" or "Just in" only for news published in the last 2 days.
-"""
+{format_rules}"""
 
+
+# cards that put a block of text on screen; a Short keeps only a couple of them (``rhythm.short.max_text_cards``)
+TEXT_CARDS = ("claim", "headline", "quote", "bullets", "sources", "takeaway", "timeline", "bars", "versus", "title", "chapter")
+SHORT_RULES = """- THIS IS A FAST 9:16 SHORT. Do not use "title" or "chapter". Use at most {max_cards} text cards in total
+  ({cards}); every other scene is "kinetic" (2-6 big words) over gameplay. Prefer one sentence per scene.
+"""
 
 # words too common in this channel's narration to prove that on-screen text is grounded in it
 _GENERIC = {"gta", "game", "games", "rockstar", "player", "players", "fans", "series", "new", "future", "big", "more"}
@@ -189,6 +195,7 @@ def plan_scenes(
             sources=sources_txt,
             sentences=sent_txt,
             max_scene_seconds=f"{max_scene_s:g}",
+            format_rules=SHORT_RULES.format(max_cards=int(rh["max_text_cards"]), cards=", ".join(c for c in TEXT_CARDS if c not in ("title", "chapter"))) if is_short else "",
             max_scene_words=max_words,
             transitions=", ".join(TRANSITIONS),
             sfx=", ".join(SOUND_EFFECTS),
@@ -268,6 +275,14 @@ def plan_scenes(
                     "background": SECTION_BACKGROUND.get(sec, "grid"),
                 }
             )
+    if is_short:  # a fast Short: big words over gameplay; only the most important text cards survive
+        cards = [sc for sc in scenes if sc["template"] in TEXT_CARDS and sc["template"] not in ("title", "chapter")]
+        # fact-check verdicts and verified quotes first, then the order of the video
+        keep = {id(sc) for sc in sorted(cards, key=lambda sc: (sc["template"] not in ("claim", "quote"), sc["scene_number"]))[: int(rh["max_text_cards"])]}
+        for sc in scenes:
+            if sc["template"] in TEXT_CARDS and id(sc) not in keep:
+                sc["template"], sc["data"] = _fallback_scene(sc["narration"], sc["emphasis"])
+                sc["on_screen_text"] = on_screen_text("kinetic", sc["data"])
     # no template three times in a row
     for i in range(2, len(scenes)):
         if scenes[i]["template"] == scenes[i - 1]["template"] == scenes[i - 2]["template"] and scenes[i]["template"] != "kinetic":

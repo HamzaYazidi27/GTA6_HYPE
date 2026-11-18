@@ -129,7 +129,7 @@ formats:
   recap:     {label: "Weekly recap",     aspect: "16:9", target_seconds: 540, min_seconds: 420, max_seconds: 720}
   analysis:  {label: "Feature analysis", aspect: "16:9", target_seconds: 540, min_seconds: 420, max_seconds: 720}
   guide:     {label: "Guide / explainer", aspect: "16:9", target_seconds: 510, min_seconds: 360, max_seconds: 720}
-  short:     {label: "YouTube Short",    aspect: "9:16", target_seconds: 45,  min_seconds: 30,  max_seconds: 58}
+  short:     {label: "YouTube Short",    aspect: "9:16", target_seconds: 35,  min_seconds: 25,  max_seconds: 50}
   # "Details you missed" (python -m gta_factory details): made from the footage library, not from articles.
   # The vertical version uses the "short" format: python -m gta_factory details "Trailer 2" --format short
   details:   {label: "Details you missed", aspect: "16:9", target_seconds: 240, min_seconds: 90, max_seconds: 720, footage_only: true}
@@ -139,7 +139,7 @@ formats:
   toplist:   {label: "Top list", aspect: "16:9", target_seconds: 480, min_seconds: 180, max_seconds: 1200, topic_only: true}
 
 script:
-  words_per_minute: 165            # used to turn a target duration into a word budget; re-measured after TTS
+  words_per_minute: 155            # average real speaking rate (Kokoro: ~150 in 16:9, ~170 in Shorts): word budgets and scene splits
 
 novelty:
   duplicate_threshold: 0.72        # claim overlap above this = same story
@@ -161,18 +161,26 @@ rhythm:
     tail_seconds: 1.0              # silence after the last word
     outro_seconds: 5.5             # end card: YouTube end screens need the last 5 s
     voice_speed_factor: 1.03       # Kokoro reads this much faster than providers.tts.kokoro.speed
-    max_sentence_words: 30         # longer spoken sentences are rewritten (hard to follow by ear)
+    max_sentence_words: 22         # ~9 s at 150 words/min: one sentence always fits in one scene
     cta_max_words: 25              # the question for the comments
-  short:
-    target_scene_seconds: 3.5
-    max_scene_seconds: 6
-    scene_gap_seconds: 0.12
-    sentence_pause_seconds: 0.14
-    tail_seconds: 0.6
-    outro_seconds: 3.0             # a long silent end card is where Shorts viewers swipe away
-    voice_speed_factor: 1.06
-    max_sentence_words: 22
-    cta_max_words: 14
+    max_text_cards: 99             # no limit in 16:9
+    shot_hold_seconds: 4.0         # longest continuous piece of one gameplay / trailer shot
+    photo_hold_seconds: 3.0        # a screenshot stays this long
+    min_cut_seconds: 1.2           # shortest cut
+  short:                           # a Short is fast: a new picture every ~2.5 s, almost no silence, few text cards
+    target_scene_seconds: 2.5
+    max_scene_seconds: 4.5
+    scene_gap_seconds: 0.06
+    sentence_pause_seconds: 0.08
+    tail_seconds: 0.4
+    outro_seconds: 2.5             # a long silent end card is where Shorts viewers swipe away
+    voice_speed_factor: 1.14       # Kokoro: ~170 words/min
+    max_sentence_words: 12         # punchy spoken beats
+    cta_max_words: 10
+    max_text_cards: 2              # fact-check / source / quote cards in one Short; every other scene is big text over gameplay
+    shot_hold_seconds: 2.2         # a gameplay cut every ~2 s
+    photo_hold_seconds: 1.6
+    min_cut_seconds: 0.9
 
 # ---------------------------------------------------------------------------
 # Rendering
@@ -229,7 +237,7 @@ footage:
   ratio_max: 0.9                   # the rest stays pure motion graphics (bars, sources, timelines...)
   match_spoken: true               # what the narration SAYS (Lucia, Vice City, the cops, an alligator...) is shown when the library has it
   match_lead_seconds: 0.25         # the matching shot appears this long before the word is said
-  photo_share: 0.25                # of the scenes with nothing specific to show, about this share uses a screenshot instead of trailer clips
+  photo_share: 0.08                # screenshots only fill in: gameplay / trailer clips come first whenever the library has them
   photo_hold_seconds: 3.5          # a screenshot inside a scene stays this long
   max_clip_seconds: 6              # longest continuous excerpt of one trailer shot (a scene chains several shots)
   min_piece_seconds: 1.2           # shortest cut

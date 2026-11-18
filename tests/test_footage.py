@@ -249,7 +249,9 @@ def test_cut_scene_clip_mixes_shots_and_screenshots(footage_project):
     clip = Path(fo["clip"])
     frames = int(subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames,width,height", "-of", "csv=p=0", str(clip)], capture_output=True, text=True).stdout.strip().split(",")[-1])
     assert frames == round(8.2 * 30)
-    assert [x["type"] for x in fo["segments"]] == ["shot", "photo", "shot"] and fo["segments"][1]["t"] == pytest.approx(1.75)
+    types = [x["type"] for x in fo["segments"]]  # a vertical clip: the filler is cut every ~2 s (rhythm.short.shot_hold_seconds)
+    assert types[:2] == ["shot", "photo"] and fo["segments"][1]["t"] == pytest.approx(1.75)
+    assert len(types) >= 3 and set(types[2:]) == {"shot"} and max(x["d"] for x in fo["segments"] if x["type"] == "shot") <= 2.2 + 0.9 + 1e-6
     assert cut_scene_clips(s, scenes, {1: 8.0}, out_dir=s.root / "clips", width=320, height=568, fps=30, words={1: words}) == 0  # cached
 
 

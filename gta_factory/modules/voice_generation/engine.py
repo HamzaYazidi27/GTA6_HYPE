@@ -252,6 +252,8 @@ def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str,
     gap, tail = rh["scene_gap_seconds"], rh["tail_seconds"]
     lead_in = 0.25 if vertical else 0.35
     min_seconds = {**MIN_SCENE_SECONDS, "outro": rh["outro_seconds"]}
+    if vertical:  # a Short never holds a card after the voice stops (only the end card and the detail zoom need their time)
+        min_seconds = {k: v for k, v in min_seconds.items() if k in ("outro", "detail", "countdown")}
     by_n = {m["scene_number"]: m for m in voice["scenes"]}
     total_samples = 0
     placed = []

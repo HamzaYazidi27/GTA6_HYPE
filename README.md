@@ -85,6 +85,8 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
 ### Réglages (`config.yaml`, section `footage`)
 
 - `ratio: 0.85`, `ratio_min: 0.8`, `ratio_max: 0.9` : part de la vidéo sur de vraies images. Le contrôle qualité vérifie la part réelle (`footage.share`).
+- **Les vidéos avant les screenshots.** Un plan de gameplay ou de trailer qui montre ce qui est dit passe avant un screenshot, même un screenshot mieux tagué ; les screenshots ne servent qu'en complément (`photo_share: 0.08`, avant 0,25).
+- **Ton gameplay** (le jeu est sorti) : `python -m gta_factory footage add ~/Captures/gta6 --own --tags gameplay` ajoute tes propres captures. `--own` garde le HUD du jeu (minimap, barre de vie), qui sinon ressemblerait à un logo incrusté. Ne l'utilise jamais pour la vidéo d'une autre chaîne. Les nouvelles vidéos officielles de Rockstar arrivent avec `python -m gta_factory footage update`.
 - `match_spoken: true` : ce qui est dit est montré. `match_lead_seconds` : l'image arrive un peu avant le mot.
 - `photo_share`, `photo_hold_seconds`, `max_clip_seconds` (6 s max par extrait), `auto_tag`, `vision_model`, `sources`, `channels`, `title_filter`.
 - `footage.enabled: false` revient aux seules animations. Les miniatures utilisent aussi une vraie image du jeu, choisie d'après le titre (`footage.thumbnails`).
@@ -101,16 +103,20 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
 
 | Réglage (`rhythm.*`) | 16:9 (`long`) | 9:16 (`short`) | Avant |
 |---|---|---|---|
-| `target_scene_seconds` : une nouvelle image ou un nouveau graphique toutes les… | 6 s | 3,5 s | 8 s / 4 s |
-| `max_scene_seconds` : une carte ou une image ne reste jamais plus de… | 9 s | 6 s | 14 s pour tout |
-| `scene_gap_seconds` : respiration entre deux scènes | 0,18 s | 0,12 s | 0,28 s |
-| `sentence_pause_seconds` : respiration entre deux phrases | 0,2 s | 0,14 s | 0,24 s |
-| `tail_seconds` : silence après le dernier mot | 1 s | 0,6 s | 1,6 s |
-| `outro_seconds` : écran de fin (les écrans de fin YouTube demandent 5 s) | 5,5 s | 3 s | 5,5 s |
-| `voice_speed_factor` : Kokoro lit plus vite que `providers.tts.kokoro.speed` | +3 % | +6 % | — |
-| `max_sentence_words` : une phrase plus longue est coupée en deux | 30 | 22 | — |
-| `cta_max_words` : la question finale | 25 | 14 | — |
+| `target_scene_seconds` : une nouvelle image ou un nouveau graphique toutes les… | 6 s | 2,5 s | 8 s / 4 s |
+| `max_scene_seconds` : une carte ou une image ne reste jamais plus de… | 9 s | 4,5 s | 14 s pour tout |
+| `shot_hold_seconds` : un plan de gameplay / trailer dure au plus… | 4 s | 2,2 s | 6 s |
+| `photo_hold_seconds` : un screenshot reste… | 3 s | 1,6 s | 3,5 s |
+| `scene_gap_seconds` : respiration entre deux scènes | 0,18 s | 0,06 s | 0,28 s |
+| `sentence_pause_seconds` : respiration entre deux phrases | 0,2 s | 0,08 s | 0,24 s |
+| `tail_seconds` : silence après le dernier mot | 1 s | 0,4 s | 1,6 s |
+| `outro_seconds` : écran de fin (les écrans de fin YouTube demandent 5 s) | 5,5 s | 2,5 s | 5,5 s |
+| `voice_speed_factor` : Kokoro lit plus vite que `providers.tts.kokoro.speed` | +3 % (~150 mots/min) | +14 % (~170 mots/min) | — |
+| `max_sentence_words` : une phrase plus longue est coupée en deux | 22 | 12 | — |
+| `cta_max_words` : la question finale | 25 | 10 | — |
+| `max_text_cards` : cartes de texte (fact-check, source, citation…) | sans limite | 2 | — |
 
+- **Un Short dure ~35 s** (`formats.short`, avant 45 s) : hook d'une phrase de 10 mots maximum, puis des phrases de 6 à 12 mots. Pas de carte titre, deux cartes de texte au plus (les fact-checks et les citations d'abord) : le reste, ce sont de gros mots sur du gameplay. Aucune carte ne reste à l'écran après la voix.
 - **Des hooks plus courts en 16:9** : environ 20 s (avant : 30 à 40 s du budget de mots), les mots gagnés vont à l'histoire.
 - **Pas de « BREAKING » sur une vieille news** : le label n'est gardé que si la source a 2 jours ou moins. Les lignes de la carte « What it means » doivent venir de la narration, sinon la scène redevient de la typographie.
 - **Prononciation.** « GTA 6 » est lu « GTA Six » (et non « G T A Six », que la voix lisait « gee tee *uh* six »). Ajoutés : Strauss (Zelnick), DJ Khaled.

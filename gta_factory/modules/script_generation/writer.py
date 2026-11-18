@@ -27,10 +27,10 @@ SECTION_PLANS: dict[str, list[tuple[str, str, float]]] = {
         ("cta", "One natural question for the comments tied to the story. No begging for likes.", 0.03),
     ],
     "short": [
-        ("hook", "The most striking verified fact OF THE MAIN STORY, in the first sentence: the thing the title promises. Never open on a side story. No greeting.", 0.22),
-        ("story", "Deliver the title's promise with concrete facts and attribution: who said what, which tools, numbers or dates. Tight.", 0.48),
-        ("payoff", "One concrete consequence for players, in plain words, built on the facts above. No abstract wrap-up line.", 0.22),
-        ("cta", "One short question (12 words max) about the main story.", 0.08),
+        ("hook", "ONE punchy sentence of 10 words or fewer: the most striking verified fact OF THE MAIN STORY, the thing the title promises. Never a side story, no greeting, no setup.", 0.14),
+        ("story", "Deliver the title's promise in fast beats of 6-12 words: who said what, which tools, numbers or dates, with attribution. No repetition, no filler.", 0.56),
+        ("payoff", "One concrete consequence for players, in one or two short sentences. No abstract wrap-up line.", 0.20),
+        ("cta", "One short question (10 words max) about the main story.", 0.10),
     ],
 }
 SECTION_PLANS["announcement"] = SECTION_PLANS["analysis"] = SECTION_PLANS["long"]
@@ -76,7 +76,7 @@ BANNED_PHRASES = [
 ]
 
 CERTAINTY_WORDS = re.compile(r"\b(confirmed|confirms|officially|official|it's official|verified fact|100%)\b", re.I)
-HEDGE_WORDS = re.compile(r"\b(reportedly|report|reports|reported|according to|says|said|claims?|claimed|alleged|allegedly|rumou?r|rumou?red|leak|leaked|suggests?|appears?|seems?|could|may|might|if (that|this)|unconfirmed|not confirmed|hasn't confirmed|has not confirmed|estimate[sd]?|projects?|expect(s|ed)?|analyst|told|tells|per |writes|wrote|preview|interview)\b", re.I)
+HEDGE_WORDS = re.compile(r"\b(reportedly|report|reports|reported|according to|says|said|claims?|claimed|alleged|allegedly|rumou?r|rumou?red|leak|leaked|suggests?|appears?|seems?|could|may|might|if (that|this)|unconfirmed|not confirmed|hasn't confirmed|has not confirmed|estimate[sd]?|projects?|expect(s|ed)?|analyst|told|tells|per |writes|wrote|notes|noted|adds|added|believes?|preview|interview)\b", re.I)
 
 WRITER_SYSTEM = """You are the head writer of an independent YouTube channel covering Grand Theft Auto VI.
 Voice: an experienced gaming-news commentator talking to fellow GTA fans - energetic, clear, natural, professional.
