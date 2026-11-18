@@ -80,8 +80,11 @@ class RadarStore:
         return f"{socket.gethostname()}:{os.getpid()}"
 
     def acquire_lock(self, owner: str, lease_seconds: int = 1800) -> bool:
-        """One scan at a time across the dashboard, the worker and cron. A lease that expired, or whose
-        process on this computer is gone, is taken over."""
+        """One scan at a time across the dashboard, the worker and cron (never two at once: twice the AI load).
+
+        A scan of this computer holds the lock as long as its process lives, even through a very long AI call
+        (the lease is also renewed every minute while it runs); it is taken over only when that process is
+        gone, or after 3 hours without any renewal (hung). A scan of another computer: when its lease expired."""
         now = utcnow()
         with self.db.connect() as con:
             con.execute("BEGIN IMMEDIATE")
@@ -91,8 +94,9 @@ class RadarStore:
                 expires = parse_iso(cur.get("expires_at"))
                 alive = expires is not None and expires > now
                 host, _, pid = str(cur["owner"]).rpartition(":")
-                if alive and host == socket.gethostname() and pid.isdigit() and not _pid_alive(int(pid)):
-                    alive = False  # the scanning process crashed on this computer
+                if host == socket.gethostname() and pid.isdigit():
+                    hung = expires is not None and now - expires > timedelta(hours=3)
+                    alive = _pid_alive(int(pid)) and not hung
                 if alive:
                     return False
             value = {"owner": owner, "since": iso(now), "expires_at": iso(now + timedelta(seconds=lease_seconds))}
@@ -319,6 +323,12 @@ class RadarStore:
         vals = [_dump(v) if k in _JSON and not isinstance(v, str) else v for k, v in fields.items()]
         with self.db.connect() as con:
             con.execute(f"UPDATE radar_scans SET {cols} WHERE id=?", (*vals, sid))
+
+    def update_scan(self, sid: int, **fields: Any) -> None:
+        """Live counters of the running scan (shown in the dashboard while it runs)."""
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self.db.connect() as con:
+            con.execute(f"UPDATE radar_scans SET {cols} WHERE id=? AND status='running'", (*fields.values(), sid))
 
     def list_scans(self, limit: int = 20) -> list[dict[str, Any]]:
         with self.db.connect() as con:
