@@ -276,7 +276,9 @@ class _Library:
         whole_photo = None
         if allow_photo:
             if not beats:
-                want_photo = bool(self.photos) and (not self.fill_shots or (n * 0.6180339 % 1.0) < self.photo_share)
+                # one still for the whole scene only as an occasional change from the clips; a library of screenshots
+                # alone becomes a slideshow cut at the video's rhythm (rhythm.*.photo_hold_seconds) instead
+                want_photo = bool(self.photos) and bool(self.fill_shots) and (n * 0.6180339 % 1.0) < self.photo_share
                 if want_photo:
                     whole_photo = min(self.photos, key=lambda p: (used.get(p["key"], 0), _h(n, p["key"])))
                     used[whole_photo["key"]] = used.get(whole_photo["key"], 0) + 1
