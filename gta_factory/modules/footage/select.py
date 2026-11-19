@@ -28,12 +28,13 @@ step gives the same edit (and the render cache keeps working).
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
 from ...app.core.errors import RenderError
-from ...app.core.utils import stable_hash, tokens
+from ...app.core.utils import normalize_ws, stable_hash, tokens
 from .library import DEFAULT_CREDIT, crop_filter, footage_dir, library_summary, load_items
 from .vocabulary import load_vocabulary, word_tokens
 
@@ -353,12 +354,37 @@ def story_scenes(items: list[dict[str, Any]], scenes: list[dict[str, Any]], *, f
             common = words & _story_words(" ".join([sc.get("narration", ""), sc.get("on_screen_text", "")]))
             if len(common) >= 2:
                 pairs.append((len(common), sc["scene_number"], it))
+    def series(it: dict[str, Any]) -> tuple[str, int] | None:
+        """("how do you fast travel in gta 6?", 2) for a guide's step picture "How Do You Fast Travel in GTA 6? 2"."""
+        m = re.match(r"^(.*?)\s*(\d{1,2})$", normalize_ws(it.get("caption") or ""))
+        return (m.group(1).lower(), int(m.group(2))) if m and len(m.group(1)) > 8 else None
+
     out: dict[int, dict[str, Any]] = {}
     taken: set[str] = set()
-    for _, n, it in sorted(pairs, key=lambda x: (-x[0], x[1])):
+    # best match first; on a tie the earlier scene, then the first step of a series
+    for _, n, it in sorted(pairs, key=lambda x: (-x[0], x[1], (series(x[2]) or ("", 0))[1])):
         if n not in out and it["key"] not in taken:
             out[n] = it
             taken.add(it["key"])
+    # a guide's step pictures ("Fast Travel 1", "... 2", "... 3"): the next ones follow on the next scenes
+    order = [sc["scene_number"] for sc in scenes]
+
+    groups: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for it in pool:
+        sr = series(it)
+        if sr:
+            groups.setdefault(sr[0], []).append((sr[1], it))
+    for n, it in sorted(out.items()):
+        sr = series(it)
+        if not sr:
+            continue
+        nxt = [x for num, x in sorted(groups.get(sr[0], []), key=lambda y: y[0]) if num > sr[1] and x["key"] not in taken]
+        at = order.index(n) if n in order else len(order)
+        for x, scene_n in zip(nxt, order[at + 1 : at + 1 + len(nxt)]):
+            if scene_n in out:
+                break
+            out[scene_n] = x
+            taken.add(x["key"])
     rest = [it for it in pool if it["key"] not in taken]
     lead = next((it for it in rest if it.get("role") == "lead"), None) or (rest[0] if rest else None)
     if lead is not None:

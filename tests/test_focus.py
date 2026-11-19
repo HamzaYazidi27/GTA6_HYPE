@@ -642,3 +642,95 @@ def test_article_pictures_with_strong_language_are_left_out():
     clean = {**meme, "alt": "GTA 6 police at night in Vice City"}
     assert media_policy(clean, article_tier="secondary", publisher="GamesRadar+")[0] == "official"
     assert media_policy({**meme, "alt": "GTA 6 class reunion"}, article_tier="secondary", publisher="GamesRadar+")[0] == "official"  # "class" is not "ass"
+
+
+# ----------------------------------------------------------------- guides: every step's picture, in order
+GUIDE = """<html><head><meta property="og:image" content="https://images.example.com/aaa111/1280x720.jpg"></head><body><article>
+<h2>GTA 6 Tips</h2><p>Twelve tips that will make your first hours in Leonida much easier to handle.</p>
+<h3 id="fast"><a href="#fast">How Do You Fast Travel?</a></h3><p>There is no traditional fast travel in GTA 6, but there is a way around the map.</p>
+<figure class="picture"><a title="How Do You Fast Travel in GTA 6? 1" href="https://images.example.com/bbb222/large.jpg"><img src="https://images.example.com/bbb222/1280x720.jpg" width="900" height="506.25" alt="How Do You Fast Travel in GTA 6? 1"></a></figure>
+<figure class="picture"><a title="How Do You Fast Travel in GTA 6? 2" href="https://images.example.com/ccc333/how-do-you-fast-travel-in-gta-6-2.large.jpg"><img src="https://images.example.com/ccc333/how-do-you-fast-travel-in-gta-6-2.900x.jpg" width="900" alt="How Do You Fast Travel in GTA 6? 2"></a></figure>
+<figure class="picture"><a title="x" href="https://images.example.com/ddd444/large.jpg"><img src="https://images.example.com/ddd444/1280x720.jpg" width="900" alt="How Do You Fast Travel in GTA 6? 3"></a></figure>
+</article></body></html>"""
+
+
+def test_generic_picture_names_and_large_versions(monkeypatch):
+    from gta_factory.modules.article_extraction import media as m
+
+    assert m._key("https://images.example.com/c74b28fd31bb6/1280x720.jpg") == m._key("https://images.example.com/c74b28fd31bb6/large.jpg") == "c74b28fd31bb6"
+    assert m._key("https://x/a/how-x-2.900x.jpg") == m._key("https://x/a/how-x-2.large.jpg") == "how-x-2"
+    assert m._key("https://cdn/x/hDEp-1920-80.jpg.webp") == "hdep"
+    monkeypatch.setattr(m, "main_content_pictures", lambda html, url: {"aaa111", "bbb222", "how-do-you-fast-travel-in-gta-6-2", "ddd444"})
+    found = [x for x in m.find_media(GUIDE, "https://www.pushsquare.com/guides/x") if x["kind"] == "image"]
+    urls = [x["url"] for x in found]
+    assert "https://images.example.com/bbb222/large.jpg" in urls and "https://images.example.com/ddd444/large.jpg" in urls  # two "large.jpg", two pictures
+    assert "https://images.example.com/ccc333/how-do-you-fast-travel-in-gta-6-2.large.jpg" in urls
+    assert all(x["width"] >= 1600 for x in found if x.get("role") != "lead")
+
+
+def test_guide_headings_come_back_into_the_text():
+    from gta_factory.modules.article_extraction.extractor import restore_headings
+
+    text = "Twelve tips that will make your first hours in Leonida much easier to handle.\n\nThere is no traditional fast travel in GTA 6, but there is a way around the map."
+    out = restore_headings(GUIDE, text)
+    assert "How Do You Fast Travel?\n\nThere is no traditional fast travel" in out and out.count("GTA 6 Tips") == 1
+
+
+def test_step_pictures_follow_each_other_on_the_next_scenes():
+    from gta_factory.modules.footage.select import story_scenes
+
+    steps = [{"kind": "photo", "key": f"p{i}", "caption": f"How Do You Fast Travel in GTA 6? {i}", "tags": [], "role": ""} for i in (3, 1, 2)]
+    scenes = [{"scene_number": 4, "narration": "Money matters: keep it in the bank."},
+              {"scene_number": 5, "narration": "There is no fast travel, but you can travel fast with a RydeMe car."},
+              {"scene_number": 6, "narration": "Open the app on your phone and book a ride."},
+              {"scene_number": 7, "narration": "Hold Triangle to skip the trip for a hundred dollars."}]
+    out = story_scenes(steps, scenes)
+    assert [out[n]["caption"][-1] for n in (5, 6, 7)] == ["1", "2", "3"] and 4 not in out
+
+
+def test_a_short_keeps_few_article_pictures_a_guide_many(project, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    from gta_factory.app.core.utils import which
+    from gta_factory.modules.article_extraction import media as m
+
+    if not which("ffmpeg"):
+        return
+    monkeypatch.setattr(m, "main_content_pictures", lambda html, url: {"aaa111", "bbb222", "how-do-you-fast-travel-in-gta-6-2", "ddd444"})
+    art = SimpleNamespace(url="https://www.pushsquare.com/guides/x", publisher="Push Square", source_tier="secondary", media=m.find_media(GUIDE, "https://www.pushsquare.com/guides/x"))
+
+    def fake(url, dest, *, referer, max_bytes):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        out = dest.with_suffix(".jpg")
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720", "-frames:v", "1", str(out)], check=True)
+        return out
+
+    few = m.download_article_media(project["settings"], [art], job_id="short-job", download=fake, max_pictures=2, log=lambda x: None)
+    assert len(few["used"]) == 2 and any("more than 2 pictures" in r["reason"] for r in few["left_out"])
+    many = m.download_article_media(project["settings"], [art], job_id="guide-job", download=fake, max_pictures=30, log=lambda x: None)
+    assert len(many["used"]) == 3  # the three step pictures; the lead picture says nothing about GTA (could be anyone's photo)
+    assert any("not clearly a GTA 6 picture" in r["reason"] for r in many["left_out"])
+
+
+def test_a_guide_written_one_story_per_tip_is_merged_not_rejected(project):
+    from gta_factory.modules.script_generation.writer import merge_repeated_sections, write_script
+
+    ids = ["hook", "context", "story", "story", "story", "story", "evidence", "evidence", "analysis", "analysis", "analysis", "community", "conclusion", "cta"]
+    merged = merge_repeated_sections([{"id": i, "narration": f"Tip text number {k} about GTA 6 for {i}.", "claim_ids": [f"C{k % 3 + 1}"]} for k, i in enumerate(ids)])
+    assert [x["id"] for x in merged] == ["hook", "context", "story", "evidence", "analysis", "community", "conclusion", "cta"]
+    assert merged[2]["narration"].count("Tip text number") == 4 and merged[2]["claim_ids"] == ["C3", "C1", "C2"]
+
+    class LocalModel:  # writes the guide the way the local model did, then audits it clean
+        def complete_json(self, system, prompt, *, validate=None, label="", **kw):
+            if label.startswith("audit"):
+                return {"issues": [], "verdict": "pass", "sentences": []}
+            secs = [{"id": i, "narration": f"Step {k} of the guide: open the phone and pick the right app, then follow the marker on the map.", "claim_ids": []} for k, i in enumerate(ids)]
+            data = {"title": "12 GTA 6 tips", "sections": secs}
+            assert validate is None or validate(data) is None
+            return data
+
+    fc = [{"id": "C1", "claim": "RydeMe lets you skip a trip for $100.", "classification": "reported", "confidence": "medium", "original_publisher": "Push Square", "original_source": "https://x", "evidence": "", "relevance": "core"}]
+    out = write_script(LocalModel(), project["settings"], fmt="guide", target_seconds=60, analysis={"story_headline": "GTA 6 tips", "quotes": []}, fact_check=fc,
+                       verification={}, story={"angle": {}, "working_title": "GTA 6 tips"}, timeline=[], today="2026-11-19")
+    assert [x["id"] for x in out["sections"]] == ["hook", "context", "story", "evidence", "analysis", "community", "conclusion", "cta"]

@@ -318,6 +318,19 @@ def repeated_phrase(sentence: str, *, within: int = 8) -> str | None:
     return None
 
 
+def merge_repeated_sections(sections: list[Any]) -> list[Any]:
+    """Join consecutive sections that carry the same id (a model that writes "story" once per tip of a guide)."""
+    out: list[Any] = []
+    for sec in sections:
+        if isinstance(sec, dict) and out and isinstance(out[-1], dict) and sec.get("id") and sec.get("id") == out[-1].get("id"):
+            prev = out[-1]
+            prev["narration"] = normalize_ws(f"{prev.get('narration') or ''} {sec.get('narration') or ''}")
+            prev["claim_ids"] = list(dict.fromkeys(list(prev.get("claim_ids") or []) + list(sec.get("claim_ids") or [])))
+            continue
+        out.append(dict(sec) if isinstance(sec, dict) else sec)
+    return out
+
+
 def _format_plan(fmt: str) -> list[tuple[str, str, float]]:
     return SECTION_PLANS.get(fmt, SECTION_PLANS["long"])
 
@@ -373,6 +386,7 @@ def write_script(
         secs = d.get("sections")
         if not isinstance(secs, list):
             return "sections must be a list"
+        secs = d["sections"] = merge_repeated_sections(secs)  # "story", "story", "story" from a long guide: one story
         got = [s.get("id") for s in secs if isinstance(s, dict)]
         if got != section_ids:
             return f"sections must be exactly these ids in order: {section_ids}; got {got}"
@@ -412,6 +426,7 @@ def write_script(
             validate=validate,
         )
         valid = {c["id"] for c in fact_check}
+        data["sections"] = merge_repeated_sections(data["sections"])
         for s in data["sections"]:
             s["narration"] = normalize_ws(s["narration"]).replace("—", ", ").replace(" - ", ", ")
             s["claim_ids"] = [i for i in (s.get("claim_ids") or []) if i in valid]

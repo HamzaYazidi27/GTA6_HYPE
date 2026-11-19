@@ -231,6 +231,8 @@ def parse_article(html: str, url: str, final_url: str | None = None, *, tier_of=
     body_ld = _clean_text(str(ld.get("articleBody") or ""))
     if len(body_ld.split()) > max(MIN_WORDS, int(len(text.split()) * 1.3)):
         text, method = body_ld, "json_ld"
+    if method.startswith("trafilatura"):
+        text = restore_headings(html, text)
 
     title = normalize_ws(str(ld.get("headline") or "")) or _meta(html, "og:title", "twitter:title") or normalize_ws(tr.get("title") or "")
     title = re.sub(r"\s+[|\-–—]\s+[^|\-–—]{2,40}$", "", title) if title.count("|") or " - " in title[-45:] else title
@@ -286,6 +288,29 @@ def _media(html: str, page_url: str) -> list[dict[str, Any]]:
         return find_media(html, page_url)
     except Exception:  # pictures are a bonus: never lose the article over them
         return []
+
+
+def restore_headings(html: str, text: str) -> str:
+    """Put back the section headings the text extraction dropped (a guide's "How Do You Fast Travel?").
+
+    Each ``<h2>``-``<h4>`` heading of the page goes right before the paragraph that follows it on the page,
+    when that paragraph is in the text and the heading is not. Headings with no paragraph of the article
+    after them (related stories, newsletters) are left out.
+    """
+    import html as html_lib
+
+    out = text
+    for m in re.finditer(r"<h([2-4])[^>]*>(.*?)</h\1>(.*?)<p[^>]*>(.*?)</p>", html, re.S | re.I):
+        heading = normalize_ws(html_lib.unescape(re.sub(r"<[^>]+>", " ", m.group(2))))
+        para = normalize_ws(html_lib.unescape(re.sub(r"<[^>]+>", " ", m.group(4))))
+        if not heading or len(heading) > 120 or len(para) < 30 or heading in out or len(m.group(3)) > 2000:
+            continue
+        anchor = para[:60]
+        at = out.find(anchor)
+        if at < 0:
+            continue
+        out = out[:at] + heading + "\n\n" + out[at:]
+    return out
 
 
 def extract_article(url: str, *, tier_of=None, allow_render: bool = True) -> Article:

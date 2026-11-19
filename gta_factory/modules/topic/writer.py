@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from ...app.core.utils import normalize_ws
 from ...providers.llm import LLMProvider
-from ..script_generation.writer import AUDIT_PROMPT, AUDIT_SYSTEM, WRITER_SYSTEM, build_fact_sheet, lint_script, split_sentences, word_count
+from ..script_generation.writer import AUDIT_PROMPT, AUDIT_SYSTEM, WRITER_SYSTEM, build_fact_sheet, lint_script, merge_repeated_sections, split_sentences, word_count
 
 PROMPT = """Today's date: {today}
 Channel: {channel}
@@ -167,6 +167,7 @@ def write_topic_script(
         secs = d.get("sections")
         if not isinstance(secs, list):
             return "sections must be a list"
+        secs = d["sections"] = merge_repeated_sections(secs)
         got = [s.get("id") for s in secs if isinstance(s, dict)]
         if got != ids:
             return f"sections must be exactly these ids in order: {ids}; got {got}"

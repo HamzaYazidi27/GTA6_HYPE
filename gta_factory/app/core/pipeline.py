@@ -302,7 +302,9 @@ def step_extract(ctx: JobContext) -> dict[str, Any]:
     if s.get("footage.enabled", True) and s.get("footage.article_media", True) and ctx.options.get("article_media", True):
         from ...modules.article_extraction.media import download_article_media
 
-        media = download_article_media(s, articles, job_id=ctx.job_id, third_party_ok=bool(ctx.options.get("third_party_media")), log=ctx.log)
+        vertical = s.format(ctx.fmt).get("aspect") == "9:16"
+        media = download_article_media(s, articles, job_id=ctx.job_id, third_party_ok=bool(ctx.options.get("third_party_media")), log=ctx.log,
+                                       max_pictures=int(s.get("footage.article_media_max_short" if vertical else "footage.article_media_max_long", 8 if vertical else 30)))
     write_json(ctx.paths.root / "sources" / "media.json", media)
     return {"articles": len(articles), "words": sum(a.word_count for a in articles), "failed": failures, "seen_before": seen_before, "article_media": len(media["used"])}
 

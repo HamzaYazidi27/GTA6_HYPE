@@ -289,6 +289,8 @@ footage:
   cookies_from_browser: ""         # age-restricted trailer on YouTube? log into YouTube in a browser and put its name here: chrome, safari, firefox, edge, brave
   thumbnails: true                 # put a real GTA 6 picture behind the thumbnail text
   article_media: true             # download the pictures / videos of a job's articles and show them where the narration talks about them
+  article_media_max_short: 8       # pictures kept per article for a Short
+  article_media_max_long: 30       # ... for a 16:9 video (a guide shows every step)
   auto_tag: true                   # look at new footage with a free local vision model (Ollama) to know what is in each shot
   vision_model: "auto"             # auto = qwen2.5vl:7b (16 GB RAM and more) or qwen2.5vl:3b
   sources:                         # official Rockstar uploads downloaded by `footage update` / `footage fetch`

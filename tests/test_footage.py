@@ -30,6 +30,11 @@ SOURCES = ["testsrc2", "mandelbrot", "smptebars", "rgbtestsrc", "testsrc", "cell
 TRAILER = "Grand Theft Auto VI Trailer 1 [QdBZY2fkU-0].mp4"
 
 
+def _src(src: str) -> str:
+    """A lavfi test source; the random ones (life, cellauto) get a fixed seed so every run sees the same pictures."""
+    return f"{src}=seed=7:" if src in ("life", "cellauto") else f"{src}="
+
+
 def make_trailer(path: Path, shots: int = 10, shot_seconds: float = 3.0) -> Path:
     """Distinct bright shots with hard cuts, a black 'title card' in the middle, a logo head and an end card."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -37,7 +42,7 @@ def make_trailer(path: Path, shots: int = 10, shot_seconds: float = 3.0) -> Path
     inputs = []
     for item in seq:
         src, dur = item.split(":")
-        spec = f"color=c=black:s=640x360:r=30:d={dur}" if src == "black" else f"{src}=s=640x360:r=30,trim=duration={dur}"
+        spec = f"color=c=black:s=640x360:r=30:d={dur}" if src == "black" else f"{_src(src)}s=640x360:r=30,trim=duration={dur}"
         inputs += ["-f", "lavfi", "-i", spec]
     chains = "".join(f"[{i}:v]scale=640:360,format=yuv420p,setsar=1,fps=30[v{i}];" for i in range(len(seq)))
     graph = chains + "".join(f"[v{i}]" for i in range(len(seq))) + f"concat=n={len(seq)}:v=1:a=0[out]"
@@ -387,7 +392,7 @@ def test_letterbox_bars_are_cut_away(project):
     root = footage_dir(s)
     vid = root / "videos" / "Cinematic trailer.mp4"
     vid.parent.mkdir(parents=True)
-    seq = "".join(f"{src}=s=1280x536:r=30,trim=duration=3,pad=1280:720:0:92:black[v{i}];" for i, src in enumerate(SOURCES[:6]))
+    seq = "".join(f"{_src(src)}s=1280x536:r=30,trim=duration=3,pad=1280:720:0:92:black[v{i}];" for i, src in enumerate(SOURCES[:6]))
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=30:d=3.5", "-filter_complex", seq + "".join(f"[v{i}]" for i in range(6)) + "concat=n=6:v=1:a=0[out]", "-map", "[out]", "-c:v", "libx264", "-preset", "ultrafast", str(vid)], check=True)
     make_photo(root / "photos" / "night_sky.jpg", "0x0A0A12")  # dark, but not letterboxed
     bars = root / "photos" / "cinematic_still.jpg"

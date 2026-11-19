@@ -80,6 +80,7 @@ class _PageReader(HTMLParser):
         self.blockquote: dict[str, Any] | None = None
         self.video: dict[str, Any] | None = None
         self.picture_sources: list[tuple[str, int]] = []
+        self.link = ""  # the <a href> around the current picture, when it points to a (larger) picture file
 
     def _abs(self, u: str) -> str:
         u = html_lib.unescape((u or "").strip())
@@ -123,9 +124,11 @@ class _PageReader(HTMLParser):
                     url, w = src_url, src_w
             self.picture_sources = []
             try:
-                w = max(w, int(re.sub(r"\D", "", a.get("width", "")) or 0))
+                w = max(w, int(re.sub(r"\D", "", a.get("width", "").split(".")[0]) or 0))
             except ValueError:
                 pass
+            if self.link and urlparse(self.link).netloc == urlparse(url).netloc:  # "<a href=.../large.jpg><img src=.../1280x720.jpg>"
+                url, w = self.link, max(w, 1600)
             if not url:
                 return
             item = {"kind": "image", "url": url, "width": w, "alt": normalize_ws(html_lib.unescape(a.get("alt", ""))), "class": cls, "in_article": self.depth_article > 0, "in_figure": self.figure is not None}
@@ -142,12 +145,17 @@ class _PageReader(HTMLParser):
         elif tag == "blockquote" and re.search(r"twitter-tweet|instagram-media|tiktok-embed", cls):
             platform = "x" if "twitter" in cls else "instagram" if "instagram" in cls else "tiktok"
             self.blockquote = {"kind": "post", "platform": platform, "url": self._abs(a.get("cite") or a.get("data-instgrm-permalink") or ""), "in_article": self.depth_article > 0, "alt": ""}
+        elif tag == "a" and self.blockquote is None:
+            href = a.get("href", "")
+            self.link = self._abs(href) if re.search(r"\.(jpe?g|png|webp)(\?|$)", href, re.I) else ""
         elif tag == "a" and self.blockquote is not None and not self.blockquote["url"]:
             href = self._abs(a.get("href", ""))
             if re.search(r"(twitter\.com|x\.com)/[^/]+/status/|instagram\.com/(p|reel)/|tiktok\.com/@", href):
                 self.blockquote["url"] = href
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "a":
+            self.link = ""
         if tag == "article" and self.depth_article:
             self.depth_article -= 1
         elif tag == "script":
@@ -186,10 +194,15 @@ def _credit(text: str) -> str:
 
 def _key(url: str) -> str:
     """The picture behind a URL, whatever its size variant ("x-1920-80.jpg.webp", "x-scaled.jpg", "x-640x360.jpg")."""
-    name = Path(urlparse(url or "").path).name.lower()
+    path = Path(urlparse(url or "").path)
+    name = path.name.lower()
     while re.search(r"\.(jpe?g|png|webp|avif|gif)$", name):
         name = re.sub(r"\.(jpe?g|png|webp|avif|gif)$", "", name)
-    return re.sub(r"(-scaled|-\d{2,4}x\d{2,4}|-\d{2,4}(-\d{2,3})?|_full)$", "", name)
+    name = re.sub(r"(-scaled|-\d{2,4}x\d{2,4}|-\d{2,4}(-\d{2,3})?|_full|\.\d{2,4}x\d{0,4}|\.(large|original|full))$", "", name)
+    if re.fullmatch(r"\d{2,4}x\d{0,4}|large|original|full|image|img|\d+|default|main", name):  # ".../c74b28fd31bb6/1280x720.jpg"
+        name = f"{path.parent.name.lower()}/{name}"
+        name = re.sub(r"/(\d{2,4}x\d{0,4}|large|original|full|image|img|default|main)$", "", name)
+    return name
 
 
 def main_content_pictures(html: str, page_url: str) -> set[str]:
@@ -360,8 +373,11 @@ def download_article_media(
     download: Callable[..., Path | None] = _download_file,
     youtube_uploader: Callable[[str], str] = _youtube_uploader,
     fetch_videos: Callable[..., list[Path]] | None = None,
+    max_pictures: int = MAX_PICTURES,
 ) -> dict[str, Any]:
-    """Download the allowed pictures and videos of the job's articles. Returns the report (also saved by the caller)."""
+    """Download the allowed pictures and videos of the job's articles. Returns the report (also saved by the caller).
+
+    ``max_pictures`` per article: a few for a Short, many for a guide that shows every step."""
     from ..footage.library import footage_dir, sidecar_path
     from ..footage.vocabulary import load_vocabulary
 
@@ -411,12 +427,18 @@ def download_article_media(
                 if not got:
                     left.append({**row, "reason": "already in the footage library, or could not be downloaded"})
                 continue
-            if it["kind"] == "image" and pictures >= MAX_PICTURES:
-                left.append({**row, "reason": f"more than {MAX_PICTURES} pictures in the article"})
+            if it["kind"] == "image" and pictures >= max_pictures:
+                left.append({**row, "reason": f"more than {max_pictures} pictures in the article"})
                 continue
             folder = root / ("photos" if it["kind"] == "image" else "videos") / "articles" / job_id
             stem = f"{_slug(art.publisher, 16)}-{i:02d}-{_slug(text or Path(urlparse(it['url']).path).stem)}"
-            p = download(it["url"], folder / f"{stem}.bin", referer=art.url, max_bytes=MAX_IMAGE_BYTES if it["kind"] == "image" else MAX_VIDEO_BYTES)
+            limit = MAX_IMAGE_BYTES if it["kind"] == "image" else MAX_VIDEO_BYTES
+            p = download(it["url"], folder / f"{stem}.bin", referer=art.url, max_bytes=limit)
+            if p is None:  # one more try: CDNs sometimes refuse a burst of requests
+                import time
+
+                time.sleep(1.5)
+                p = download(it["url"], folder / f"{stem}.bin", referer=art.url, max_bytes=limit)
             if p is not None and it["kind"] == "image":
                 p = _to_jpeg_if_needed(p)
                 if p is not None and _image_width(p) < MIN_WIDTH:
