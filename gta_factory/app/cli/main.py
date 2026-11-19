@@ -302,7 +302,7 @@ def cmd_short_from_script(args: argparse.Namespace) -> int:
     opts = _options(args)
     if args.fps:
         opts["fps"] = args.fps
-    for key in ("allow_weak", "offline"):
+    for key in ("allow_weak", "offline", "no_web"):
         if getattr(args, key, False):
             opts[key] = True
     job_id = create_script_job(s, text, options=opts)
@@ -965,7 +965,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--file", help="read the narration from a text file")
     sp.add_argument("--fps", choices=("auto", "30", "60"), help="frame rate (auto: 60 when the footage is 60 fps)")
     sp.add_argument("--allow-weak", action="store_true", help="also show uncertain footage matches (they are marked in the report; default: such phrases show their words)")
-    sp.add_argument("--offline", action="store_true", help="do not look for new official videos before matching")
+    sp.add_argument("--offline", action="store_true", help="no internet for footage: no new official videos, no web search for the missing phrases")
+    sp.add_argument("--no-web", action="store_true", help="do not search the web (YouTube, pictures) for the phrases the footage library cannot show")
     sp.add_argument("--no-search", action="store_true", help="do not search the news to fact-check the claims")
     sp.add_argument("--no-whisper", action="store_true", help="estimate word timings instead of measuring them")
     sp.add_argument("--llm", help="LLM provider (ollama = free local default, claude_code, anthropic, openai; none = rules only)")

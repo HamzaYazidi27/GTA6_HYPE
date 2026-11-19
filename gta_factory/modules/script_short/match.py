@@ -13,9 +13,11 @@ says, during exactly as long as the beat lasts:
    looked at and must show the concept ("verified_vision"); without it, CLIP's vote must be clear on
    the first and the middle frame ("verified_clip").
 
-A specific beat whose footage cannot be found or verified is **missing**: nothing unrelated is put in
-its place, the scene shows the words on the channel background, and QC refuses "fully verified".
-Screenshots never stand in for gameplay (``allow_photos`` is for tests and manual overrides only).
+A specific beat whose footage cannot be found or verified in the library is searched on the web
+(``websource.py``: YouTube videos, then pictures) and matched again with the same checks. Only when
+nothing found there shows it either is it **missing**: nothing unrelated is put in its place, the
+scene shows the words on the channel background, and QC refuses "fully verified". A picture stands
+in for gameplay only in the last pass (``allow_photos``), when no video at all shows the beat.
 """
 from __future__ import annotations
 
@@ -71,7 +73,7 @@ def source_fps(path: str) -> float:
 
 
 def rights_of(settings: Any, side: dict[str, Any]) -> str:
-    """official | own | licensed | third_party_allowed | unverified"""
+    """official | own | licensed | web_found | third_party_allowed | unverified"""
     from ..footage.library import _official, third_party
 
     if side.get("rights") in ("official", "own", "licensed"):
@@ -82,6 +84,8 @@ def rights_of(settings: Any, side: dict[str, Any]) -> str:
         return "licensed"
     if _official(settings, side) or (side.get("source_url") and third_party(settings, side) is None):
         return "official"
+    if side.get("web_found"):  # found automatically by a web search: permission not checked yet
+        return "web_found"
     if side.get("allow_third_party"):
         return "third_party_allowed"
     return "unverified"
@@ -175,12 +179,14 @@ def match_beats(
     clip: Any = None,
     verify: Callable[[Path, float | None, str], dict[str, Any]] | None = None,
     allow_photos: bool = False,
+    used: dict[str, list[tuple[float, float]]] | None = None,
     log: Callable[[str], None] = print,
 ) -> list[dict[str, Any]]:
     """One match per beat: {"status", "confidence", "segments": [...], "considered", "seen", ...}.
 
     ``needs``: seconds of footage each beat must fill (its scene's length). Statuses:
     verified_vision | verified_clip | general (a hook / teaser / CTA: any strong gameplay) | weak | missing.
+    ``used``: {file: [(start, end)]} moments already on screen (an earlier pass): never shown twice.
     """
     libs: dict[str, Library] = {}
 
@@ -189,7 +195,7 @@ def match_beats(
             libs[gid] = Library(settings, gid, job=job, clip=clip, log=log)
         return libs[gid]
 
-    used: dict[str, list[tuple[float, float]]] = {}
+    used = {k: list(v) for k, v in (used or {}).items()}
     used_keys: set[str] = set()
     out = []
     generic_neg = clip.embed_text(templated(GENERIC_DISTRACTORS)) if clip is not None else None

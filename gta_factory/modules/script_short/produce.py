@@ -5,7 +5,8 @@
     voice        Generate the narration (Kokoro, one take per sentence)
     sync         Word-level alignment: when every word, and so every beat, is spoken
     footage      Find footage: library, new official Rockstar videos, CLIP frame index
-    match        Match each beat to the moment of real gameplay that shows it (frame-verified)
+    match        Match each beat to the moment of real gameplay that shows it (frame-verified);
+                 beats the library cannot show are searched on the web (YouTube, then pictures)
     edit         Build the timeline and apply the editing style (cuts, zoom, grade, captions, SFX)
     render / mix  (shared with the other videos)
     cover        Thumbnail from the best verified frame
@@ -358,7 +359,7 @@ def step_sync(ctx: Any) -> dict[str, Any]:
 def step_footage(ctx: Any) -> dict[str, Any]:
     """The footage the matcher can use: the library (new official videos fetched first), and its CLIP index."""
     from ..footage.clip import Clip, ensure_clip
-    from ..footage.games import game_settings, library_state
+    from ..footage.games import ensure_footage, game_settings, library_state
     from .match import Library, source_fps
 
     s = ctx.settings
@@ -383,6 +384,11 @@ def step_footage(ctx: Any) -> dict[str, Any]:
     if model is None:
         raise ConfigError("CLIP cannot load: the `tokenizers` package is missing.", hint='Run `pip install -e ".[clip]"` (or `pip install tokenizers`), then resume.')
     for gid in games:
+        if gid != "gta6" and not ctx.options.get("offline"):
+            try:  # a comparison beat ("GTA 5 stopped at five"): that game's official videos, downloaded once
+                ensure_footage(s, gid, log=ctx.log)
+            except Exception as exc:
+                status["notes"].append(f"the {gid} library could not be filled: {str(exc).splitlines()[0][:160]}")
         try:
             gs = game_settings(s, gid) if gid != "gta6" else s
             state = library_state(s, gid)
@@ -395,7 +401,7 @@ def step_footage(ctx: Any) -> dict[str, Any]:
         if fps:
             status["games"][gid]["fps"] = fps
         if lib.empty:
-            status["notes"].append(f"the {gid} library has no usable gameplay video: its beats will be missing (add footage: `python -m gta_factory footage add ...`{' --game ' + gid if gid != 'gta6' else ''})")
+            status["notes"].append(f"the {gid} library has no usable gameplay video: its beats are searched on the web (or add footage: `python -m gta_factory footage add ...`{' --game ' + gid if gid != 'gta6' else ''})")
     write_json(f.library, status)
     g6 = status["games"].get("gta6") or {}
     ctx.log(f"footage: GTA 6 library {g6.get('usable_shots', 0)} usable shots, {g6.get('indexed_frames', 0)} indexed frames" + "".join(f"; {n}" for n in status["notes"]))
@@ -416,7 +422,9 @@ def step_match(ctx: Any) -> dict[str, Any]:
     verify = vision_verifier(s, ctx.log) if s.get("script_short.vision_verify", True) else None
     if verify is None:
         ctx.log("match: no local vision model (Ollama) - frames are verified with CLIP's vote only (status verified_clip)")
-    matches = match_beats(s, beats, needs, job=ctx.job_id, clip=Clip.load(s), verify=verify, allow_photos=bool(ctx.options.get("allow_photos")), log=ctx.log)
+    clip = Clip.load(s)
+    matches = match_beats(s, beats, needs, job=ctx.job_id, clip=clip, verify=verify, allow_photos=bool(ctx.options.get("allow_photos")), log=ctx.log)
+    web = find_on_the_web(ctx, beats, needs, matches, clip=clip, verify=verify)
     allow_weak = bool(ctx.options.get("allow_weak"))
     for m, t in zip(matches, timing["beats"]):
         if m["specific"] and not m["segments"] and m.get("weak_segments") and allow_weak:  # the operator accepts uncertain footage
@@ -425,13 +433,75 @@ def step_match(ctx: Any) -> dict[str, Any]:
         m["beat"] = t["beat"]
         m.update({k: t[k] for k in ("start", "end", "scene")})
         m["role"] = plan["beats"][t["beat"]]["role"]
-    write_json(f.matches, {"verification": "vision" if verify else "clip", "matches": matches})
+    write_json(f.matches, {"verification": "vision" if verify else "clip", "matches": matches, "web": web})
     write_json(ctx.paths.rights, rights_review(s, matches))
     counts: dict[str, int] = {}
     for m in matches:
         counts[m["status"]] = counts.get(m["status"], 0) + 1
     ctx.log("match: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
     return counts
+
+
+def _used(matches: list[dict[str, Any]]) -> dict[str, list[tuple[float, float]]]:
+    out: dict[str, list[tuple[float, float]]] = {}
+    for m in matches:
+        for sg in m["segments"]:
+            out.setdefault(sg["file"], []).append((sg["start"], sg["end"]))
+    return out
+
+
+def find_on_the_web(ctx: Any, beats: list[dict[str, Any]], needs: list[float], matches: list[dict[str, Any]], *, clip: Any, verify: Any) -> dict[str, Any]:
+    """The beats the library cannot show: footage searched and downloaded from the web, then matched again.
+
+    Pass 2 looks at videos only (the new ones included); pass 3, for what is still missing, also
+    accepts a picture (library screenshots, trailer stills, pictures found on the web).
+    """
+    from .match import match_beats
+    from .websource import defaults, search_url, source_missing
+
+    s = ctx.settings
+    cfg = defaults(s)
+    report: dict[str, Any] = {"enabled": cfg["enabled"], "searched": [], "videos": 0, "photos": 0, "filled": [], "photo_filled": []}
+    missing = [k for k, m in enumerate(matches) if not m["segments"]]
+    if not missing:
+        return report
+    if not cfg["enabled"] or ctx.options.get("offline") or ctx.options.get("no_web"):
+        report["note"] = "web search off (offline / no_web / script_short.web_footage.enabled)"
+    else:
+        ctx.log(f"web footage: {len(missing)} beat(s) not in the library - searching the web (YouTube, then pictures)")
+        found = source_missing(s, [{**beats[k], "index": k} for k in missing], job=ctx.job_id, log=ctx.log)
+        report.update(searched=found["beats"], videos=found["videos"], photos=found["photos"], errors=found["errors"])
+        for e in found["errors"][:3]:
+            ctx.warn(f"web footage: {e}")
+
+    def again(idx: list[int], *, photos: bool) -> list[int]:
+        if not idx:
+            return []
+        got = match_beats(s, [beats[k] for k in idx], [needs[k] for k in idx], job=ctx.job_id, clip=clip, verify=verify, allow_photos=photos, used=_used(matches), log=ctx.log)
+        filled = []
+        for k, m in zip(idx, got):
+            if m["segments"]:
+                m["beat"] = k
+                m["web"] = any(sg["rights"] == "web_found" or "/web/" in sg["file"] for sg in m["segments"])
+                matches[k] = m
+                filled.append(k)
+                ctx.log(f"match: beat {k + 1} “{m['text'][:48]}” -> {m['status']} ({m['confidence']:.2f}) {m['segments'][0]['file']}" + (" [web]" if m["web"] else "") + (" [picture]" if m["segments"][0]["kind"] == "photo" else ""))
+            else:  # the newest reason; the weak candidates of the library pass stay when this one has none
+                weak = m.get("weak_segments") or matches[k].get("weak_segments")
+                matches[k] = {**m, "beat": k, **({"weak_segments": weak} if weak else {})}
+        return filled
+
+    if report["videos"] or report["photos"]:
+        report["filled"] = again(missing, photos=bool(ctx.options.get("allow_photos")))
+    if cfg["photo_fallback"]:
+        report["photo_filled"] = again([k for k in missing if not matches[k]["segments"]], photos=True)
+    for k in missing:
+        if not matches[k]["segments"]:
+            row = next((r for r in report["searched"] if r.get("beat") == k), None)
+            if row is not None:
+                matches[k]["reason"] = (matches[k].get("reason") or "") + f" | web: {len(row['videos'])} video(s) and {len(row['photos'])} picture(s) found, none shows it"
+            matches[k]["search_url"] = search_url((row or {}).get("queries", [beats[k]["concept"]])[0] if row else beats[k]["concept"])
+    return report
 
 
 def rights_review(settings: Any, matches: list[dict[str, Any]]) -> dict[str, Any]:
@@ -443,8 +513,9 @@ def rights_review(settings: Any, matches: list[dict[str, Any]]) -> dict[str, Any
             assets.append({
                 "asset_id": f"beat{m['beat'] + 1}_{k + 1}",
                 "file": sg["file"], "source_url": sg.get("source_url") or "", "creator": sg.get("creator") or "", "credit": sg.get("credit") or "",
-                "rights": sg["rights"], "review_status": "cleared" if ok else "needs_human_review",
-                "note": {"official": "Official Rockstar Games footage (channel rights policy: short excerpts with credit).", "own": "Captured by the channel.", "licensed": "Licence on file.", "third_party_allowed": "Third-party footage the operator marked as allowed (permission on file)."}.get(sg["rights"], "Origin or permission not documented: do not publish before checking."),
+                "rights": sg["rights"], "review_status": "cleared" if ok else "check_before_publishing" if sg["rights"] == "web_found" else "needs_human_review",
+                "note": {"official": "Official Rockstar Games footage (channel rights policy: short excerpts with credit).", "own": "Captured by the channel.", "licensed": "Licence on file.", "third_party_allowed": "Third-party footage the operator marked as allowed (permission on file).",
+                         "web_found": f"Found automatically on the web ({sg.get('creator') or 'unknown author'}): check you may use it (or replace it) before publishing."}.get(sg["rights"], "Origin or permission not documented: do not publish before checking."),
             })
             if sg.get("credit") and sg["credit"] not in credits:
                 credits.append(sg["credit"])

@@ -148,6 +148,16 @@ script_short:
   style_profile: style/style_profile.json   # editing style measured from the reference channel (python -m gta_factory style analyze ...)
   vision_verify: true              # look at the chosen frames with the local vision model (Ollama) when it runs
   fetch_new_official: true         # check the official Rockstar channels for new videos before matching
+  web_footage:                     # a beat the library cannot show is searched on the internet, by itself
+    enabled: true                  # YouTube videos first, then pictures (Bing / DuckDuckGo images); all verified like the library
+    videos_per_beat: 2             # videos downloaded per missing beat
+    photos_per_beat: 3             # pictures downloaded per missing beat (used only when no video shows it)
+    max_videos_per_job: 12
+    max_video_seconds: 600         # longer search results are skipped (download time)
+    max_height: 720
+    search_results: 12             # results read per search
+    photo_fallback: true           # a picture (slow zoom) rather than a blank when no video shows the phrase
+    exclude_words: []              # more title words that mark a result as not real footage (fan-made, mods... are built in)
 
 script:
   words_per_minute: 155            # average real speaking rate (Kokoro: ~150 in 16:9, ~170 in Shorts): word budgets and scene splits

@@ -13,7 +13,7 @@ these are the checks specific to a Short cut to a script:
   no dead air, no clip shown twice, claims checked
 
 ``fully_verified`` is True only when all of that holds: one missing or unverified beat, one clip
-without documented rights, one unchecked claim and the video is "not fully verified".
+without documented rights or found on the web (permission to check), one picture standing in for a clip, one unchecked claim and the video is "not fully verified".
 """
 from __future__ import annotations
 
@@ -120,11 +120,15 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     # --- authenticity
     segs = [sg for m in matches for sg in m["segments"]]
     photos = [sg for sg in segs if sg["kind"] != "shot"]
-    checks.append(_check("authenticity.gameplay", "critical", not photos, "Only moving gameplay / trailer footage (no screenshot stands in for a clip)." if not photos else f"{len(photos)} screenshot(s) used as footage."))
+    checks.append(_check("authenticity.gameplay", "warning", not photos, "Only moving gameplay / trailer footage (no screenshot stands in for a clip)." if not photos else f"{len(photos)} picture(s) stand in where no gameplay video showed the phrase: " + "; ".join(sorted({f"beat {m['beat'] + 1}" for m in matches for sg in m['segments'] if sg['kind'] != 'shot'})),
+                         beats=sorted({m["beat"] + 1 for m in matches for sg in m["segments"] if sg["kind"] != "shot"})))
     wrong_game = [(m["beat"] + 1, sg["game"]) for m in matches for sg in m["segments"] if sg["game"] != (m.get("game") or "gta6")]
     checks.append(_check("authenticity.game", "critical", not wrong_game, "Every clip is from the game its phrase talks about." if not wrong_game else f"Clips from another game: {wrong_game}"))
-    unrighted = [sg for sg in segs if sg["rights"] not in ("official", "own", "licensed", "third_party_allowed")]
+    unrighted = [sg for sg in segs if sg["rights"] not in ("official", "own", "licensed", "third_party_allowed", "web_found")]
     checks.append(_check("rights.documented", "critical", not unrighted, "Every clip's origin and permission is documented." if not unrighted else f"{len(unrighted)} clip(s) without documented rights: " + ", ".join(sorted({sg['file'] for sg in unrighted}))[:300]))
+    web = [sg for sg in segs if sg["rights"] == "web_found"]
+    checks.append(_check("rights.web_found", "warning", not web, "No footage found automatically on the web." if not web else f"{len(web)} clip(s) / picture(s) found automatically on the web: check you may use them before publishing: " + "; ".join(sorted({f"{sg.get('creator') or '?'} ({sg.get('source_url') or sg['file']})" for sg in web}))[:400],
+                         beats=sorted({m["beat"] + 1 for m in matches for sg in m["segments"] if sg["rights"] == "web_found"})))
 
     # --- frame-level sync on the rendered file
     w, h = int(props.get("width") or 1080), int(props.get("height") or 1920)
@@ -180,7 +184,7 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     smeasured = style.get("status") == "measured"
     checks.append(_check("style.reference", "warning", smeasured, "Editing style measured from the reference channel." if smeasured else "The reference channel's style has not been measured yet: the channel's default editing is used (`python -m gta_factory style analyze`)."))
 
-    fully = not missing and not unverified and not photos and not wrong_game and not unrighted and bool(fsync) and not bad and not late and burned == script_words and not contradicted and not unchecked
+    fully = not missing and not unverified and not photos and not web and not wrong_game and not unrighted and bool(fsync) and not bad and not late and burned == script_words and not contradicted and not unchecked
     sync = {
         "fully_verified": fully,
         "beats": [_beat_row(t, by_beat.get(t["beat"]), [x for x in fsync if x["beat"] == t["beat"] + 1]) for t in timing.get("beats") or []],
@@ -253,8 +257,11 @@ def production_report(ctx: Any, report: dict[str, Any], extra: dict[str, Any]) -
         missing = [r for r in extra["sync"]["beats"] if not r["footage"]]
         if missing:
             todo.append("Add real footage for the missing beats (`python -m gta_factory footage add <file or URL>`), then resume from `footage`: " + "; ".join(f"beat {r['beat']} “{r['narration']}”" for r in missing))
-        if any(not c["passed"] and c["id"].startswith("rights") for c in report["checks"]):
+        if any(not c["passed"] and c["id"] == "rights.documented" for c in report["checks"]):
             todo.append("Document the rights of the flagged clips (rights_review.json) or replace them.")
+        web = next((c for c in report["checks"] if c["id"] == "rights.web_found" and not c["passed"]), None)
+        if web:
+            todo.append("Footage found on the web was used (beats " + ", ".join(str(b) for b in web.get("beats") or []) + "): check each source in rights_review.json, or replace it with `python -m gta_factory footage add <file or URL>` and resume from `match`.")
         if any(not c["passed"] and c["id"] == "claims.supported" for c in report["checks"]):
             todo.append("Check the unconfirmed claims (claims_report.md) or reword them.")
     todo.append("Watch the Short once with sound.")

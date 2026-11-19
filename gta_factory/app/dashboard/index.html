@@ -95,6 +95,7 @@
         <label class="chk"><input type="checkbox" id="ss-weak"> Montrer aussi les correspondances incertaines (marquées dans le rapport)</label>
         <label class="chk"><input type="checkbox" id="ss-nosearch"> Ne pas fact-checker les affirmations sur le web</label>
         <label class="chk"><input type="checkbox" id="ss-offline"> Ne pas chercher de nouvelles vidéos officielles</label>
+        <label class="chk"><input type="checkbox" id="ss-noweb"> Ne pas chercher sur internet les phrases sans footage (YouTube, images)</label>
         <label class="chk"><input type="checkbox" id="ss-nowhisper"> Timings des mots estimés (plus rapide, moins précis)</label>
       </details>
       <p class="muted" style="margin:6px 0 0;font-size:12px">Voix, alignement mot par mot, vrai footage GTA VI vérifié image par image sur chaque phrase, montage, sous-titres, sons, contrôle qualité : MP4 1080×1920, SRT, EDL, manifeste des sources, titre et description.</p>
@@ -224,7 +225,7 @@ function shortCard(d) {
       el('td', {class: 'muted'}, b.start != null ? b.start.toFixed(2) + '–' + b.end.toFixed(2) + 's' : ''),
       el('td', {}, b.text, el('div', {class: 'muted'}, b.concept || '')),
       el('td', {class: 'muted'}, b.footage.length ? b.footage.join(', ') : (b.reason || '')),
-      el('td', {class: 'b-' + b.status}, (BEAT_FR[b.status] || b.status) + (b.confidence ? ' · ' + b.confidence.toFixed(2) : '')))))));
+      el('td', {class: 'b-' + b.status}, (BEAT_FR[b.status] || b.status) + (b.photo ? ' · photo' : '') + (b.web ? ' · web' : '') + (b.confidence ? ' · ' + b.confidence.toFixed(2) : '')))))));
   if (sh.files.length) card.append(el('div', {class: 'chips', style: 'margin-top:10px'}, sh.files.map((f) => el('a', {class: 'chip have', href: f.url, target: '_blank', download: ''}, f.label))));
   if (d.video) card.append(el('div', {class: 'row', style: 'margin-top:10px'}, el('a', {href: d.video, download: ''}, el('button', {}, 'Télécharger le MP4'))));
   if (sh.report) card.append(el('details', {style: 'margin-top:10px'}, el('summary', {class: 'muted', style: 'cursor:pointer'}, 'Rapport de production'), el('pre', {class: 'log'}, sh.report)));
@@ -473,6 +474,7 @@ $('#ss-go').addEventListener('click', () => act(async () => {
   if ($('#ss-weak').checked) options.allow_weak = true;
   if ($('#ss-nosearch').checked) options.no_search = true;
   if ($('#ss-offline').checked) options.offline = true;
+  if ($('#ss-noweb').checked) options.no_web = true;
   if ($('#ss-nowhisper').checked) options.whisper = false;
   const r = await api('POST', '/api/script-short', {script, options: {...options, ...voiceChoice()}});
   $('#ss-msg').textContent = 'génération lancée';

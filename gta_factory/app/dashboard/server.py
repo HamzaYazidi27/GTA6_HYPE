@@ -182,7 +182,8 @@ def short_payload(settings: Any, job_id: str, job: dict[str, Any], root: Path, o
     beats = [{
         "beat": m["beat"] + 1, "text": m["text"], "concept": m.get("concept"), "status": m["status"], "confidence": m.get("confidence"),
         "start": (timing.get(m["beat"]) or {}).get("start"), "end": (timing.get(m["beat"]) or {}).get("end"),
-        "footage": [f"{sg['file']} @ {sg['start']:.1f}s" for sg in m.get("segments") or []], "reason": m.get("reason"),
+        "footage": [f"{sg['file']} @ {sg['start']:.1f}s" + (f" ({sg['source_url']})" if sg.get("rights") == "web_found" and sg.get("source_url") else "") for sg in m.get("segments") or []], "reason": m.get("reason"),
+        "web": bool(m.get("web")), "photo": any(sg.get("kind") == "photo" for sg in m.get("segments") or []),
     } for m in matches]
     files = [{"label": label, "url": f"/files/{job_id}/out/{name}"} for label, name in SHORT_FILES if (out_dir / name).exists()]
     report = out_dir / "production_report.md"
@@ -520,7 +521,7 @@ class Handler(BaseHTTPRequestHandler):
                 from ...modules.script_short.produce import create_script_job
 
                 adv = body.get("options") or {}
-                options = {k: adv[k] for k in ("no_search", "whisper", "allow_weak", "offline") if k in adv} | voice_options(adv)
+                options = {k: adv[k] for k in ("no_search", "whisper", "allow_weak", "offline", "no_web") if k in adv} | voice_options(adv)
                 if str(adv.get("fps") or "") in ("30", "60", "auto"):
                     options["fps"] = str(adv["fps"])
                 if adv.get("llm") in ("ollama", "claude_code", "anthropic", "openai", "none"):
