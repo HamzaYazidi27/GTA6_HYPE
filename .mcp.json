@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "klap": {
+      "type": "http",
+      "url": "https://api.klap.app/mcp/agents"
+    }
+  }
+}
