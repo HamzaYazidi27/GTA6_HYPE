@@ -145,8 +145,13 @@ def clean_answer(data: dict[str, Any], vocab: Vocabulary) -> dict[str, Any]:
     return {"tags": sorted(tags), "objects": objects[:6], "caption": str(data.get("caption") or "")[:200], "overlay": overlay is True or str(overlay).strip().lower() == "true"}
 
 
+def _checked(entry: Any) -> bool:
+    """Looked at by the vision model, including the watermark / subtitles question (added later)."""
+    return isinstance(entry, dict) and "overlay" in entry
+
+
 def pending(settings: Any, index: dict[str, Any] | None = None, *, force: bool = False) -> list[dict[str, Any]]:
-    """Shots and photos the vision model has not looked at yet."""
+    """Shots and photos the vision model has not looked at yet (or not for watermarks and burned-in text)."""
     index = index or build_index(settings)
     done = (read_json(autotags_path(settings), {}) or {}).get("items") or {}
     root = footage_dir(settings)
@@ -156,14 +161,14 @@ def pending(settings: Any, index: dict[str, Any] | None = None, *, force: bool =
             if not sh.get("ok"):
                 continue
             key = shot_key(v["file"], v.get("size", 0), sh)
-            if force or key not in done:
+            if force or not _checked(done.get(key)):
                 todo.append({"key": key, "path": root / v["file"], "t": round((sh["s"] + sh["e"]) / 2, 2), "label": f"{v['file']} @ {sh['s']:.1f}s"})
     for p in index.get("photos", []):
         key = photo_key(p["file"], p.get("size", 0))
         src = still_shot_key(index, p)
-        if not force and src and src in done:
+        if not force and src and _checked(done.get(src)):
             continue  # a still of a shot that is tagged already
-        if force or key not in done:
+        if force or not _checked(done.get(key)):
             todo.append({"key": key, "path": root / p["file"], "t": None, "label": p["file"]})
     return todo
 
@@ -210,6 +215,54 @@ def autotag(
     left = len(pending(settings, index))
     log(f"footage: {done} tagged" + (f", {left} left" if left else ""))
     return {"tagged": done, "left": left, "model": tag_model}
+
+
+def overlay_checker(settings: Any, *, log: Callable[[str], None] = print) -> Callable[[Any, list[dict[str, Any]]], int] | None:
+    """A check for the footage picked for a video: the vision model looks at every picked shot or
+    screenshot it never checked for a watermark, a social-media post or burned-in subtitles.
+
+    Returns ``check(library_settings, items) -> number of items found with such an overlay`` (their
+    autotags are saved, so the next pick leaves them out), or None when no local vision model runs.
+    """
+    try:
+        ready, _ = vision_status(settings)
+    except Exception:  # never stop a video because the optional check cannot start
+        ready = False
+    if not ready:
+        return None
+    calls: dict[str, Callable[[bytes, str], dict[str, Any]]] = {}
+
+    def check(lib_settings: Any, items: list[dict[str, Any]]) -> int:
+        path = autotags_path(lib_settings)
+        data = read_json(path, {}) or {}
+        data.setdefault("items", {})
+        todo = [it for it in items if it.get("autokey") and not _checked(data["items"].get(it["autokey"]))]
+        if not todo:
+            return 0
+        vocab = load_vocabulary(lib_settings)
+        prompt = PROMPT.format(game=lib_settings.get("footage.game_name") or "Grand Theft Auto VI", labels=labels_prompt(vocab))
+        model = vision_model(lib_settings)
+        try:
+            call = calls.setdefault(model, ollama_tagger(lib_settings, model))
+        except (ConfigError, ProviderError) as exc:
+            log(f"footage: watermark check skipped ({exc.message})")
+            return 0
+        log(f"footage: checking {len(todo)} picked shot(s) / screenshot(s) for watermarks and burned-in text ({model})")
+        flagged = 0
+        for it in todo:
+            src = Path(it.get("source_path") or it["path"])
+            t = round((it["s"] + it["e"]) / 2, 2) if it["kind"] == "shot" else None
+            try:
+                answer = clean_answer(call(frame_jpeg(src, t), prompt), vocab)
+            except ProviderError as exc:
+                log(f"footage: {src.name}: {exc.message}")
+                continue
+            data["items"][it["autokey"]] = {**answer, "model": model}
+            flagged += bool(answer["overlay"])
+        write_json(path, data)
+        return flagged
+
+    return check
 
 
 def vision_status(settings: Any) -> tuple[bool, str]:

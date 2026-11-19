@@ -186,6 +186,7 @@ class _Library:
         for it in self.fill_shots:
             self.by_video.setdefault(it["file"], []).append(it)
         self.used: dict[str, int] = {}
+        self.picked: dict[str, dict[str, Any]] = {}  # every shot / screenshot used, by autotag key
         self.ledger = ledger
         self.cfg = cfg
         self.max_clip, self.min_piece, self.photo_share = max_clip, min_piece, photo_share
@@ -199,6 +200,8 @@ class _Library:
         return plan_beats(text, self.items, min_piece=self.min_piece)
 
     def ledger_add(self, it: dict[str, Any], scene_n: int) -> str:
+        if it.get("autokey"):
+            self.picked[it["autokey"]] = it
         file_rel = it["file"]
         aid = ("gta6-" if self.gid == "gta6" else f"{self.gid}-") + hashlib.sha1(file_rel.encode()).hexdigest()[:10]
         what = "Real GTA 6 footage (footage.ratio)" if self.gid == "gta6" else f"Real {self.name} footage, shown while the comparison talks about it"
@@ -297,7 +300,21 @@ class _Library:
         return {"kind": "video", "beats": beats, "fill": fill, "credit": credit, "asset_ids": aids, **extra}
 
 
-def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None) -> dict[str, Any]:
+def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None, checker: Callable[[Any, list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
+    """See ``_assign``. With a ``checker`` (``autotag.overlay_checker``), every picked shot or screenshot that
+    was never checked for a watermark, a social-media post or burned-in subtitles is checked; when some are
+    found, the footage is picked again without them."""
+    result, libs = _assign(settings, scenes, log=log)
+    if checker is None:
+        return result
+    flagged = sum(checker(x.settings, list(x.picked.values())) for x in libs.values() if x.picked)
+    if flagged:
+        log(f"footage: {flagged} picked shot(s) / screenshot(s) carry a watermark, a post or burned-in subtitles: picking again without them")
+        result, _ = _assign(settings, scenes, log=log)
+    return result
+
+
+def _assign(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Mutates ``scenes`` (adds ``footage``) and returns {"ledger": [...], "summary": {...}}.
 
     Scenes that already carry a fixed piece of footage (``kind: detail``, the "details you missed"
@@ -317,7 +334,7 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
     fixed = {sc["scene_number"] for sc in scenes if sc.get("footage")}
     cfg = settings.get("footage", {}) or {}
     if not cfg.get("enabled", True):
-        return {"ledger": [], "summary": {"enabled": False}}
+        return {"ledger": [], "summary": {"enabled": False}}, {}
     topic = any(sc.get("footage_game") or sc.get("footage_pair") for sc in scenes)
     ledger: dict[str, dict[str, Any]] = {}
     opts = {
@@ -334,7 +351,7 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
     lib = main.summary
     if all(x.empty for x in libs.values()):
         log("footage: the GTA 6 footage library is empty - run `python -m gta_factory footage update` to use real trailer footage")
-        return {"ledger": [], "summary": {"enabled": True, "library": {k: v for k, v in lib.items() if k != "skipped"}, "share": 0.0}}
+        return {"ledger": [], "summary": {"enabled": True, "library": {k: v for k, v in lib.items() if k != "skipped"}, "share": 0.0}}, libs
     for gid, x in libs.items():
         if x.empty and gid != "gta6":
             log(f"footage: the {x.name} library is empty - run `python -m gta_factory footage update --game {gid}` (its scenes stay graphics-only until then)")
@@ -409,7 +426,7 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
     summary = {
         "enabled": True,
         "library": {k: v for k, v in lib.items() if k != "skipped"},
-        "reuploads": [x["file"] for x in lib.get("skipped") or [] if "watermark" in str(x.get("reason"))],
+        "reuploads": sorted({x["file"] for x in lib.get("skipped") or [] if any(w in str(x.get("reason")) for w in ("watermark", "third-party", "burned into part"))}),
         "ratio_target": ratio,
         "ratio_min": lo,
         "ratio_max": hi,
@@ -427,7 +444,7 @@ def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable
     if missing:
         names = sorted({m["said"] for m in missing})
         log(f"footage: said but not in the library yet: {', '.join(names[:12])} (add footage with `python -m gta_factory footage add ... --tags ...`)")
-    return {"ledger": list(ledger.values()), "summary": summary}
+    return {"ledger": list(ledger.values()), "summary": summary}, libs
 
 
 # ----------------------------------------------------------------------------- the edit of one scene

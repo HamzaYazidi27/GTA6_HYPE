@@ -45,11 +45,55 @@ def _cues(v: Any, count: int) -> list[str]:
     return (cues + [""] * count)[:count]
 
 
+KINETIC_WIDTH, KINETIC_LINES = 26, 3
+_TAIL_WORDS = {"THE", "A", "AN", "OF", "TO", "AND", "OR", "IS", "ARE", "IN", "ON", "AT", "FOR", "WITH", "THAT", "BUT", "FROM", "BY", "AS", "ITS", "THEIR"}
+
+
+def _wrap(words: list[str], width: int) -> list[str]:
+    out, cur = [], ""
+    for w in words:
+        w = w[:width]
+        if cur and len(cur) + 1 + len(w) > width:
+            out.append(cur)
+            cur = w
+        else:
+            cur = (cur + " " + w).strip()
+    return out + ([cur] if cur else [])
+
+
+def kinetic_lines(raw: Any, width: int = KINETIC_WIDTH, max_lines: int = KINETIC_LINES) -> list[str]:
+    """Big on-screen words: the planner's own line breaks when they fit, otherwise re-wrapped.
+
+    Never cut in the middle with "…" (a hook reading "GTA 6'S SAVE SYSTEM…" looks broken): too
+    many words lose the last ones, and a line never ends on a small word ("REPORTS THE").
+    """
+    if not isinstance(raw, list):
+        return []
+    given = [re.sub(r"\s+", " ", str(x.get("text") if isinstance(x, dict) else x or "")).strip().strip("\"“”").upper() for x in raw]
+    given = [g for g in given if g]
+    lines = [piece for g in given for piece in (_wrap(g.split(), width) if len(g) > width else [g])]
+    if len(lines) > max_lines:
+        words = " ".join(given).split()
+        lines = _wrap(words, width)
+        while len(lines) > max_lines:
+            words = words[:-1]
+            lines = _wrap(words, width)
+    words = " ".join(lines).split()
+    while words and words[-1].strip(",.;:!?") in _TAIL_WORDS and len(words) > 1:
+        words = words[:-1]
+    if " ".join(words) != " ".join(lines):
+        lines = _wrap(words, width)
+    return [ln.rstrip(",;") for ln in lines]
+
+
 def n_kinetic(d: dict[str, Any]) -> dict[str, Any] | None:
-    lines = _items(d.get("lines"), 26, 3)
+    lines = kinetic_lines(d.get("lines"))
     if not lines:
         return None
-    return {"lines": [ln.upper() for ln in lines], "accent": _s(d.get("accent"), 26).upper(), "kicker": _s(d.get("kicker"), 44)}
+    accent = re.sub(r"\s+", " ", str(d.get("accent") or "")).strip().upper()
+    if accent and accent not in " ".join(lines):
+        accent = next((w for w in accent.split() if w in " ".join(lines).split()), "")
+    return {"lines": lines, "accent": accent[:KINETIC_WIDTH], "kicker": _s(d.get("kicker"), 44)}
 
 
 def n_title(d: dict[str, Any]) -> dict[str, Any] | None:

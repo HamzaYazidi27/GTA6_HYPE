@@ -289,12 +289,33 @@ def lint_script(
     cta = next((s for s in sections if s["id"] == "cta"), None)
     if cta and cta_max_words and word_count(cta["narration"]) > cta_max_words:
         issues.append({"type": "cta_too_long", "section": "cta", "detail": f"The question for the comments is {word_count(cta['narration'])} words; keep it to {int(cta_max_words)} or fewer."})
+    for s in sections:  # "According to X Staff, X Staff reports...": the same words twice in a row
+        for sent in split_sentences(s["narration"]):
+            rep = repeated_phrase(sent)
+            if rep:
+                issues.append({"type": "repetition", "section": s["id"], "detail": f"\"{rep}\" is said twice in the same sentence; say it once: \"{sent[:120]}\""})
     if max_sentence_words:
         for s in sections:
             long_ones = [sent for sent in split_sentences(s["narration"]) if word_count(sent) > max_sentence_words]
             for sent in long_ones[:2]:
                 issues.append({"type": "long_sentence", "section": s["id"], "detail": f"Split this {word_count(sent)}-word sentence in two (max {int(max_sentence_words)} words to be followed by ear): \"{sent[:120]}\""})
     return issues
+
+
+_REPEAT_STOP = {"the", "a", "an", "of", "to", "and", "or", "in", "on", "at", "for", "is", "it", "that", "this", "with", "as", "by", "from", "be", "was", "are", "its", "his", "her", "their", "he", "she", "they", "you", "we", "not", "but"}
+
+
+def repeated_phrase(sentence: str, *, within: int = 8) -> str | None:
+    """Two content words that come back right away in the same sentence ("AllThingsHow Staff, AllThingsHow Staff")."""
+    words = [w.lower() for w in re.findall(r"[A-Za-z0-9$%'’-]+", sentence or "")]
+    for i in range(len(words) - 1):
+        a, b = words[i], words[i + 1]
+        if a in _REPEAT_STOP or b in _REPEAT_STOP or len(a) < 3 or len(b) < 3:
+            continue
+        for j in range(i + 2, min(len(words) - 1, i + 2 + within)):
+            if words[j] == a and words[j + 1] == b:
+                return f"{a} {b}"
+    return None
 
 
 def _format_plan(fmt: str) -> list[tuple[str, str, float]]:

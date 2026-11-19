@@ -347,3 +347,134 @@ def test_own_gameplay_captures_keep_their_hud(project, tmp_path):
     other = tmp_path / "someone_else.mp4"
     other.write_bytes(b"x")
     assert "allow_overlay" not in (read_json(sidecar_path(add_files(project["settings"], [str(other)], log=lambda m: None)[0]), {}) or {})
+
+
+# ----------------------------------------------------------------- re-uploads from other people's posts
+def test_third_party_sources_are_recognised(project):
+    from gta_factory.modules.footage.library import third_party
+
+    s = project["settings"]
+    assert third_party(s, {"source_url": "https://x.com/LeonidaMan/status/1", "uploader": "LeonidaMan"}) == "LeonidaMan on x.com"
+    assert third_party(s, {"source_url": "https://www.tiktok.com/@fan/video/2"}) == "tiktok.com"
+    assert third_party(s, {"source_url": "https://www.youtube.com/watch?v=QdBZY2fkU-0"}) is None  # an official trailer (footage.sources)
+    assert third_party(s, {"source_url": "https://www.youtube.com/watch?v=zz", "uploader": "Rockstar Games"}) is None
+    assert third_party(s, {"source_url": "https://media.rockstargames.com/shot.jpg"}) is None  # a primary source's own site
+    assert third_party(s, {"source_url": "https://x.com/me/status/3", "own_capture": True}) is None
+    assert third_party(s, {}) is None  # a local file: judged by its picture, not by its origin
+
+
+def test_a_post_from_x_is_not_used_unless_allowed(project):
+    from gta_factory.app.core.utils import which, write_json
+    from gta_factory.modules.footage.library import build_index, load_items
+    from test_footage import make_trailer
+
+    if not which("ffmpeg"):
+        return
+    root = project["root"] / "assets" / "gta6_footage"
+    clip = make_trailer(root / "videos" / "LeonidaMan gameplay [123].mp4")
+    write_json(clip.with_name(clip.name + ".json"), {"source_url": "https://x.com/LeonidaMan/status/123", "uploader": "LeonidaMan"})
+    s = project["settings"]
+    index = build_index(s)
+    assert not any(sh["ok"] for sh in index["videos"][0]["shots"])
+    assert any("third-party post (LeonidaMan on x.com)" in x["reason"] for x in index["skipped"])
+    assert load_items(s, index)["shots"] == []
+    write_json(clip.with_name(clip.name + ".json"), {"source_url": "https://x.com/LeonidaMan/status/123", "uploader": "LeonidaMan", "allow_third_party": True})
+    assert any(sh["ok"] for sh in build_index(s)["videos"][0]["shots"])
+
+
+def test_a_post_shown_during_part_of_a_video_removes_only_those_shots(project):
+    import subprocess
+
+    from gta_factory.app.core.utils import which
+    from gta_factory.modules.footage.library import build_index
+    from test_footage import make_trailer
+
+    if not which("ffmpeg"):
+        return
+    root = project["root"] / "assets" / "gta6_footage" / "videos"
+    src = make_trailer(project["root"] / "src.mp4")
+    marked = root / "compilation.mp4"
+    root.mkdir(parents=True, exist_ok=True)
+    # a post's interface (name, "Follow" pill, caption) at the bottom-left, from 8 s to 22 s only
+    ui = ",".join([
+        "drawbox=x=20:y=290:w=110:h=16:color=white@0.7:t=2:enable='between(t,8,22)'",
+        "drawbox=x=140:y=288:w=56:h=20:color=white@0.7:t=2:enable='between(t,8,22)'",
+        "drawbox=x=20:y=318:w=300:h=10:color=white@0.6:t=2:enable='between(t,8,22)'",
+    ])
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", ui, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", str(marked)], check=True)
+    v = build_index(project["settings"])["videos"][0]
+    assert v["overlay"] is None and v["overlay_spans"], v["overlay_spans"]
+    span = v["overlay_spans"][0]
+    assert span["s"] < 12 and span["e"] > 16 and span["e"] < 30
+    inside = [sh for sh in v["shots"] if sh["s"] >= 9 and sh["e"] <= 21]
+    outside = [sh for sh in v["shots"] if sh["e"] <= 6.5 or sh["s"] >= 31]
+    assert inside and not any(sh["ok"] for sh in inside)
+    assert any(sh["ok"] for sh in outside)
+
+
+def test_picked_footage_is_checked_and_picked_again(project, monkeypatch):
+    from gta_factory.modules.footage import autotag as at
+    from gta_factory.modules.footage.select import assign_footage
+    from test_footage import footage_project as _fp, scenes_of  # noqa: F401
+
+    from gta_factory.app.core.utils import read_json, which, write_json
+    from gta_factory.modules.footage.library import autotags_path, build_index
+    from test_footage import make_photo, make_trailer
+
+    if not which("ffmpeg"):
+        return
+    s = project["settings"]
+    root = s.root / "assets" / "gta6_footage"
+    make_trailer(root / "videos" / "Grand Theft Auto VI Trailer 1 [QdBZY2fkU-0].mp4")
+    make_photo(root / "photos" / "lucia_beach_01.jpg", "0xF2C14E")
+    build_index(s)
+    # the vision model "sees" a post's interface on every shot of the trailer's first half
+    monkeypatch.setattr(at, "vision_status", lambda st: (True, "test"))
+    monkeypatch.setattr(at, "ollama_tagger", lambda st, model=None: (lambda image, prompt: {"tags": [], "objects": [], "caption": "", "overlay": True}))
+    monkeypatch.setattr(at, "frame_jpeg", lambda path, t=None, width=768: b"jpeg")
+    checker = at.overlay_checker(s, log=lambda m: None)
+    assert checker is not None
+    scenes = scenes_of([("Meet Lucia on the beach.", "kinetic"), ("The trailer shows the city at night.", "kinetic"), ("And a lot more.", "kinetic")])
+    out = assign_footage(s, scenes, checker=checker)
+    saved = read_json(autotags_path(s), {})["items"]
+    assert saved and all(e["overlay"] for e in saved.values())  # everything picked the first time was checked
+    used_now = {it for sc in scenes for it in ([sc["footage"]["file"]] if sc.get("footage", {}).get("kind") == "photo" else [])}
+    assert out["summary"]["share"] <= 1.0 and not used_now  # all flagged: nothing with an overlay is shown
+    assert checker(s, []) == 0
+
+
+# ----------------------------------------------------------------- script and screen text
+def test_hook_text_is_wrapped_never_cut_with_an_ellipsis():
+    from gta_factory.modules.visual_research.catalog import kinetic_lines, n_kinetic
+
+    assert kinetic_lines(["GTA 6's save system limits manual saves during missions"]) == ["GTA 6'S SAVE SYSTEM LIMITS", "MANUAL SAVES DURING", "MISSIONS"]
+    assert kinetic_lines(["AllThingsHow staff reports the"]) == ["ALLTHINGSHOW STAFF REPORTS"]
+    assert kinetic_lines(["AI:", "a mixed term"]) == ["AI:", "A MIXED TERM"]
+    out = n_kinetic({"lines": ["one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen"], "accent": "three"})
+    assert len(out["lines"]) == 3 and not any("…" in ln for ln in out["lines"]) and out["accent"] == "THREE"
+
+
+def test_the_same_name_twice_in_a_sentence_is_flagged():
+    from gta_factory.modules.script_generation.writer import repeated_phrase
+
+    secs = _sections(["C1"], hook="According to AllThingsHow Staff, AllThingsHow Staff reports the save option is grayed out.")
+    assert "repetition" in _types(lint_script(secs, [CORE], [], "", min_words=1, max_words=999))
+    assert repeated_phrase("Red Dead 2 had witnesses, and Red Dead 2 had bounties.") == "red dead"
+    assert repeated_phrase("Rockstar Games says the game launches on November 19.") is None
+
+
+def test_breaking_needs_a_reported_claim(project):
+    fresh = [{"publisher": "AllThingsHow", "published_at": "2026-11-18", "title": "GTA 6 saves", "author": "x"}]
+    spec = [{"id": "C1", "claim": "Saves are grayed out in missions.", "classification": "speculation", "confidence": "low", "original_publisher": "AllThingsHow", "original_source": "https://x"}]
+
+    class Planner:
+        def complete_json(self, system, prompt, **kw):
+            return {"scenes": [{"sentences": [1, 1], "template": "kinetic", "data": {"lines": ["NO SAVES"], "kicker": "Breaking"}, "claim_ids": ["C1"]},
+                               {"sentences": [2, 2], "template": "outro", "data": {"question": "How will you save?"}}]}
+
+    script = {"sections": [{"id": "hook", "narration": "Manual saves are grayed out during missions.", "claim_ids": ["C1"]}, {"id": "cta", "narration": "How will you save?", "claim_ids": []}]}
+    scenes = plan_scenes(Planner(), project["settings"], script=script, fact_check=spec, quotes=[], articles=fresh, fmt="short", today="2026-11-19")
+    assert scenes[0]["data"]["kicker"] == ""  # player reports are not breaking news
+    reported = [{**spec[0], "classification": "reported"}]
+    scenes = plan_scenes(Planner(), project["settings"], script=script, fact_check=reported, quotes=[], articles=fresh, fmt="short", today="2026-11-19")
+    assert scenes[0]["data"]["kicker"] == "Breaking"

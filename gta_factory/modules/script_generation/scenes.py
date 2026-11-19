@@ -58,7 +58,7 @@ Rules
 - Use "claim" for the 3-6 most important claims so viewers always see what is confirmed versus reported or rumoured.
 - Every on-screen word comes from what THIS scene's narration says. "takeaway" effects and causes are short phrases built from its own words,
   never generic lines ("maintaining the series' legacy", "embracing new technologies").
-- Labels such as "Breaking" or "Just in" only for news published in the last 2 days.
+- Labels such as "Breaking" or "Just in" only for news published in the last 2 days, on a CONFIRMED or REPORTED claim.
 {format_rules}"""
 
 
@@ -229,8 +229,9 @@ def plan_scenes(
             claim_ids = [i for i in (sc.get("claim_ids") or []) if i in by_id]
             if template == "takeaway" and payload:
                 payload = _ground_takeaway(payload, narration)
-            if payload and payload.get("kicker") and _HYPE_KICKER.search(payload["kicker"]) and not fresh:
-                payload["kicker"] = ""  # "BREAKING" on a story that is days old reads as clickbait
+            hard = any(by_id[i]["classification"] in ("confirmed", "reported") for i in claim_ids) or not fact_check
+            if payload and payload.get("kicker") and _HYPE_KICKER.search(payload["kicker"]) and not (fresh and hard):
+                payload["kicker"] = ""  # "BREAKING" on old news, or on a guide / player reports (rumour, speculation), reads as clickbait
             if template == "quote" and payload and not any(contains_quote(q["text"], payload["quote"]) or contains_quote(payload["quote"], q["text"]) for q in quotes):
                 payload = None  # never show a quotation that is not verified
             if template == "claim" and payload:

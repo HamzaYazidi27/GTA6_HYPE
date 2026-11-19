@@ -547,7 +547,7 @@ def cmd_footage(args: argparse.Namespace) -> int:
         if not args.paths:
             _print("usage: footage add FILE_FOLDER_OR_URL [...] [--tags lucia,beach]")
             return 2
-        added = lib.add_files(s, list(args.paths), tags=tags, credit=args.credit or "", own=getattr(args, "own", False), log=_print)
+        added = lib.add_files(s, list(args.paths), tags=tags, credit=args.credit or "", own=getattr(args, "own", False), third_party_ok=getattr(args, "third_party_ok", False), log=_print)
         if not added:
             _print("nothing added (supported: mp4 mov webm mkv m4v / jpg jpeg png webp, or a video / image URL)")
             return 1
@@ -828,6 +828,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--clear", action="store_true", help="tag: replace the existing tags instead of adding to them")
     sp.add_argument("--credit", help="add: on-screen credit (default: footage.credit)")
     sp.add_argument("--own", action="store_true", help="add: your own gameplay captures (the game's HUD is allowed; never use it for other channels' videos)")
+    sp.add_argument("--third-party-ok", action="store_true", help="add: use a video posted by someone else (X, TikTok, a fan channel...) - only if you have the right to")
     sp.add_argument("--max-height", type=int, default=1080, help="fetch/update: max video height (default 1080)")
     sp.add_argument("--stills", type=int, default=12, help="stills per video pulled into photos/ (default 12)")
     sp.add_argument("--no-stills", action="store_true", help="do not pull stills from new videos")

@@ -92,7 +92,11 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
 - `footage.enabled: false` revient aux seules animations. Les miniatures utilisent aussi une vraie image du jeu, choisie d'après le titre (`footage.thumbnails`).
 - Les plans sont détectés automatiquement ; les cartons noirs, le logo du début et l'écran de fin sont ignorés.
 - Crédit « Footage: Rockstar Games » à l'écran et dans la description. Les fichiers contenant « leak », « leaked », « datamine » ou « reupload » ne sont jamais utilisés.
-- **Pas de re-upload d'une autre chaîne.** Une vidéo dont l'image garde un logo ou un watermark au même endroit (ex. le logo d'une chaîne fan) est détectée à l'indexation et n'est pas utilisée ; un plan ou un screenshot où le modèle de vision voit un watermark ou des **sous-titres incrustés** non plus. Les trailers téléchargés depuis Rockstar ne sont pas concernés. Si c'est en fait le HUD du jeu, mets `"allow_overlay": true` dans le fichier `<vidéo>.json` à côté. Le `REVIEW.md` liste les fichiers écartés. Pour revérifier les plans tagués avant cette version : `python -m gta_factory footage autotag --force`.
+- **Pas de re-upload.** Trois contrôles, à l'indexation puis au moment du choix des plans :
+  1. **D'où vient le fichier.** Une vidéo ou une image téléchargée depuis le post ou la chaîne de quelqu'un d'autre (X, TikTok, Instagram, une chaîne fan sur YouTube, un site d'actu) n'est **pas utilisée** : seules les vidéos de Rockstar, les sites officiels et tes propres captures (`--own`) passent. Pour une vidéo que tu as le droit d'utiliser : `footage add <url> --third-party-ok` (ou `"allow_third_party": true` dans le `.json` à côté).
+  2. **Ce qu'il y a dans l'image.** Un logo, l'interface d'un post (« Follow », le nom du compte, le texte) ou des sous-titres qui restent au même endroit sont détectés, **sur toute la vidéo ou seulement sur une partie** : seuls les plans concernés sont écartés.
+  3. **Le modèle de vision**, avant chaque vidéo, regarde les plans choisis qu'il n'a jamais vérifiés (watermark, post, sous-titres incrustés) ; s'il en trouve, les plans sont choisis à nouveau sans eux. Il faut qu'Ollama tourne ; `python -m gta_factory footage autotag` vérifie toute la bibliothèque d'un coup.
+  Les trailers de Rockstar et tes captures `--own` ne sont pas concernés par le 2 (le HUD du jeu n'est pas un logo). Le `REVIEW.md` liste tout ce qui a été écarté.
 - ⚠️ Les images appartiennent à Rockstar/Take-Two. Les chaînes d'actu les utilisent couramment, mais YouTube peut poser une **revendication Content ID** (monétisation reversée à Rockstar) ; c'est rare qu'une vidéo soit bloquée, mais c'est possible.
 
 ## Un seul sujet et du rythme (toutes les vidéos)
@@ -118,7 +122,8 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
 
 - **Un Short dure ~35 s** (`formats.short`, avant 45 s) : hook d'une phrase de 10 mots maximum, puis des phrases de 6 à 12 mots. Pas de carte titre, deux cartes de texte au plus (les fact-checks et les citations d'abord) : le reste, ce sont de gros mots sur du gameplay. Aucune carte ne reste à l'écran après la voix.
 - **Des hooks plus courts en 16:9** : environ 20 s (avant : 30 à 40 s du budget de mots), les mots gagnés vont à l'histoire.
-- **Pas de « BREAKING » sur une vieille news** : le label n'est gardé que si la source a 2 jours ou moins. Les lignes de la carte « What it means » doivent venir de la narration, sinon la scène redevient de la typographie.
+- **Pas de « BREAKING » sur une vieille news ni sur des retours de joueurs** : le label n'est gardé que si la source a 2 jours ou moins et que l'affirmation est CONFIRMÉE ou RAPPORTÉE (pas une rumeur ni une spéculation). Si la source principale n'est pas un média fiable, le job et le `REVIEW.md` le signalent.
+- **Texte à l'écran jamais coupé** : les gros mots sont remis sur 3 lignes au plus, sans « … », et une ligne ne finit jamais par « the », « of »… Le script est réécrit quand un même nom revient deux fois de suite dans une phrase (« According to X Staff, X Staff reports… »). Les lignes de la carte « What it means » doivent venir de la narration, sinon la scène redevient de la typographie.
 - **Prononciation.** « GTA 6 » est lu « GTA Six » (et non « G T A Six », que la voix lisait « gee tee *uh* six »). Ajoutés : Strauss (Zelnick), DJ Khaled.
 
 ## Vidéos « Details you missed »

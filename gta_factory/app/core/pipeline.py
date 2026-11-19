@@ -346,6 +346,9 @@ def step_analyze(ctx: JobContext) -> dict[str, Any]:
 
     analysis = analyze_sources(ctx.llm, ctx.articles(), ctx.today)
     write_json(ctx.paths.analysis, analysis)
+    lead = ctx.articles()[0]
+    if lead.source_tier == "other":
+        ctx.warn(f"the main source ({lead.publisher}) is not on the reputable-outlet list: its claims can only be RUMOR or SPECULATION on screen; put a reputable outlet's article first if one covers the story")
     ctx.db.update_job(ctx.job_id, title=analysis.get("story_headline", "")[:140])
     unverified = sum(1 for c in analysis["claims"] if not c["evidence_verified"])
     if unverified:
@@ -578,7 +581,14 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
     scenes = ctx.need(ctx.paths.scenes)
     vertical = ctx.settings.format(ctx.fmt).get("aspect") == "9:16"
     review = review_assets(ctx.settings, scenes, media_dir=ctx.paths.media, tts_provider=ctx.tts_name, vertical=vertical, log=ctx.log)
-    footage = assign_footage(ctx.settings, scenes, log=ctx.log)
+    checker = None
+    if ctx.settings.get("footage.auto_tag", True):  # the picked shots are checked for watermarks / posts / subtitles first
+        from ...modules.footage.autotag import overlay_checker
+
+        checker = overlay_checker(ctx.settings, log=ctx.log)
+        if checker is None:
+            ctx.log("footage: no local vision model running: picked shots are not checked for watermarks or burned-in text (start Ollama)")
+    footage = assign_footage(ctx.settings, scenes, log=ctx.log, checker=checker)
     if ctx.kind == "topic" and footage["summary"].get("enabled"):
         bare = [sc["scene_number"] for sc in scenes if (sc.get("footage_pair") and not (sc.get("footage") and sc.get("footage_b"))) or (sc.get("footage_game") and not sc.get("footage"))]
         if bare:
@@ -892,9 +902,15 @@ def _focus_point(ctx: JobContext) -> str:
     off += [f"citation de {q['speaker']}" if q.get("speaker") else q["text"][:80] for q in analysis.get("off_topic_quotes") or [] if q.get("text")]
     if off:
         point += "\n- [ ] Écarté comme hors sujet (une autre histoire dans la page) : " + " ; ".join(f"« {x[:120]} »" for x in off[:8]) + ". Si l'une d'elles était le vrai sujet, relance avec un article qui en parle."
+    if ctx.kind not in ("topic", "details"):
+        arts = ctx.articles()
+        if arts and arts[0].source_tier == "other":
+            point += (f"\n- [ ] La source principale ({arts[0].publisher}) n'est pas dans la liste des médias fiables : ses affirmations sont au mieux"
+                      " SPECULATION ou RUMOR à l'écran. Si un média fiable couvre la même info (Eurogamer, IGN, GamesRadar…), relance avec son article en premier.")
     marked = ((read_json(ctx.paths.rights, {}) or {}).get("footage") or {}).get("reuploads") or []
     if marked:
-        point += "\n- [ ] Footage non utilisé car un logo / watermark d'une autre chaîne y est incrusté : " + ", ".join(f"`{f}`" for f in marked[:10]) + " (remplace-le par les trailers officiels : `python -m gta_factory footage update`)."
+        point += ("\n- [ ] Footage non utilisé (re-upload d'une autre chaîne ou d'un post, logo / texte incrusté) : " + ", ".join(f"`{f}`" for f in marked[:10])
+                  + ". Remplace-le par les vidéos officielles (`python -m gta_factory footage update`) ou par tes captures (`footage add <dossier> --own`).")
     return point
 
 
