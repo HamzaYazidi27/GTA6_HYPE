@@ -218,6 +218,7 @@ def step_claims(ctx: Any) -> dict[str, Any]:
             reason = f"source search failed: {type(exc).__name__}: {str(exc)[:160]}"
     checks: dict[str, Any] = {}
     if articles:
+        ctx.log(f"claims: checking {len(claims)} claim(s) against {len(articles)} article(s) with the model (one call; a few minutes on a local model)")
         try:
             ver = verify_claims(llm, {"claims": claims}, articles, load_timeline(ctx.settings), ctx.today)
             checks = {c.get("id"): c for c in ver.get("checks") or []}

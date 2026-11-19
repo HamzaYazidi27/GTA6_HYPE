@@ -285,3 +285,33 @@ def test_texts_are_compared_in_one_frame() -> None:
     assert match.phrase("GTA VI gameplay: an airboat in a swamp") == "an airboat in a swamp"
     assert match.templated(["a jet ski"]) == ["a screenshot from a video game showing a jet ski"]
     assert match.NULL in match.templated(["x"])[0]
+
+
+def test_model_only_describes_the_rule_beats() -> None:
+    class LLM:
+        def __init__(self, answer):
+            self.answer, self.calls = answer, 0
+
+        def complete_json(self, system, prompt, **kw):
+            self.calls += 1
+            assert kw["retries"] == 1 and kw["max_tokens"] <= 4000
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return self.answer
+
+    rules = plan.segment_script(EXAMPLE)["beats"]
+    answer = {"title": "7 things GTA 5 never let you do", "beats": [
+        {"i": 4, "role": "hook", "concept": "a person riding a jet ski fast on the ocean", "prompts": ["a jet ski on the ocean"], "distractors": ["a motorboat", "a seaplane"], "game": "gta6", "specific": True, "emphasis": ["jet skis"]},
+        {"i": 1, "concept": "anything", "specific": True, "game": "gta5"},
+    ]}
+    llm = LLM(answer)
+    p = plan.plan_script(llm, EXAMPLE)
+    assert llm.calls == 1 and p["title"] == "7 things GTA 5 never let you do" and p["method"] == "model+rules"
+    jet = p["beats"][3]
+    assert jet["words"] == rules[3]["words"] and jet["number"] == 5 and jet["role"] == "item"  # words, numbers and roles stay
+    assert jet["concept"].startswith("a person riding a jet ski") and jet["distractors"] == ["a motorboat", "a seaplane"]
+    hook = p["beats"][0]
+    assert hook["role"] == "hook" and hook["specific"] is False and hook["game"] == "gta6"  # a hook stays any strong GTA 6 gameplay
+    assert [b["words"] for b in p["beats"]] == [b["words"] for b in rules]
+    failed = plan.plan_script(LLM(RuntimeError("timeout")), EXAMPLE)
+    assert failed["method"] == "rules" and failed["title"] == "GTA 5 never let you do any of these"

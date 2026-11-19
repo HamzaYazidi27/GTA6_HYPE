@@ -1,24 +1,21 @@
 """Script understanding: a pasted script becomes an editing plan of visual beats.
 
-The narration is never rewritten. Python numbers the words; the model only groups consecutive
-words into beats and says what each beat must SHOW. Every word belongs to exactly one beat, in
+The narration is never rewritten. Python cuts the words into beats (a sentence, or a clause that
+names another thing to show: "race jet skis, | or paddle a kayak."), finds the list numbers, the
+hook, the "number one" teaser and the call to action. Every word belongs to exactly one beat, in
 order, so the voice, the captions and the cuts can never drift from the script.
 
-A beat is the unit of the edit: one visual idea, usually 1-3 seconds of speech
-("race jet skis," / "or paddle a kayak."). For each beat the plan gives:
+The model (one short call; a local 14B model answers in about a minute) then only says what each
+beat must SHOW:
 
-* ``role``: hook | number | item | claim | comparison | suspense | cta
-* ``number``: the list number it introduces (7 ... 1), if any
 * ``concept``: what must be on screen, in plain words ("a jet ski racing on the ocean")
 * ``prompts``: 1-3 picture descriptions for the frame search (CLIP)
 * ``distractors``: look-alike scenes that must NOT be taken for it ("a motorboat", "a sea turtle")
 * ``game``: gta6, or gta5 for a comparison shot ("GTA 5 stopped at five")
-* ``specific``: True when the beat states something that only the right footage can show;
-  False for hooks, teasers and the call to action (any strong gameplay is fine there)
+* ``specific``: True when only the right footage can show it; False for hooks, teasers and the CTA
 * ``claim``: the factual statement about the game the beat makes, if any (fact-checked)
 
-``segment_script`` is the deterministic fallback (one beat per sentence, numbers detected by
-rule) used when the model fails, and the reference the model's plan is validated against.
+When the model is missing or fails, the rule plan is used as it is (``method: rules``).
 """
 from __future__ import annotations
 
@@ -126,32 +123,27 @@ def segment_script(script: str) -> dict[str, Any]:
     return {"words": words, "beats": beats, "method": "rules"}
 
 
-PLAN_SYSTEM = """You are the editor of a fast GTA VI YouTube Shorts channel. You turn a narration script into a
-visual edit plan: which exact footage must be on screen during each phrase. You never change the words."""
+PLAN_SYSTEM = """You are the editor of a fast GTA VI YouTube Shorts channel. For each phrase of a narration you say
+which exact footage must be on screen while it is spoken. You never change the words."""
 
-PLAN_PROMPT = """SCRIPT, word by word (index: word)
-{numbered}
+PLAN_PROMPT = """The narration is already cut into numbered BEATS (one visual idea each):
+{beats}
 
-Split the words into consecutive BEATS. A beat is one visual idea, usually 2-8 words (1-3 seconds of speech).
-Split a sentence when it names several things that need different footage
-("race jet skis, or paddle a kayak" = two beats: jet ski, then kayak; "overeat and you gain weight" and
-"hit the gym and you build muscle" are two beats). A list number ("Seven:") stays in the beat of its item.
-
-Return JSON: {{"title": short video title (max 70 chars),
+For EVERY beat, say what must be on screen. Return JSON:
+{{"title": short video title (max 70 chars),
  "beats": [ {{
-  "words": [first_index, last_index],
-  "role": one of hook | item | claim | comparison | suspense | cta,
-  "number": the list number this beat announces (e.g. 7), else null,
+  "i": the beat number above,
+  "role": hook | item | claim | comparison | suspense | cta,
   "concept": what the viewer must SEE, concretely (subject + action + place),
-  "prompts": 1-3 short picture descriptions of that footage for an image search ("a person riding a jet ski on the ocean"),
-  "distractors": 2-4 look-alike scenes that would be WRONG for this beat ("a motorboat", "a person swimming"),
-  "game": "gta6", or "gta5" when the beat talks about GTA 5 / an older game for comparison,
-  "specific": true when only footage of exactly this can illustrate it; false for hooks, teasers ("number one changes everything") and the call to action,
-  "claim": the factual statement about the game this beat makes, or null,
-  "emphasis": 1-2 words of the beat to highlight on screen
+  "prompts": 1-3 short picture descriptions for an image search ("a person riding a jet ski on the ocean"),
+  "distractors": 2-4 look-alike scenes that would be WRONG ("a motorboat", "a person swimming"),
+  "game": "gta6", or "gta5" when the beat is about GTA 5 (a comparison),
+  "specific": true when only footage of exactly this fits; false for the hook, a teaser ("number one changes everything") and the call to action,
+  "claim": the factual statement about the game the beat makes, or null,
+  "emphasis": 1-2 words of the beat to highlight
  }} ]
 }}
-Rules: beats cover every word index from 0 to {last} exactly once, in order, without gaps or overlaps."""
+One entry per beat, {n} entries, in order. Short values: this is a plan, not prose."""
 
 
 def validate_beats(beats: Any, n_words: int) -> str | None:
@@ -170,32 +162,6 @@ def validate_beats(beats: Any, n_words: int) -> str | None:
     return None
 
 
-def _clean_beat(b: dict[str, Any], words: list[str]) -> dict[str, Any]:
-    a, z = b["words"]
-    text = " ".join(words[a : z + 1])
-    role = str(b.get("role") or "claim").lower()
-    role = role if role in ROLES else "claim"
-    n = b.get("number")
-    n = int(n) if isinstance(n, (int, float)) or (isinstance(n, str) and n.isdigit()) else lead_number(text)
-    prompts = [normalize_ws(str(p))[:120] for p in b.get("prompts") or [] if str(p).strip()][:3]
-    concept = normalize_ws(str(b.get("concept") or "")) or text
-    game = str(b.get("game") or "gta6").lower().replace(" ", "")
-    game = {"gtav": "gta5", "gta5": "gta5", "gtavi": "gta6", "gta6": "gta6", "any": "gta6"}.get(game, game)
-    return {
-        "words": [a, z],
-        "text": text,
-        "role": role,
-        "number": n,
-        "concept": concept,
-        "prompts": prompts or [concept],
-        "distractors": [normalize_ws(str(d))[:80] for d in b.get("distractors") or [] if str(d).strip()][:4],
-        "game": game,
-        "specific": bool(b.get("specific", role in ("item", "claim", "comparison"))) and role not in ("hook", "suspense", "cta"),
-        "claim": normalize_ws(str(b["claim"])) if b.get("claim") else None,
-        "emphasis": [normalize_ws(str(e)) for e in b.get("emphasis") or [] if str(e).strip()][:2],
-    }
-
-
 def rule_title(words: list[str]) -> str:
     """The first sentence (the hook), as a title, when no model writes one."""
     a, b = sentences_of(words)[0]
@@ -203,28 +169,70 @@ def rule_title(words: list[str]) -> str:
     return first[:70] if len(first) <= 70 else first[:67].rsplit(" ", 1)[0] + "..."
 
 
+def _merge(rule: dict[str, Any], ans: dict[str, Any]) -> dict[str, Any]:
+    """The model's description of one beat over the rule beat: the words, numbers and roles of the rules stay."""
+    out = dict(rule)
+    concept = normalize_ws(str(ans.get("concept") or ""))
+    if concept:
+        out["concept"] = concept[:160]
+    prompts = [normalize_ws(str(x))[:120] for x in ans.get("prompts") or [] if str(x).strip()][:3]
+    if prompts:
+        out["prompts"] = prompts
+    out["distractors"] = [normalize_ws(str(d))[:80] for d in ans.get("distractors") or [] if str(d).strip()][:4]
+    role = str(ans.get("role") or "").lower()
+    if rule["number"] is None and rule["role"] not in ("hook", "suspense", "cta") and role in ("claim", "comparison", "item"):
+        out["role"] = role  # the rules are sure of list numbers, hooks, teasers and the CTA; the model may refine the rest
+    game = str(ans.get("game") or "").lower().replace(" ", "")
+    game = {"gtav": "gta5", "gta5": "gta5", "gtavi": "gta6", "gta6": "gta6"}.get(game)
+    if game and out["role"] not in ("hook", "suspense", "cta"):
+        out["game"] = game
+    if isinstance(ans.get("specific"), bool) and out["role"] not in ("hook", "suspense", "cta"):
+        out["specific"] = ans["specific"]
+    if out["role"] in ("hook", "suspense", "cta"):
+        out["specific"] = False
+    claim = ans.get("claim")
+    out["claim"] = normalize_ws(str(claim))[:200] if claim and out["specific"] else (rule["claim"] if out["specific"] else None)
+    out["emphasis"] = [normalize_ws(str(e)) for e in ans.get("emphasis") or [] if str(e).strip()][:2]
+    return out
+
+
+def validate_answer(data: Any, n: int) -> str | None:
+    beats = data.get("beats") if isinstance(data, dict) else None
+    if not isinstance(beats, list) or not beats:
+        return "beats must be a non-empty list"
+    if sum(1 for b in beats if isinstance(b, dict)) < max(1, n // 2):
+        return f"describe every one of the {n} beats"
+    return None
+
+
 def plan_script(llm: Any, script: str, *, log=lambda m: None) -> dict[str, Any]:
-    """The edit plan of a script (model plan, validated; the rule-based plan when the model fails)."""
+    """The edit plan of a script. The words are cut into beats by rule (never fails, never drifts);
+    the model, when there is one, only says what each beat must show. One short call, one retry."""
     words = words_of(script)
     if not words:
         raise ValueError("The script is empty.")
     base = segment_script(script)
     if llm is None:
         return {**base, "title": rule_title(words)}
-    numbered = "\n".join(f"{i}: {w}" for i, w in enumerate(words))
+    rules = base["beats"]
+    listing = "\n".join(f"{k}. [{b['role']}{' #' + str(b['number']) if b['number'] else ''}] {b['text']}" for k, b in enumerate(rules, 1))
+    log(f"script plan: asking the model what each of the {len(rules)} beats must show (one short call)")
     try:
-        data = llm.complete_json(PLAN_SYSTEM, PLAN_PROMPT.format(numbered=numbered, last=len(words) - 1), max_tokens=8000, label="plan_script",
-                                 required_keys=("beats",), validate=lambda d: validate_beats(d.get("beats"), len(words)))
+        data = llm.complete_json(PLAN_SYSTEM, PLAN_PROMPT.format(beats=listing, n=len(rules)), max_tokens=3500, label="plan_script",
+                                 required_keys=("beats",), validate=lambda d: validate_answer(d, len(rules)), retries=1)
     except Exception as exc:  # the rules always give a usable plan
         log(f"script plan: the model failed ({type(exc).__name__}: {str(exc)[:160]}); using the rule-based plan")
         return {**base, "title": rule_title(words)}
-    beats = [_clean_beat(b, words) for b in data["beats"]]
-    # the rules know list numbers for sure: keep them when the model forgot one
-    rule_numbers = {b["words"][0]: b["number"] for b in base["beats"] if b["number"]}
-    for b in beats:
-        if b["number"] is None and b["words"][0] in rule_numbers:
-            b["number"] = rule_numbers[b["words"][0]]
-    return {"words": words, "beats": beats, "title": normalize_ws(str(data.get("title") or ""))[:70] or rule_title(words), "method": "model"}
+    answers: dict[int, dict[str, Any]] = {}
+    for k, a in enumerate(data["beats"], 1):
+        if isinstance(a, dict):
+            idx = a.get("i") if isinstance(a.get("i"), int) and 1 <= a.get("i") <= len(rules) else k
+            answers.setdefault(idx, a)
+    beats = [_merge(r, answers.get(k, {})) for k, r in enumerate(rules, 1)]
+    described = sum(1 for k in range(1, len(rules) + 1) if k in answers)
+    log(f"script plan: the model described {described}/{len(rules)} beats")
+    title = normalize_ws(str(data.get("title") or ""))[:70] or rule_title(words)
+    return {"words": words, "beats": beats, "title": title, "method": "model" if described == len(rules) else "model+rules"}
 
 
 def sentence_end(text: str) -> bool:
