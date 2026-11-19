@@ -241,12 +241,11 @@ def generate_voiceover(
 MIN_SCENE_SECONDS = {"title": 3.2, "chapter": 2.2, "kinetic": 1.8, "outro": 5.5, "countdown": 3.5, "stat": 3.2, "detail": 3.6}
 
 
-def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str, Any], audio_dir: Path, fps: int, *, vertical: bool = False) -> dict[str, Any]:
-    """Place every scene on the master timeline and write ``final_voiceover.wav``.
+def place_scenes(settings: Any, scenes: list[dict[str, Any]], voice: dict[str, Any], fps: int, *, vertical: bool = False) -> tuple[list[dict[str, Any]], int]:
+    """Where each scene sits on the timeline (whole frames), from its narration length: (placed, total frames).
 
-    Scene durations are rounded to whole frames so picture and sound cannot drift.
-    Breaths between scenes, the silence after the last word and the end card follow the
-    video's rhythm profile (``rhythm.short`` for 9:16, ``rhythm.long`` for 16:9).
+    A scene may set ``gap_after`` (seconds of breath after its words: almost none inside a sentence that
+    is cut into several shots) and ``voice_lead`` (silence before the first words of the video).
     """
     rh = settings.rhythm(vertical=vertical)
     gap, tail = rh["scene_gap_seconds"], rh["tail_seconds"]
@@ -255,20 +254,37 @@ def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str,
     if vertical:  # a Short never holds a card after the voice stops (only the end card and the detail zoom need their time)
         min_seconds = {k: v for k, v in min_seconds.items() if k in ("outro", "detail", "countdown")}
     by_n = {m["scene_number"]: m for m in voice["scenes"]}
-    total_samples = 0
     placed = []
     frame_cursor = 0
+    prev_gap = gap
     for idx, sc in enumerate(scenes):
         m = by_n.get(sc["scene_number"])
         if m is None:
             raise ProviderError(f"No narration audio for scene {sc['scene_number']}.", hint="Re-run the voice step.")
-        offset = lead_in if idx == 0 else min(0.1, gap / 2)
-        natural = offset + m["duration"] + (tail if idx == len(scenes) - 1 else gap)
+        if idx == 0:
+            offset = float(sc.get("voice_lead", lead_in))
+        else:
+            offset = min(0.1, prev_gap / 2)
+        after = tail if idx == len(scenes) - 1 else float(sc.get("gap_after", gap))
+        natural = offset + m["duration"] + max(0.0, after - (min(0.1, after / 2) if idx < len(scenes) - 1 else 0.0))
         seconds = max(natural, min_seconds.get(sc["template"], 0.0))
         frames = max(1, int(round(seconds * fps)))
         start = frame_cursor / fps
         placed.append({"scene_number": sc["scene_number"], "start_frame": frame_cursor, "duration_frames": frames, "start_time": round(start, 3), "duration": round(frames / fps, 3), "voice_offset": round(offset, 3), "voice_duration": m["duration"]})
         frame_cursor += frames
+        prev_gap = after
+    return placed, frame_cursor
+
+
+def build_timeline(settings: Any, scenes: list[dict[str, Any]], voice: dict[str, Any], audio_dir: Path, fps: int, *, vertical: bool = False) -> dict[str, Any]:
+    """Place every scene on the master timeline and write ``final_voiceover.wav``.
+
+    Scene durations are rounded to whole frames so picture and sound cannot drift.
+    Breaths between scenes, the silence after the last word and the end card follow the
+    video's rhythm profile (``rhythm.short`` for 9:16, ``rhythm.long`` for 16:9).
+    """
+    by_n = {m["scene_number"]: m for m in voice["scenes"]}
+    placed, frame_cursor = place_scenes(settings, scenes, voice, fps, vertical=vertical)
     total_seconds = frame_cursor / fps
     total_samples = int(round(total_seconds * WORK_SR))
     master = np.zeros(total_samples, dtype=np.float32)

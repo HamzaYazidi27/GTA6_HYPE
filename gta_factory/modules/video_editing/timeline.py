@@ -125,8 +125,12 @@ def build_render_props(
     alignments: dict[int, dict[str, Any]],
     media_urls: dict[int, str] | None = None,
     footage: dict[int, dict[str, str]] | None = None,
+    max_words: int | None = None,
 ) -> dict[str, Any]:
-    """Assemble the ``timeline`` prop. ``alignments`` maps scene number -> {"words": [...]} (scene-audio relative)."""
+    """Assemble the ``timeline`` prop. ``alignments`` maps scene number -> {"words": [...]} (scene-audio relative).
+
+    ``max_words``: words per on-screen caption (default 3 in 9:16, 5 in 16:9).
+    """
     profile = settings.video_profile(fmt)
     fps = int(master["fps"])
     vertical = settings.format(fmt).get("aspect") == "9:16"
@@ -137,7 +141,7 @@ def build_render_props(
     for sc in scenes:
         p = placed[sc["scene_number"]]
         words = scene_local_words(alignments[sc["scene_number"]]["words"], p["voice_offset"])
-        phrases = burn_in_phrases(words, max_words=3 if vertical else 5, max_chars=18 if vertical else 30)
+        phrases = burn_in_phrases(words, max_words=max_words or (3 if vertical else 5), max_chars=(18 if vertical else 30) + 6 * max(0, (max_words or 3) - 3))
         item = {
             "n": sc["scene_number"],
             "template": sc["template"],

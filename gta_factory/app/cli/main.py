@@ -16,6 +16,8 @@
     competitors CHANNEL_URL    refresh the competitor reference database
     youtube auth|whoami|logout|status JOB    connect the channel (OAuth, one time)
     publish JOB                upload a reviewed package (private by default, resumable)
+    short-from-script "..."    Script to Short: your narration -> a finished 9:16 Short, real footage matched to every phrase
+    style analyze [CHANNEL]    measure a reference channel's editing (cuts, zoom, captions, sound) into style/style_profile.json
     dashboard                  local web dashboard (http://127.0.0.1:8600)
 """
 from __future__ import annotations
@@ -285,6 +287,49 @@ def cmd_topic(args: argparse.Namespace) -> int:
         _print(f"running in the background; follow with `python -m gta_factory log {job_id} -f`")
         return 0
     return _run(job_id, until=args.until)
+
+
+def cmd_short_from_script(args: argparse.Namespace) -> int:
+    from ...modules.script_short.produce import create_script_job
+
+    s = get_settings()
+    text = " ".join(args.script or [])
+    if args.file:
+        text = Path(args.file).expanduser().read_text(encoding="utf-8")
+    if not text.strip():
+        _print('usage: short-from-script "GTA 5 never let you do any of these. Seven: ..."  (or --file script.txt)')
+        return 2
+    opts = _options(args)
+    if args.fps:
+        opts["fps"] = args.fps
+    for key in ("allow_weak", "offline"):
+        if getattr(args, key, False):
+            opts[key] = True
+    job_id = create_script_job(s, text, options=opts)
+    _print(f"job {job_id} created (Script to Short)")
+    if args.detach:
+        log = open(s.jobs_dir / job_id / "pipeline.out", "ab")
+        subprocess.Popen([sys.executable, "-m", "gta_factory", "resume", job_id] + (["--until", args.until] if args.until else []), cwd=s.root, stdout=log, stderr=log, start_new_session=True)
+        _print(f"running in the background; follow with `python -m gta_factory log {job_id} -f`")
+        return 0
+    return _run(job_id, until=args.until)
+
+
+def cmd_style(args: argparse.Namespace) -> int:
+    from ...modules.script_short.reference import analyze_channel
+    from ...modules.script_short.style import REFERENCE_CHANNEL, load_profile, profile_path
+
+    s = get_settings()
+    if args.action == "show":
+        prof = load_profile(s)
+        _print(f"{profile_path(s)}: {prof.get('status')}" + (f" - {prof.get('reason')}" if prof.get("reason") else ""))
+        _print(json.dumps(prof.get("editor"), indent=2))
+        return 0
+    files = [Path(f).expanduser() for f in args.files or []]
+    prof = analyze_channel(s, args.channel or REFERENCE_CHANNEL, videos=args.videos, files=files or None, log=_print)
+    _print(f"\nstyle profile: {prof['status']}" + (f" ({len(prof['reference']['videos'])} video(s))" if prof["status"] == "measured" else f" - {prof.get('reason')}"))
+    _print(f"written: {profile_path(s)} and style_reference_report.md")
+    return 0 if prof["status"] == "measured" else 1
 
 
 def cmd_games(args: argparse.Namespace) -> int:
@@ -618,6 +663,18 @@ def cmd_footage(args: argparse.Namespace) -> int:
     elif act == "stills":
         lib.extract_stills(s, per_video=args.stills, log=_print)
         _autotag_new(s, args)
+    elif act == "index":  # the CLIP frame index the Script-to-Short matcher searches
+        from ...modules.footage.clip import Clip, ensure_clip, index_frames
+
+        if not ensure_clip(s, log=_print):
+            return 1
+        model = Clip.load(s)
+        if model is None:
+            _print('CLIP needs the tokenizers package: pip install -e ".[clip]"')
+            return 1
+        rows, _ = index_frames(s, lib.load_items(s, lib.build_index(s, force=args.reindex, log=_print)), log=_print, model=model)
+        _print(f"clip index: {len(rows)} frame(s) of {len({r['key'] for r in rows})} shot(s) / photo(s)")
+        return 0
     index = lib.build_index(s, force=args.reindex, log=_print)
     _footage_listing(s, index)
     return 0
@@ -845,9 +902,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_brand)
 
     sp = sub.add_parser("footage", help="real GTA 6 footage: add new footage, tag it, see what the narration will show")
-    sp.add_argument("action", choices=("list", "update", "add", "tag", "autotag", "find", "concepts", "remove", "fetch", "stills"), nargs="?", default="list",
+    sp.add_argument("action", choices=("list", "update", "add", "tag", "autotag", "find", "concepts", "remove", "fetch", "stills", "index"), nargs="?", default="list",
                     help="update: official trailers + any NEW official GTA VI video; add: files, folders or URLs; tag: set what a file shows; "
-                         "autotag: let the local vision model tag everything; find: what a sentence would show; concepts: what the narration can call for")
+                         "autotag: let the local vision model tag everything; find: what a sentence would show; concepts: what the narration can call for; "
+                         "index: the CLIP frame index used by Script to Short")
     sp.add_argument("paths", nargs="*", help="add: files, folders or URLs; fetch/update: video URLs; tag/remove: a file name; find: a sentence")
     sp.add_argument("--tags", help="comma-separated tags, e.g. lucia,beach (characters, places, anything you will say in a video)")
     sp.add_argument("--at", help="tag: only this part of a video, START-END in seconds (e.g. 12-19.5)")
@@ -899,6 +957,30 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-n", type=int, help="stories per category (default fresh.per_category)")
     sp.add_argument("--json", action="store_true", help="print the JSON instead of the summary")
     sp.set_defaults(fn=cmd_fresh)
+
+    from ..core.pipeline import ALL_STEP_NAMES
+
+    sp = sub.add_parser("short-from-script", help="Script to Short: paste a narration, get a finished 9:16 Short with real footage matched to every phrase")
+    sp.add_argument("script", nargs="*", help="the narration (quote it), or use --file")
+    sp.add_argument("--file", help="read the narration from a text file")
+    sp.add_argument("--fps", choices=("auto", "30", "60"), help="frame rate (auto: 60 when the footage is 60 fps)")
+    sp.add_argument("--allow-weak", action="store_true", help="also show uncertain footage matches (they are marked in the report; default: such phrases show their words)")
+    sp.add_argument("--offline", action="store_true", help="do not look for new official videos before matching")
+    sp.add_argument("--no-search", action="store_true", help="do not search the news to fact-check the claims")
+    sp.add_argument("--no-whisper", action="store_true", help="estimate word timings instead of measuring them")
+    sp.add_argument("--llm", help="LLM provider (ollama = free local default, claude_code, anthropic, openai; none = rules only)")
+    sp.add_argument("--tts", help="voice provider (kokoro, elevenlabs, openai)")
+    sp.add_argument("--voice", help="voice name / id")
+    sp.add_argument("--until", choices=ALL_STEP_NAMES, help="pause after this step")
+    sp.add_argument("--detach", action="store_true", help="run in the background")
+    sp.set_defaults(fn=cmd_short_from_script)
+
+    sp = sub.add_parser("style", help="the editing style of Script-to-Short videos: measure a reference channel (analyze) or show the profile")
+    sp.add_argument("action", choices=("analyze", "show"), nargs="?", default="show")
+    sp.add_argument("channel", nargs="?", help="channel URL (default: the reference channel in style.py)")
+    sp.add_argument("--videos", type=int, default=8, help="how many of its latest Shorts to measure (default 8)")
+    sp.add_argument("--files", nargs="*", help="measure these already downloaded videos instead")
+    sp.set_defaults(fn=cmd_style)
 
     sp = sub.add_parser("dashboard", help="local web dashboard")
     sp.add_argument("--host")

@@ -75,7 +75,10 @@ TOPIC_STEPS: list[tuple[str, str]] = [
     ("outline", "Choose and order the items"),
 ]
 TOPIC_STEP_NAMES = ["research", "analyze", "fact_check", "outline", "script", "scenes"] + STEP_NAMES[STEP_NAMES.index("rights") :]
-STEP_TITLES = dict(STEPS + DETAIL_STEPS + TOPIC_STEPS)
+# Script to Short: a pasted narration becomes a finished, verified Short (modules/script_short)
+from ...modules.script_short.produce import SCRIPT_STEP_NAMES, SCRIPT_STEPS  # noqa: E402
+
+STEP_TITLES = dict(STEPS + DETAIL_STEPS + TOPIC_STEPS + SCRIPT_STEPS)
 ALL_STEP_NAMES = list(STEP_TITLES)
 
 
@@ -713,7 +716,13 @@ def step_mix(ctx: JobContext) -> dict[str, Any]:
     from ...modules.video_editing.mix import build_mix, mux
 
     master = ctx.need(ctx.paths.master)
-    stats = build_mix(ctx.settings, master=master, scenes=ctx.need(ctx.paths.scenes), voice_path=ctx.paths.voiceover, out_wav=ctx.paths.mix)
+    extra: dict[str, Any] = {}
+    if ctx.kind == "script":  # sound design from the beats (list numbers, item cuts) and the style profile's music level
+        from ...modules.script_short.produce import files as short_files
+        from ...modules.script_short.style import editor_params
+
+        extra = {"events": read_json(short_files(ctx).sfx, []) or [], "music_gain_db": float(editor_params(ctx.settings)["music_gain_db"])}
+    stats = build_mix(ctx.settings, master=master, scenes=ctx.need(ctx.paths.scenes), voice_path=ctx.paths.voiceover, out_wav=ctx.paths.mix, **extra)
     write_json(ctx.paths.mix_stats, stats)
     mux(ctx.settings, video=ctx.paths.video_silent, audio=ctx.paths.mix, out=ctx.paths.final_video)
     ctx.log(f"mix: {stats['output_lufs']:.1f} LUFS, true peak {stats['output_true_peak_db']:.1f} dBTP, voice {stats.get('voice_over_music_db', 0):.1f} dB over music")
@@ -1042,12 +1051,26 @@ STEP_FUNCS: dict[str, Callable[[JobContext], dict[str, Any]]] = {
 }
 
 
+def _script_steps() -> None:
+    from ...modules.script_short.produce import STEP_FUNCS as SHORT_FUNCS
+
+    STEP_FUNCS.update(SHORT_FUNCS)
+
+
+_script_steps()
+
+
 # =========================================================================== jobs
 def create_job(settings: Any, urls: list[str], *, fmt: str = "long", options: dict[str, Any] | None = None) -> str:
     fmt_cfg = settings.format(fmt)  # validates the format name
     options = dict(options or {})
     details = options.get("kind") == "details"
     topic = options.get("kind") == "topic"
+    script = options.get("kind") == "script"
+    if fmt_cfg.get("script_only") and not script:
+        raise ConfigError(f"The '{fmt}' format is made from a pasted script.", hint='Use `python -m gta_factory short-from-script ...` or the dashboard\'s "Script to Short".')
+    if script and not fmt_cfg.get("script_only"):
+        raise ConfigError("A Short made from a script uses the 'script_short' format.")
     if fmt_cfg.get("footage_only") and not details:
         raise ConfigError(f"The '{fmt}' format is made from the footage library, not from articles.", hint="Use `python -m gta_factory details ...`.")
     if fmt_cfg.get("topic_only") and not topic:
@@ -1056,7 +1079,9 @@ def create_job(settings: Any, urls: list[str], *, fmt: str = "long", options: di
     if not urls:
         raise ConfigError("Give at least one article URL.")
     db = get_db(settings.db_path)
-    if topic:
+    if script:
+        job_id = new_job_id("short-" + " ".join(str(options.get("script_text") or "script").split()[:6]))
+    elif topic:
         job_id = new_job_id(("vs-" if options.get("style") == "versus" else "top-") + str(options.get("topic") or "topic"))
     else:
         job_id = new_job_id(("details-" if details else "") + urls[0].rstrip("/").rsplit("/", 1)[-1])
@@ -1065,7 +1090,7 @@ def create_job(settings: Any, urls: list[str], *, fmt: str = "long", options: di
     paths = JobPaths(settings.jobs_dir / job_id)
     paths.root.mkdir(parents=True, exist_ok=True)
     write_json(paths.job_json, {"id": job_id, "created_at": now_iso(), "urls": urls, "format": fmt, "options": options})
-    steps = DETAIL_STEP_NAMES if details else TOPIC_STEP_NAMES if topic else STEP_NAMES
+    steps = SCRIPT_STEP_NAMES if script else DETAIL_STEP_NAMES if details else TOPIC_STEP_NAMES if topic else STEP_NAMES
     db.create_job(job_id, urls=urls, fmt=fmt, language=settings.get("channel.language", "en"), options=options, steps=steps, output_dir=str(settings.outputs_dir / job_id))
     return job_id
 

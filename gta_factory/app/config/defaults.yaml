@@ -137,6 +137,17 @@ formats:
   # The vertical version uses the "short" format: python -m gta_factory topic "..." --format short
   versus:    {label: "GTA 6 vs another game", aspect: "16:9", target_seconds: 600, min_seconds: 240, max_seconds: 1800, topic_only: true}
   toplist:   {label: "Top list", aspect: "16:9", target_seconds: 480, min_seconds: 180, max_seconds: 1200, topic_only: true}
+  # Script to Short (dashboard "Script to Short", or python -m gta_factory short-from-script): your narration, real footage on every phrase.
+  script_short: {label: "Script to Short", aspect: "9:16", target_seconds: 35, min_seconds: 12, max_seconds: 60, script_only: true}
+
+# ---------------------------------------------------------------------------
+# Script to Short (modules/script_short)
+# ---------------------------------------------------------------------------
+script_short:
+  fps: auto                        # auto: 60 when the GTA 6 library's gameplay is 60 fps, else 30 (or 30 / 60)
+  style_profile: style/style_profile.json   # editing style measured from the reference channel (python -m gta_factory style analyze ...)
+  vision_verify: true              # look at the chosen frames with the local vision model (Ollama) when it runs
+  fetch_new_official: true         # check the official Rockstar channels for new videos before matching
 
 script:
   words_per_minute: 155            # average real speaking rate (Kokoro: ~150 in 16:9, ~170 in Shorts): word budgets and scene splits

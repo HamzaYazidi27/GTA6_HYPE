@@ -1,0 +1,231 @@
+"""Script understanding: a pasted script becomes an editing plan of visual beats.
+
+The narration is never rewritten. Python numbers the words; the model only groups consecutive
+words into beats and says what each beat must SHOW. Every word belongs to exactly one beat, in
+order, so the voice, the captions and the cuts can never drift from the script.
+
+A beat is the unit of the edit: one visual idea, usually 1-3 seconds of speech
+("race jet skis," / "or paddle a kayak."). For each beat the plan gives:
+
+* ``role``: hook | number | item | claim | comparison | suspense | cta
+* ``number``: the list number it introduces (7 ... 1), if any
+* ``concept``: what must be on screen, in plain words ("a jet ski racing on the ocean")
+* ``prompts``: 1-3 picture descriptions for the frame search (CLIP)
+* ``distractors``: look-alike scenes that must NOT be taken for it ("a motorboat", "a sea turtle")
+* ``game``: gta6, or gta5 for a comparison shot ("GTA 5 stopped at five")
+* ``specific``: True when the beat states something that only the right footage can show;
+  False for hooks, teasers and the call to action (any strong gameplay is fine there)
+* ``claim``: the factual statement about the game the beat makes, if any (fact-checked)
+
+``segment_script`` is the deterministic fallback (one beat per sentence, numbers detected by
+rule) used when the model fails, and the reference the model's plan is validated against.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from ...app.core.utils import normalize_ws
+
+NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+                "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20}
+_LEAD_NUMBER = re.compile(r"^(?:number\s+)?(#?\d{1,2}|" + "|".join(NUMBER_WORDS) + r")\s*(?:[:.)–—,]|-(?!\w))", re.I)  # "Six:" yes, "Six-star" no
+_TEASE = re.compile(r"\bnumber\s+(" + "|".join(NUMBER_WORDS) + r"|\d{1,2})\b", re.I)
+_CTA = re.compile(r"\b(comment|subscribe|let me know|tell me|which one|follow for|like if|drop a)\b", re.I)
+_SENT = re.compile(r"(?<=[.!?])\s+(?=\S)")
+ROLES = ("hook", "number", "item", "claim", "comparison", "suspense", "cta")
+GENERIC_DISTRACTORS = [  # the usual scenes of GTA footage: a specific beat must look more like its concept than like any of these
+    "a car driving down a city street", "people talking indoors", "a close-up portrait of a character", "a city skyline",
+    "a beach with palm trees", "a boat on the water", "an underwater scene with fish", "a game menu screen", "a black screen with text",
+    "a person standing outside", "a group of people at a party", "a street at night with neon lights", "a police car", "a gas station",
+    "a swamp with trees", "a house interior", "a store interior", "a highway from above", "a sunset over the ocean", "a crowd on a sidewalk",
+    "a person holding a gun", "a motorcycle", "an animal in the wild", "a character in a car",
+]
+
+
+def words_of(script: str) -> list[str]:
+    """The script's words as spoken (whitespace tokens, punctuation attached)."""
+    return normalize_ws(script).split(" ") if normalize_ws(script) else []
+
+
+def sentences_of(words: list[str]) -> list[tuple[int, int]]:
+    """Word ranges [first, last] of each sentence (a sentence ends on . ! ? or a closing quote after them)."""
+    out, start = [], 0
+    for i, w in enumerate(words):
+        if re.search(r"[.!?][\"'”’)]*$", w) or i == len(words) - 1:
+            out.append((start, i))
+            start = i + 1
+    return out
+
+
+def lead_number(text: str) -> int | None:
+    m = _LEAD_NUMBER.match(text.strip())
+    if not m:
+        return None
+    tok = m.group(1).lstrip("#").lower()
+    return int(tok) if tok.isdigit() else NUMBER_WORDS.get(tok)
+
+
+_ALT = re.compile(r"^(or|and|then|plus)$", re.I)
+
+
+def clauses_of(words: list[str], a: int, b: int) -> list[tuple[int, int]]:
+    """A sentence cut where it names a second thing to show (race jet skis, | or paddle a kayak)."""
+    out, start = [], a
+    for i in range(a, b):
+        if words[i].endswith(",") and _ALT.match(words[i + 1].strip(",.")) and i - start >= 1 and b - i >= 2:
+            out.append((start, i))
+            start = i + 1
+    out.append((start, b))
+    return out
+
+
+def _gta5_only(text: str) -> bool:
+    return bool(re.search(r"\bGTA\s*(5|V)\b", text)) and not re.search(r"\bGTA\s*(6|VI)\b", text)
+
+
+def segment_script(script: str) -> dict[str, Any]:
+    """The rule-based plan: a beat per sentence (or per clause naming another thing), roles by pattern. Never fails."""
+    words = words_of(script)
+    beats = []
+    sents = sentences_of(words)
+    seen_number = False
+    teased: int | None = None  # "And number one changes everything." -> the next sentence is number one
+    for k, (a, b) in enumerate(sents):
+        text = " ".join(words[a : b + 1])
+        n = lead_number(text)
+        if n is None and teased is not None:
+            n, teased = teased, None
+        if n is not None:
+            seen_number = True
+            role = "item"
+        elif k == len(sents) - 1 and _CTA.search(text):
+            role = "cta"
+        elif _TEASE.search(text):  # "And number one changes everything."
+            role = "suspense"
+            tok = _TEASE.search(text).group(1).lower()
+            teased = int(tok) if tok.isdigit() else NUMBER_WORDS.get(tok)
+        elif not seen_number and k == 0:
+            role = "hook"
+        elif _gta5_only(text):
+            role = "comparison"
+        else:
+            role = "claim"
+        specific = role in ("item", "claim", "comparison")
+        for j, (c0, c1) in enumerate(clauses_of(words, a, b) if role in ("item", "claim") else [(a, b)]):
+            part = " ".join(words[c0 : c1 + 1])
+            concept = re.sub(r"^(?:number\s+)?\S+:\s*", "", part) if (n and j == 0) else part
+            concept = re.sub(r"^(or|and|then|plus)\s+", "", concept.strip(" ,.!?"), flags=re.I)
+            beats.append({
+                "words": [c0, c1], "text": part, "role": role, "number": n if j == 0 else None,
+                "concept": concept or part,
+                "prompts": [concept or part],
+                "distractors": [], "game": "gta5" if role == "comparison" else "gta6",
+                "specific": specific, "claim": text if specific and j == 0 else None, "emphasis": [],
+            })
+    return {"words": words, "beats": beats, "method": "rules"}
+
+
+PLAN_SYSTEM = """You are the editor of a fast GTA VI YouTube Shorts channel. You turn a narration script into a
+visual edit plan: which exact footage must be on screen during each phrase. You never change the words."""
+
+PLAN_PROMPT = """SCRIPT, word by word (index: word)
+{numbered}
+
+Split the words into consecutive BEATS. A beat is one visual idea, usually 2-8 words (1-3 seconds of speech).
+Split a sentence when it names several things that need different footage
+("race jet skis, or paddle a kayak" = two beats: jet ski, then kayak; "overeat and you gain weight" and
+"hit the gym and you build muscle" are two beats). A list number ("Seven:") stays in the beat of its item.
+
+Return JSON: {{"title": short video title (max 70 chars),
+ "beats": [ {{
+  "words": [first_index, last_index],
+  "role": one of hook | item | claim | comparison | suspense | cta,
+  "number": the list number this beat announces (e.g. 7), else null,
+  "concept": what the viewer must SEE, concretely (subject + action + place),
+  "prompts": 1-3 short picture descriptions of that footage for an image search ("a person riding a jet ski on the ocean"),
+  "distractors": 2-4 look-alike scenes that would be WRONG for this beat ("a motorboat", "a person swimming"),
+  "game": "gta6", or "gta5" when the beat talks about GTA 5 / an older game for comparison,
+  "specific": true when only footage of exactly this can illustrate it; false for hooks, teasers ("number one changes everything") and the call to action,
+  "claim": the factual statement about the game this beat makes, or null,
+  "emphasis": 1-2 words of the beat to highlight on screen
+ }} ]
+}}
+Rules: beats cover every word index from 0 to {last} exactly once, in order, without gaps or overlaps."""
+
+
+def validate_beats(beats: Any, n_words: int) -> str | None:
+    if not isinstance(beats, list) or not beats:
+        return "beats must be a non-empty list"
+    cursor = 0
+    for i, b in enumerate(beats):
+        rng = b.get("words") if isinstance(b, dict) else None
+        if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(x, int) for x in rng)):
+            return f"beat {i} needs words: [first, last]"
+        if rng[0] != cursor or rng[1] < rng[0]:
+            return f"beat {i} must start at word {cursor} (got {rng})"
+        cursor = rng[1] + 1
+    if cursor != n_words:
+        return f"beats stop at word {cursor - 1} but the script has words 0-{n_words - 1}"
+    return None
+
+
+def _clean_beat(b: dict[str, Any], words: list[str]) -> dict[str, Any]:
+    a, z = b["words"]
+    text = " ".join(words[a : z + 1])
+    role = str(b.get("role") or "claim").lower()
+    role = role if role in ROLES else "claim"
+    n = b.get("number")
+    n = int(n) if isinstance(n, (int, float)) or (isinstance(n, str) and n.isdigit()) else lead_number(text)
+    prompts = [normalize_ws(str(p))[:120] for p in b.get("prompts") or [] if str(p).strip()][:3]
+    concept = normalize_ws(str(b.get("concept") or "")) or text
+    game = str(b.get("game") or "gta6").lower().replace(" ", "")
+    game = {"gtav": "gta5", "gta5": "gta5", "gtavi": "gta6", "gta6": "gta6", "any": "gta6"}.get(game, game)
+    return {
+        "words": [a, z],
+        "text": text,
+        "role": role,
+        "number": n,
+        "concept": concept,
+        "prompts": prompts or [concept],
+        "distractors": [normalize_ws(str(d))[:80] for d in b.get("distractors") or [] if str(d).strip()][:4],
+        "game": game,
+        "specific": bool(b.get("specific", role in ("item", "claim", "comparison"))) and role not in ("hook", "suspense", "cta"),
+        "claim": normalize_ws(str(b["claim"])) if b.get("claim") else None,
+        "emphasis": [normalize_ws(str(e)) for e in b.get("emphasis") or [] if str(e).strip()][:2],
+    }
+
+
+def rule_title(words: list[str]) -> str:
+    """The first sentence (the hook), as a title, when no model writes one."""
+    a, b = sentences_of(words)[0]
+    first = " ".join(words[a : b + 1]).rstrip(" .!")
+    return first[:70] if len(first) <= 70 else first[:67].rsplit(" ", 1)[0] + "..."
+
+
+def plan_script(llm: Any, script: str, *, log=lambda m: None) -> dict[str, Any]:
+    """The edit plan of a script (model plan, validated; the rule-based plan when the model fails)."""
+    words = words_of(script)
+    if not words:
+        raise ValueError("The script is empty.")
+    base = segment_script(script)
+    if llm is None:
+        return {**base, "title": rule_title(words)}
+    numbered = "\n".join(f"{i}: {w}" for i, w in enumerate(words))
+    try:
+        data = llm.complete_json(PLAN_SYSTEM, PLAN_PROMPT.format(numbered=numbered, last=len(words) - 1), max_tokens=8000, label="plan_script",
+                                 required_keys=("beats",), validate=lambda d: validate_beats(d.get("beats"), len(words)))
+    except Exception as exc:  # the rules always give a usable plan
+        log(f"script plan: the model failed ({type(exc).__name__}: {str(exc)[:160]}); using the rule-based plan")
+        return {**base, "title": rule_title(words)}
+    beats = [_clean_beat(b, words) for b in data["beats"]]
+    # the rules know list numbers for sure: keep them when the model forgot one
+    rule_numbers = {b["words"][0]: b["number"] for b in base["beats"] if b["number"]}
+    for b in beats:
+        if b["number"] is None and b["words"][0] in rule_numbers:
+            b["number"] = rule_numbers[b["words"][0]]
+    return {"words": words, "beats": beats, "title": normalize_ws(str(data.get("title") or ""))[:70] or rule_title(words), "method": "model"}
+
+
+def sentence_end(text: str) -> bool:
+    return bool(re.search(r"[.!?][\"'”’)]*$", text.strip()))

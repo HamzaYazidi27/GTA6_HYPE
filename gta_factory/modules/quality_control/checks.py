@@ -98,6 +98,7 @@ def run_qc(
     mix_stats: dict[str, Any],
     thumbnails: list[Path],
     metadata: dict[str, Any],
+    expected_fps: int | None = None,
 ) -> dict[str, Any]:
     q = settings.get("quality_control") or {}
     r = Report()
@@ -117,7 +118,8 @@ def run_qc(
         size_ok = int(vs.get("width", 0)) == int(profile["width"]) and int(vs.get("height", 0)) == int(profile["height"])
         r.add("video.size", "critical", size_ok, f"{vs.get('width')}x{vs.get('height')} (expected {profile['width']}x{profile['height']}).")
         fps = _fps(vs.get("avg_frame_rate") or vs.get("r_frame_rate") or "0/1")
-        r.add("video.fps", "critical", abs(fps - float(profile["fps"])) < 0.05, f"{fps:.3f} fps (expected {profile['fps']}).")
+        want_fps = float(expected_fps or profile["fps"])
+        r.add("video.fps", "critical", abs(fps - want_fps) < 0.05, f"{fps:.3f} fps (expected {want_fps:g}).")
         r.add("video.pix_fmt", "warning", vs.get("pix_fmt") == settings.get("video.pixel_format", "yuv420p"), f"Pixel format {vs.get('pix_fmt')}.")
 
     # --- duration and sync

@@ -159,6 +159,42 @@ def job_payload(settings: Any, job_id: str) -> dict[str, Any] | None:
         "video": f"/files/{job_id}/out/{video.name}" if video else None,
         "thumbnails": [f"/files/{job_id}/job/thumbnails/{t}" for t in thumbs],
         "review": (out_dir / "REVIEW.md").read_text(encoding="utf-8") if (out_dir / "REVIEW.md").exists() else None,
+        "short": short_payload(settings, job_id, job, root, out_dir),
+    }
+
+
+SHORT_FILES = [  # (label, file in outputs/<job>/) of a Script-to-Short package, in the order they are shown
+    ("Narration (WAV)", "narration.wav"), ("Subtitles (SRT)", "captions.srt"), ("Edit decision list (EDL)", "edit_decision_list.edl"),
+    ("Footage source manifest", "footage_manifest.json"), ("Production report", "production_report.md"), ("Sync report", "sync_report.json"),
+    ("Cover", "cover.png"), ("Title", "title.txt"), ("Description", "description.txt"), ("Hashtags", "hashtags.txt"),
+    ("Claims report", "claims_report.md"), ("Rights review", "rights_review.json"), ("Edit plan", "edit_plan.json"), ("QC report", "qc_report.json"),
+]
+
+
+def short_payload(settings: Any, job_id: str, job: dict[str, Any], root: Path, out_dir: Path) -> dict[str, Any] | None:
+    """What the "Script to Short" card shows: beats and their footage, verification, downloadable files."""
+    if ((job.get("options") or {}).get("kind")) != "script":
+        return None
+    matches = (read_json(root / "match" / "matches.json") or {}).get("matches") or []
+    timing = {b["beat"]: b for b in (read_json(root / "sync" / "beats.json") or {}).get("beats") or []}
+    qc = read_json(root / "qc" / "qc_report.json") or {}
+    style = read_json(root / "edit" / "style_used.json") or {}
+    beats = [{
+        "beat": m["beat"] + 1, "text": m["text"], "concept": m.get("concept"), "status": m["status"], "confidence": m.get("confidence"),
+        "start": (timing.get(m["beat"]) or {}).get("start"), "end": (timing.get(m["beat"]) or {}).get("end"),
+        "footage": [f"{sg['file']} @ {sg['start']:.1f}s" for sg in m.get("segments") or []], "reason": m.get("reason"),
+    } for m in matches]
+    files = [{"label": label, "url": f"/files/{job_id}/out/{name}"} for label, name in SHORT_FILES if (out_dir / name).exists()]
+    report = out_dir / "production_report.md"
+    return {
+        "script": (job.get("options") or {}).get("script_text", ""),
+        "beats": beats,
+        "fully_verified": qc.get("fully_verified"),
+        "verdict": qc.get("verdict"),
+        "style": style.get("status") or (read_json(settings.root / "style" / "style_profile.json") or {}).get("status", "not_measured"),
+        "files": files,
+        "cover": f"/files/{job_id}/out/cover.png" if (out_dir / "cover.png").exists() else None,
+        "report": report.read_text(encoding="utf-8") if report.exists() else None,
     }
 
 
@@ -383,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({
                     "jobs": db.list_jobs(200),
                     "counts": db.job_counts(),
-                    "formats": {k: v.get("label") for k, v in (s.get("formats") or {}).items() if not v.get("footage_only") and not v.get("topic_only")},
+                    "formats": {k: v.get("label") for k, v in (s.get("formats") or {}).items() if not v.get("footage_only") and not v.get("topic_only") and not v.get("script_only")},
                     "games": [{"id": gid, "name": g["name"], "short": g["short"]} for gid, g in games(s).items() if gid != MAIN],
                 })
             elif len(parts) == 3 and parts[:2] == ["api", "jobs"] and JOB_ID.match(parts[2]):
@@ -479,6 +515,19 @@ class Handler(BaseHTTPRequestHandler):
                     self._error(404, "not found")
                     return
                 self._json({"ok": True, "task": footage_task(s)}, 202)
+                return
+            if parts == ["api", "script-short"]:  # Script to Short: a pasted narration -> a finished Short
+                from ...modules.script_short.produce import create_script_job
+
+                adv = body.get("options") or {}
+                options = {k: adv[k] for k in ("no_search", "whisper", "allow_weak", "offline") if k in adv} | voice_options(adv)
+                if str(adv.get("fps") or "") in ("30", "60", "auto"):
+                    options["fps"] = str(adv["fps"])
+                if adv.get("llm") in ("ollama", "claude_code", "anthropic", "openai", "none"):
+                    options["llm"] = adv["llm"]
+                job_id = create_script_job(s, str(body.get("script") or ""), options=options)
+                spawn_runner(s, job_id)
+                self._json({"id": job_id}, 201)
                 return
             if parts == ["api", "topic"]:  # a comparison or a top list
                 from ..core.pipeline import create_topic_job

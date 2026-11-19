@@ -15,7 +15,7 @@ from ...app.core.utils import fmt_duration, normalize_ws
 from ...providers.llm import LLMProvider
 from ..thumbnail_generation.concepts import BANNED, CERTAIN
 
-LABEL = {"confirmed": "CONFIRMED", "reported": "REPORTED", "rumor": "RUMOR", "speculation": "SPECULATION"}
+LABEL = {"confirmed": "CONFIRMED", "reported": "REPORTED", "rumor": "RUMOR", "speculation": "SPECULATION", "unverified": "UNVERIFIED"}
 
 META_SYSTEM = """You write YouTube metadata for an independent GTA VI news channel ("news, verified").
 Titles are specific and curiosity-driven but never promise more than the video shows: no shock words,
@@ -75,7 +75,7 @@ def build_description(*, intro: str, fact_check: list[dict[str, Any]], chapters:
     top = sorted(fact_check, key=lambda c: -int(c.get("importance", 3)))[:6]
     if top:
         parts.append("WHAT IS CONFIRMED, REPORTED OR RUMOURED")
-        parts += [f"[{LABEL[c['classification']]}] {c['claim']} ({c['original_publisher']})" for c in top]
+        parts += [f"[{LABEL.get(c['classification'], c['classification'].upper())}] {c['claim']} ({c['original_publisher']})" for c in top]
         parts.append("")
     if chapters:
         parts.append("CHAPTERS")

@@ -125,7 +125,8 @@ def normalize_master(mix: np.ndarray, work: Path, out: Path, *, lufs: float, tru
     return {"input_lufs": measured["lufs"], "applied_gain_db": round(gain_db, 2), "limiter_max_reduction_db": round(reduction, 2), "output_lufs": final["lufs"], "output_true_peak_db": final["true_peak_db"], "output_lra": final["lra"]}
 
 
-def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, Any]], voice_path: Path, out_wav: Path) -> dict[str, Any]:
+def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, Any]], voice_path: Path, out_wav: Path, events: list[dict[str, Any]] | None = None, music_gain_db: float | None = None) -> dict[str, Any]:
+    """``events``: extra sound effects at absolute times ({"sfx", "at", "timing": "end_at"?}), e.g. on the beats of a Short."""
     voice, sr = read_wav(voice_path)
     voice = resample(voice, sr)
     n = len(voice)
@@ -143,7 +144,7 @@ def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, A
     # music: loop, duck, fade
     bed = _tile(_read_stereo(bed_path), n)
     activity = voice_activity(voice)
-    gain_db = float(settings.get("audio.music_gain_db", -19.0)) + float(settings.get("audio.music_duck_db", -9.0)) * activity
+    gain_db = float(music_gain_db if music_gain_db is not None else settings.get("audio.music_gain_db", -19.0)) + float(settings.get("audio.music_duck_db", -9.0)) * activity
     music = bed * (10 ** (gain_db / 20))[:, None]
     fade_in, fade_out = int(1.2 * WORK_SR), int(2.5 * WORK_SR)
     music[:fade_in] *= np.linspace(0, 1, min(fade_in, n))[:, None]
@@ -155,17 +156,20 @@ def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, A
     placed = {p["scene_number"]: p for p in master["scenes"]}
     cache: dict[str, np.ndarray] = {}
     used: list[dict[str, Any]] = []
-    for sc in scenes:
-        name = sc.get("sound_effect") or "none"
+    cues = [(sc["scene_number"], sc.get("sound_effect") or "none", placed[sc["scene_number"]]["start_time"], None) for sc in scenes]
+    cues += [(None, ev["sfx"], float(ev["at"]), ev.get("timing")) for ev in events or []]
+    for scene_n, name, start, how in cues:
         if name == "none":
             continue
         path = lib / "sound_effects" / f"{name}.wav"
         if not path.exists():
             continue
         clip = cache.setdefault(name, _read_stereo(path))
-        start = placed[sc["scene_number"]]["start_time"]
-        timing = SFX_TIMING.get(name, 0.0)
-        at_s = start - len(clip) / WORK_SR if timing == "end_at_cut" else start + float(timing)
+        if how is not None:  # an event: "at" is already the sound's start, or its end ("end_at")
+            at_s = start - len(clip) / WORK_SR if how == "end_at" else start
+        else:
+            timing = SFX_TIMING.get(name, 0.0)
+            at_s = start - len(clip) / WORK_SR if timing == "end_at_cut" else start + float(timing)
         at = int(round(at_s * WORK_SR))
         src = clip
         if at < 0:
@@ -175,7 +179,7 @@ def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, A
             continue
         g = 10 ** ((sfx_gain + SFX_EXTRA_DB.get(name, 0.0)) / 20)
         sfx[at:end] += src[: end - at] * g
-        used.append({"scene_number": sc["scene_number"], "sfx": name, "at": round(at / WORK_SR, 3)})
+        used.append({"scene_number": scene_n, "sfx": name, "at": round(at / WORK_SR, 3)})
 
     voice_st = np.repeat(voice[:, None], 2, axis=1)
     mix = voice_st + music + sfx

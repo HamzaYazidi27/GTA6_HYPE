@@ -45,3 +45,6 @@ assets/gta6_footage/*
 # other games' footage for comparisons (`python -m gta_factory footage update --game rdr2`)
 assets/game_footage/*
 !assets/game_footage/README.md
+
+# Script to Short: reference videos downloaded for style measurement only (never used in a video)
+assets/reference_videos/

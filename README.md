@@ -211,6 +211,39 @@ Les **bandes noires** des trailers au format cinéma sont détectées plan par p
 
 **Ajouter un jeu** (GTA IV, San Andreas…) : une entrée dans la section `games` de `config.yaml` (nom, mots qui le désignent dans la narration, dossier, trailers officiels), un fichier `knowledge/games/<id>.yaml` avec ses faits, et du footage. Réglages : section `topic` (nombre d'items, durée par item, sources lues).
 
+## Script to Short : ton script → un Short fini
+
+Tu colles ta narration, tu cliques **Générer** (carte **Script to Short** du dashboard), et l'usine livre un Short 9:16 prêt à publier où **chaque phrase passe sur les vraies images de GTA VI qui la montrent**, au moment exact où elle est dite.
+
+```bash
+python -m gta_factory short-from-script "GTA 5 never let you do any of these. Seven: go viral on in-game social media. ... Comment the number you're trying first."
+python -m gta_factory short-from-script --file mon_script.txt --fps 60
+```
+
+Les étapes (reprenables une par une, comme les autres vidéos) :
+
+| Étape | Ce qu'elle fait |
+|---|---|
+| `script_plan` | Découpe le script en **beats** (une idée visuelle, 1-3 s) sans changer un mot : accroche, numéros (7 → 1, « number one » annoncé puis révélé), items, comparaisons (« GTA 5 stopped at five » → images de GTA 5), appel à commenter. Pour chaque beat : ce qui doit être à l'écran, 1-3 descriptions d'image, les sosies à refuser (« un bateau à moteur » pour un jet ski). Modèle de `config.yaml`, ou règles si aucun modèle ne répond. |
+| `claims` | Vérifie les affirmations du script dans les articles (recherche d'actu) ; sinon elles sont marquées **non vérifiées**. |
+| `voice` | La voix (Kokoro par défaut), une prise par phrase. |
+| `sync` | Alignement **mot par mot** sur l'audio (faster-whisper, `pip install -e ".[align]"`) : chaque coupe tombe 0,05 s avant le mot qu'elle illustre. |
+| `footage` | Bibliothèque locale d'abord, puis nouvelles vidéos officielles Rockstar, puis l'index **CLIP** de toutes les images (2 par seconde, en cache). |
+| `match` | Pour chaque beat : la fenêtre de gameplay qui montre **exactement** ça (vote CLIP contre les sosies, l'action visible dès la première image), vérifiée par le modèle de vision local (Ollama) quand il tourne. Une correspondance incertaine **n'est pas montrée** (`--allow-weak` pour l'autoriser) ; un beat sans image vérifiée affiche ses mots sur le fond de la chaîne et est signalé **MANQUANT** : jamais d'image sans rapport à la place, jamais de capture d'écran présentée comme du gameplay. |
+| `edit` | Timeline et style : clips coupés à l'image près, zoom lent qui repart à chaque coupe, punch-in sur le numéro, étalonnage, badge « #n », sous-titres 1-3 mots, sons (riser vers le n°1, whoosh + impact sur chaque numéro, pop sur l'appel à commenter). EDL et manifeste des sources. |
+| `render`, `mix` | Remotion 1080×1920 (60 i/s si le footage est en 60), H.264 / AAC, −14 LUFS. |
+| `cover`, `short_metadata` | Couverture depuis la meilleure image vérifiée, titre, description (crédits du footage), hashtags. |
+| `short_qc` | Contrôle complet : footage sur chaque beat, vérifié ; **synchro image par image dans le MP4 rendu** (l'image à l'écran au milieu de chaque coupe est comparée à l'image source choisie) ; coupes avec leurs mots ; uniquement du gameplay du bon jeu ; droits documentés ; sous-titres = script mot pour mot ; pas de blanc ; pas de clip répété ; affirmations. **« Entièrement vérifié »** seulement si tout passe. |
+| `short_package` | `outputs/<job>/` : le MP4, `narration.wav`, `captions.srt`, `edit_decision_list.edl` (CMX 3600) + `.json`, `footage_manifest.json` (pour chaque coupe : phrase, temps, ce qui est montré, fichier, URL source, timestamp d'origine, début/fin du clip, confiance, statut de vérification, droits), `cover.png`, `title.txt`, `description.txt`, `hashtags.txt`, `production_report.md`, `sync_report.json`, `claims_report.md`, `rights_review.json`, `qc_report.json`. |
+
+Dans le dashboard, la carte du job montre chaque beat avec son footage et son statut, le MP4, tous les fichiers à télécharger et le rapport ; **Reprendre** relance l'étape qui a échoué, **Refaire depuis** n'importe quelle étape (par ex. `footage` après avoir ajouté des vidéos).
+
+**Le footage** : la qualité du Short dépend de ta bibliothèque. Ajoute tes captures de gameplay (`footage add ~/Captures/gta6 --own`) ou les vidéos officielles (`footage update`) puis `python -m gta_factory footage index` (index CLIP, une fois ; le modèle ~150 Mo est téléchargé au premier usage, `pip install -e ".[clip]"`). Une vidéo d'un autre créateur n'est utilisée que si tu as le droit (`--third-party-ok`) ; sinon elle est signalée « droits non documentés » et bloque « entièrement vérifié ».
+
+**Le style de montage** vient de `style/style_profile.json`. `python -m gta_factory style analyze https://www.youtube.com/@Tacticalpath --videos 8` télécharge les derniers Shorts de la chaîne de référence (pour analyse seulement, dans `assets/reference_videos/`, jamais utilisés dans une vidéo) et **mesure** : durée des plans et coupes/minute, zooms et punch-ins, flashs, position/taille/nombre de mots des sous-titres, débit de la voix, niveau de la musique sous la voix, sons sur les coupes, couleurs, longueur de l'accroche et de l'appel à commenter. Le profil (`status: measured`) et `style/style_reference_report.md` (URLs, temps des coupes, valeurs par vidéo) sont écrits ; l'éditeur en déduit ses réglages. Tant que l'analyse n'a pas tourné (ou si YouTube est inaccessible), le profil reste `not_measured` avec la raison, l'éditeur utilise le style par défaut de la chaîne, et chaque rapport le dit. On reproduit la grammaire de montage, jamais les vidéos, logos ou éléments de la chaîne de référence.
+
+Réglages : section `script_short` de `config.yaml` (`fps`, `vision_verify`, `fetch_new_official`, `style_profile`).
+
 ## La voix
 
 Dans le dashboard, carte **Voix de la narration** : choisis une voix et clique sur **▶** pour l'écouter lire la même phrase ; elle est utilisée pour les vidéos lancées ensuite. En ligne de commande : `python -m gta_factory voices --sample` (les meilleures voix Kokoro dans `outputs/voice_samples/`), puis `--tts` / `--voice` pour un job, ou `providers.tts` dans `config.yaml` pour toujours.

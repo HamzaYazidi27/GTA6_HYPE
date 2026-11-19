@@ -13,6 +13,7 @@ import {BarsScene, ClaimScene, HeadlineScene, KineticScene, QuoteScene, StatScen
 import {BrollScene, BulletsScene, ChapterScene, CountdownScene, OutroScene, SourcesScene, TakeawayScene, TimelineScene, VersusScene} from './scenesB';
 import {DetailScene} from './DetailScene';
 import {CompareScene, FootageScene, ItemScene} from './TopicScenes';
+import {ShotScene} from './ScriptScenes';
 import type {SceneData, SceneProps, Timeline} from './shared';
 
 ensureFonts();
@@ -38,10 +39,17 @@ export const SCENES: Record<string, React.FC<SceneProps>> = {
   compare: CompareScene,
   footage: FootageScene,
   item: ItemScene,
+  shot: ShotScene,
 };
 
 /** How much real footage is pushed back behind each template (big type reads on bright footage, dense panels need more). */
 const FOOTAGE_DIM: Record<string, number> = {footage: 0.06, item: 0.42, kinetic: 0.28, title: 0.38, chapter: 0.3, outro: 0.45, broll: 0.2, quote: 0.55, claim: 0.5, headline: 0.52, stat: 0.5, bullets: 0.55, countdown: 0.5, takeaway: 0.6, timeline: 0.62, versus: 0.62, sources: 0.62, bars: 0.64};
+
+/** A beat without footage already shows its words big: its captions are not repeated under them. */
+const shotPhrases = (scene: SceneData) => {
+  const missing: {from: number; to: number}[] = (scene.data?.beats ?? []).filter((b: any) => b.missing);
+  return scene.phrases.filter((p) => !missing.some((b) => p.s >= b.from && p.s < b.to));
+};
 
 const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, timeline}) => {
   const Comp = SCENES[scene.template] ?? KineticScene;
@@ -63,6 +71,16 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
         {timeline.burnCaptions ? <Captions phrases={scene.phrases} accent={accent} emphasis={scene.emphasisText} /> : null}
         <SceneOut durationInFrames={scene.durationFrames} />
         <TransitionIn kind={scene.transition} accent={accent} />
+      </AbsoluteFill>
+    );
+  }
+  if (scene.template === 'shot') {
+    // Script to Short: the matched gameplay full screen, styled by the scene itself; no grain, no dip between takes
+    return (
+      <AbsoluteFill style={{background: C.ink}}>
+        <Comp scene={scene} accent={accent} today={timeline.today} brand={timeline.brand} />
+        {scene.footage?.credit ? <FootageCredit credit={scene.footage.credit} besideLogo={!!timeline.brand.logo} /> : null}
+        {timeline.burnCaptions ? <Captions phrases={shotPhrases(scene)} accent={accent} emphasis={scene.emphasisText} style={timeline.captionStyle} /> : null}
       </AbsoluteFill>
     );
   }

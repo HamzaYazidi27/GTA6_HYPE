@@ -39,7 +39,8 @@
   .s-failed { background:rgba(255,77,109,.15); color:var(--coral); }
   .s-needs_review, .s-paused { background:rgba(255,170,43,.15); color:var(--amber); }
   .s-stopped { background:rgba(155,166,204,.15); color:var(--mute); }
-  .v-confirmed { color:var(--lime); } .v-reported { color:var(--cyan); } .v-rumor { color:var(--amber); } .v-speculation { color:var(--violet); }
+  .v-confirmed { color:var(--lime); } .v-reported { color:var(--cyan); } .v-rumor { color:var(--amber); } .v-speculation { color:var(--violet); } .v-unverified { color:var(--amber); }
+  .b-verified_vision, .b-verified_clip { color:var(--lime); } .b-general { color:var(--cyan); } .b-weak { color:var(--amber); } .b-missing { color:var(--coral); }
   .bar { height:6px; background:var(--ink2); border-radius:99px; overflow:hidden; margin:8px 0 4px; }
   .bar > div { height:100%; background:linear-gradient(90deg, var(--coral), var(--sun)); }
   .steps { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
@@ -86,6 +87,20 @@
       <div class="muted" id="voice-note" style="font-size:12px;margin-top:4px"></div>
     </div>
     <div class="card">
+      <h2>Script to Short</h2>
+      <textarea id="ss-script" rows="7" placeholder="Colle ta narration (en anglais), ex. « GTA 5 never let you do any of these. Seven: go viral on in-game social media. Six: … Comment the number you're trying first. »"></textarea>
+      <details style="margin-top:8px"><summary class="muted" style="cursor:pointer;font-size:12px">Réglages avancés</summary>
+        <div class="row" style="margin-top:6px;flex-wrap:nowrap"><select id="ss-fps"><option value="auto">Images/s : auto (60 si le footage est en 60)</option><option value="60">60 images/s</option><option value="30">30 images/s</option></select></div>
+        <div class="row" style="margin-top:6px"><select id="ss-llm"><option value="">Modèle : celui de config.yaml</option><option value="ollama">Ollama (local)</option><option value="claude_code">Claude Code</option><option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="none">Aucun (découpage par règles)</option></select></div>
+        <label class="chk"><input type="checkbox" id="ss-weak"> Montrer aussi les correspondances incertaines (marquées dans le rapport)</label>
+        <label class="chk"><input type="checkbox" id="ss-nosearch"> Ne pas fact-checker les affirmations sur le web</label>
+        <label class="chk"><input type="checkbox" id="ss-offline"> Ne pas chercher de nouvelles vidéos officielles</label>
+        <label class="chk"><input type="checkbox" id="ss-nowhisper"> Timings des mots estimés (plus rapide, moins précis)</label>
+      </details>
+      <p class="muted" style="margin:6px 0 0;font-size:12px">Voix, alignement mot par mot, vrai footage GTA VI vérifié image par image sur chaque phrase, montage, sous-titres, sons, contrôle qualité : MP4 1080×1920, SRT, EDL, manifeste des sources, titre et description.</p>
+      <div class="row" style="margin-top:8px"><button id="ss-go">Générer</button><span id="ss-msg" class="muted"></span></div>
+    </div>
+    <div class="card">
       <h2>Nouvelle vidéo</h2>
       <textarea id="urls" rows="3" placeholder="URL(s) d'article sur UNE histoire, une par ligne"></textarea>
       <div class="row" style="margin-top:8px"><select id="format"></select></div>
@@ -126,8 +141,8 @@ async function api(method, path, body) {
   return data;
 }
 const STATUS_FR = {completed:'terminé', running:'en cours', queued:'en attente', failed:'échec', needs_review:'à relire', paused:'en pause', stopped:'arrêté'};
-const STEP_FR = {research:'Sources', outline:'Items', details:'Détails', details_script:'Script', details_scenes:'Storyboard', extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
-const VERDICT_FR = {confirmed:'CONFIRMÉ', reported:'RAPPORTÉ', rumor:'RUMEUR', speculation:'SPÉCULATION'};
+const STEP_FR = {script_plan:'Analyse du script', claims:'Vérification des affirmations', sync:'Alignement des mots', footage:'Recherche du footage', match:'Correspondance des scènes', edit:'Timeline et style de montage', cover:'Couverture', short_metadata:'Titre et description', short_qc:'Contrôle qualité', short_package:'Fichiers', research:'Sources', outline:'Items', details:'Détails', details_script:'Script', details_scenes:'Storyboard', extract:'Articles', analyze:'Lecture', corroborate:'Corroboration', fact_check:'Fact-check', select:'Nouveauté', script:'Script', scenes:'Storyboard', rights:'Droits', voice:'Voix', timeline:'Timing', render:'Rendu', mix:'Mixage', thumbnail:'Miniatures', metadata:'Métadonnées', qc:'Contrôle qualité', package:'Paquet'};
+const VERDICT_FR = {confirmed:'CONFIRMÉ', reported:'RAPPORTÉ', rumor:'RUMEUR', speculation:'SPÉCULATION', unverified:'NON VÉRIFIÉ'};
 let current = null, timer = null, formats = {}, games = [];
 
 async function loadJobs() {
@@ -196,9 +211,29 @@ function outlineCard(o) {
       el('td', {class: 'muted'}, [...(it.claim_ids || []), ...(it.game_fact_ids || [])].join(' ')))))));
 }
 
+const BEAT_FR = {verified_vision:'vérifié (vision)', verified_clip:'vérifié (CLIP)', general:'gameplay libre', weak:'incertain', missing:'MANQUANT'};
+function shortCard(d) {
+  const sh = d.short;
+  if (!sh) return null;
+  const card = el('div', {class: 'card'}, el('h2', {}, 'Script to Short'));
+  if (sh.verdict) card.append(el('p', {}, el('b', {class: sh.fully_verified ? 'qc-pass' : 'qc-warning'}, sh.fully_verified ? '✓ Entièrement vérifié' : '! Pas entièrement vérifié'), el('span', {class: 'muted'}, ' · contrôle qualité ' + sh.verdict.toUpperCase())));
+  card.append(el('p', {class: sh.style === 'measured' ? 'muted' : 'qc-warning', style: 'font-size:12px'}, sh.style === 'measured' ? 'Style de montage mesuré sur la chaîne de référence.' : 'Style de la chaîne de référence pas encore mesuré : montage par défaut (python -m gta_factory style analyze).'));
+  if (sh.beats.length) card.append(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, 'Temps'), el('th', {}, 'Narration → à l\'écran'), el('th', {}, 'Footage'), el('th', {}, 'Statut'))),
+    el('tbody', {}, sh.beats.map((b) => el('tr', {},
+      el('td', {}, String(b.beat)),
+      el('td', {class: 'muted'}, b.start != null ? b.start.toFixed(2) + '–' + b.end.toFixed(2) + 's' : ''),
+      el('td', {}, b.text, el('div', {class: 'muted'}, b.concept || '')),
+      el('td', {class: 'muted'}, b.footage.length ? b.footage.join(', ') : (b.reason || '')),
+      el('td', {class: 'b-' + b.status}, (BEAT_FR[b.status] || b.status) + (b.confidence ? ' · ' + b.confidence.toFixed(2) : '')))))));
+  if (sh.files.length) card.append(el('div', {class: 'chips', style: 'margin-top:10px'}, sh.files.map((f) => el('a', {class: 'chip have', href: f.url, target: '_blank', download: ''}, f.label))));
+  if (d.video) card.append(el('div', {class: 'row', style: 'margin-top:10px'}, el('a', {href: d.video, download: ''}, el('button', {}, 'Télécharger le MP4'))));
+  if (sh.report) card.append(el('details', {style: 'margin-top:10px'}, el('summary', {class: 'muted', style: 'cursor:pointer'}, 'Rapport de production'), el('pre', {class: 'log'}, sh.report)));
+  return card;
+}
+
 function scriptCard(d) {
   const sc = d.script;
-  if (!sc) return null;
+  if (!sc || !sc.word_budget) return null;
   const card = el('div', {class: 'card'}, el('h2', {}, `Script · ${sc.word_budget.actual} mots · audit ${sc.quality.audit_verdict}`), el('p', {}, el('b', {}, sc.title)));
   const areas = {};
   for (const s of sc.sections) {
@@ -239,6 +274,7 @@ async function openJob(id) {
   try { d = await api('GET', '/api/jobs/' + id); } catch (e) { $('#detail').replaceChildren(el('div', {class: 'err'}, e.message)); return; }
   const log = await api('GET', `/api/jobs/${id}/log?lines=120`).catch(() => ({lines: []}));
   const view = el('div', {}, el('h2', {style: 'margin:0 0 14px;font:800 26px/1.1 "Barlow Condensed",sans-serif'}, d.job.title || id), stepsCard(d));
+  const sh = shortCard(d); if (sh) view.append(sh);
   view.append(el('div', {class: 'grid2'}, el('div', {}, storyCard(d.story), outlineCard(d.outline), factCard(d.fact_check)), el('div', {}, packageCard(d), qcCard(d.qc))));
   const sc = scriptCard(d); if (sc) view.append(sc);
   view.append(el('div', {class: 'card'}, el('h2', {}, 'Journal'), el('pre', {class: 'log'}, log.lines.join('\n'))));
@@ -427,6 +463,19 @@ $('#t-go').addEventListener('click', () => act(async () => {
   if (options.no_search && !sources.length) throw new Error('Sans recherche, colle au moins une source (URL)');
   const r = await api('POST', '/api/topic', {topic, vs: $('#t-vs').value || null, sources, count: parseInt($('#t-count').value) || null, format: $('#t-format').value || null, options: {...options, ...voiceChoice()}});
   $('#t-topic').value = ''; $('#t-sources').value = ''; $('#t-msg').textContent = 'job lancé';
+  current = r.id;
+}));
+$('#ss-go').addEventListener('click', () => act(async () => {
+  const script = $('#ss-script').value.trim();
+  if (script.split(/\s+/).length < 8) throw new Error('Colle la narration complète du Short (au moins une phrase d\'accroche et un point).');
+  const options = {fps: $('#ss-fps').value};
+  if ($('#ss-llm').value) options.llm = $('#ss-llm').value;
+  if ($('#ss-weak').checked) options.allow_weak = true;
+  if ($('#ss-nosearch').checked) options.no_search = true;
+  if ($('#ss-offline').checked) options.offline = true;
+  if ($('#ss-nowhisper').checked) options.whisper = false;
+  const r = await api('POST', '/api/script-short', {script, options: {...options, ...voiceChoice()}});
+  $('#ss-msg').textContent = 'génération lancée';
   current = r.id;
 }));
 loadVoices();

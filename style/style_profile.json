@@ -1,0 +1,45 @@
+{
+  "status": "not_measured",
+  "reason": "no video could be listed from https://www.youtube.com/@Tacticalpath - https://www.youtube.com/@Tacticalpath/shorts: ERROR: [youtube:tab] @Tacticalpath/shorts: Unable to download API page: ('Unable to connect to proxy', OSError('Tunnel connection failed: 403 Forbidden (agent proxy: no rule or network setting allows this host)')) (cause",
+  "reference": {
+    "channel": "https://www.youtube.com/@Tacticalpath",
+    "videos": []
+  },
+  "how_to_measure": "python -m gta_factory style analyze https://www.youtube.com/@Tacticalpath --videos 8",
+  "editor": {
+    "shot_hold_s": 2.2,
+    "max_beat_s": 4.5,
+    "zoom": {
+      "push_per_s": 0.025,
+      "punch_on_number": 1.12,
+      "punch_frames": 4
+    },
+    "grade": {
+      "saturation": 1.0,
+      "contrast": 1.0,
+      "brightness": 0.0,
+      "sharpen": 0.0
+    },
+    "captions": {
+      "top": 0.69,
+      "size": 76,
+      "max_words": 3,
+      "uppercase": true,
+      "highlight": "accent"
+    },
+    "footage_dim": 0.06,
+    "sfx": {
+      "number": "impact",
+      "item_cut": "whoosh",
+      "inner_cut": "none",
+      "cta": "pop",
+      "hook": "riser"
+    },
+    "music_gain_db": -19.0,
+    "number_badge": true,
+    "item_transition": "cut",
+    "sentence_gap_s": 0.08,
+    "cut_lead_s": 0.05
+  },
+  "analysis_attempted_at": "2026-11-19T16:11:07+00:00"
+}

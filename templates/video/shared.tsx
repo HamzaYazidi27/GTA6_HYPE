@@ -31,6 +31,8 @@ export type SceneData = {
   footageB?: {src: string; kind: 'video' | 'photo'; credit: string};
 };
 
+export type CaptionStyle = {top: number; size: number; uppercase: boolean};
+
 export type Timeline = {
   format: 'long' | 'short';
   fps: number;
@@ -41,6 +43,8 @@ export type Timeline = {
   today: string;
   brand: Brand;
   burnCaptions: boolean;
+  /** Script to Short: caption position (fraction of the height), size (px at 1080 wide) and case, from the style profile */
+  captionStyle?: CaptionStyle;
   chapters: {title: string; startFrame: number}[];
   scenes: SceneData[];
 };

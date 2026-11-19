@@ -147,7 +147,7 @@ export const ProgressRail: React.FC<{frame: number; total: number; chapters: {ti
 export type Phrase = {s: number; e: number; words: {w: string; s: number; e: number}[]};
 
 /** Burned-in captions: short phrases, the spoken word lights up. Timings are scene-local frames. */
-export const Captions: React.FC<{phrases: Phrase[]; accent: string; emphasis?: string}> = ({phrases, accent, emphasis}) => {
+export const Captions: React.FC<{phrases: Phrase[]; accent: string; emphasis?: string; style?: {top: number; size: number; uppercase: boolean}}> = ({phrases, accent, emphasis, style}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const {u, vertical, H} = useLayout();
@@ -155,9 +155,10 @@ export const Captions: React.FC<{phrases: Phrase[]; accent: string; emphasis?: s
   if (!phrase) return null;
   const pop = spring({frame: frame - phrase.s, fps, config: {damping: 14, stiffness: 240, mass: 0.5}});
   const emph = (emphasis ?? '').toLowerCase().split(/\s+/).filter(Boolean);
-  const size = (vertical ? 76 : 46) * u;
+  const size = (style ? style.size : vertical ? 76 : 46) * u;
+  const top = style ? H * style.top : vertical ? H * 0.69 : undefined;
   return (
-    <div style={{position: 'absolute', left: 0, right: 0, top: vertical ? H * 0.69 : undefined, bottom: vertical ? undefined : 78 * u, display: 'flex', justifyContent: 'center', padding: `0 ${(vertical ? 60 : 200) * u}px`}}>
+    <div style={{position: 'absolute', left: 0, right: 0, top, bottom: top === undefined ? 78 * u : undefined, display: 'flex', justifyContent: 'center', padding: `0 ${(vertical ? 60 : 200) * u}px`}}>
       <div
         style={{
           display: 'flex',
@@ -175,7 +176,7 @@ export const Captions: React.FC<{phrases: Phrase[]; accent: string; emphasis?: s
           fontWeight: vertical ? 900 : 700,
           fontSize: size,
           lineHeight: 1.12,
-          textTransform: vertical ? 'uppercase' : 'none',
+          textTransform: (style ? style.uppercase : vertical) ? 'uppercase' : 'none',
         }}
       >
         {phrase.words.map((w, i) => {
