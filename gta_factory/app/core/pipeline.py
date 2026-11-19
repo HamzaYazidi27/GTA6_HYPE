@@ -298,7 +298,13 @@ def step_extract(ctx: JobContext) -> dict[str, Any]:
         raise ExtractionError(f"None of the {len(urls)} article(s) could be read. First error: {first['error']}", hint=first.get("hint") or "Pass the article text with --text-file URL=path.")
     write_json(ctx.paths.articles, [a.to_dict() for a in articles])
     ctx.db.update_job(ctx.job_id, title=articles[0].title[:140])
-    return {"articles": len(articles), "words": sum(a.word_count for a in articles), "failed": failures, "seen_before": seen_before}
+    media = {"used": [], "left_out": []}
+    if s.get("footage.enabled", True) and s.get("footage.article_media", True) and ctx.options.get("article_media", True):
+        from ...modules.article_extraction.media import download_article_media
+
+        media = download_article_media(s, articles, job_id=ctx.job_id, third_party_ok=bool(ctx.options.get("third_party_media")), log=ctx.log)
+    write_json(ctx.paths.root / "sources" / "media.json", media)
+    return {"articles": len(articles), "words": sum(a.word_count for a in articles), "failed": failures, "seen_before": seen_before, "article_media": len(media["used"])}
 
 
 def step_research(ctx: JobContext) -> dict[str, Any]:
@@ -588,7 +594,7 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
         checker = overlay_checker(ctx.settings, log=ctx.log)
         if checker is None:
             ctx.log("footage: no local vision model running: picked shots are not checked for watermarks or burned-in text (start Ollama)")
-    footage = assign_footage(ctx.settings, scenes, log=ctx.log, checker=checker)
+    footage = assign_footage(ctx.settings, scenes, log=ctx.log, checker=checker, job=ctx.job_id)
     if ctx.kind == "topic" and footage["summary"].get("enabled"):
         bare = [sc["scene_number"] for sc in scenes if (sc.get("footage_pair") and not (sc.get("footage") and sc.get("footage_b"))) or (sc.get("footage_game") and not sc.get("footage"))]
         if bare:
@@ -907,6 +913,11 @@ def _focus_point(ctx: JobContext) -> str:
         if arts and arts[0].source_tier == "other":
             point += (f"\n- [ ] La source principale ({arts[0].publisher}) n'est pas dans la liste des médias fiables : ses affirmations sont au mieux"
                       " SPECULATION ou RUMOR à l'écran. Si un média fiable couvre la même info (Eurogamer, IGN, GamesRadar…), relance avec son article en premier.")
+    media = read_json(ctx.paths.root / "sources" / "media.json", {}) or {}
+    if media.get("used"):
+        point += "\n- [ ] Images / vidéos prises dans les articles (montrées là où la narration en parle) : " + ", ".join(f"`{m['file']}` ({m.get('credit', '')})" for m in media["used"][:8]) + ". Vérifie qu'elles montrent bien ce qui est dit."
+    if media.get("left_out"):
+        point += "\n- [ ] Médias des articles laissés de côté : " + "; ".join(f"{m['kind']} ({m['reason']})" for m in media["left_out"][:6]) + "."
     marked = ((read_json(ctx.paths.rights, {}) or {}).get("footage") or {}).get("reuploads") or []
     if marked:
         point += ("\n- [ ] Footage non utilisé (re-upload d'une autre chaîne ou d'un post, logo / texte incrusté) : " + ", ".join(f"`{f}`" for f in marked[:10])

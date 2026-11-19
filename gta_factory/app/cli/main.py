@@ -200,9 +200,11 @@ def _options(args: argparse.Namespace) -> dict[str, Any]:
             url, path = item.split("=", 1)
             tf[url.strip()] = str(Path(path).expanduser().resolve())
         opts["text_files"] = tf
-    for key in ("force", "no_search"):
+    for key in ("force", "no_search", "third_party_media"):
         if getattr(args, key, False):
             opts[key] = True
+    if getattr(args, "no_article_media", False):
+        opts["article_media"] = False
     if getattr(args, "no_audit", False):
         opts["audit"] = False
     if getattr(args, "no_whisper", False):
@@ -702,6 +704,29 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fresh(args: argparse.Namespace) -> int:
+    import json as _json
+    from datetime import datetime as _dt
+
+    from ...modules.fresh import fresh_stories, render_text
+
+    s = get_settings()
+    cats = s.get("fresh.categories", {}) or {}
+    if args.category and args.category not in cats and args.category != "news":
+        raise FactoryError(f"unknown category '{args.category}'", hint=f"Use one of: {', '.join(cats)}")
+    result = fresh_stories(s, hours=args.hours, only=args.category, log=_print)
+    out = s.outputs_dir / "fresh"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"fresh-{_dt.now().strftime('%Y%m%d-%H%M')}.json"
+    path.write_text(_json.dumps({c: [st.to_dict() for st in v] for c, v in result.items()}, indent=2, ensure_ascii=False), encoding="utf-8")
+    if args.json:
+        print(path.read_text(encoding="utf-8"))
+        return 0
+    _print(render_text(result, cats, per_category=args.n or int(s.get("fresh.per_category", 5))))
+    _print(f"\n(saved: {path})")
+    return 0
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     from ..dashboard.server import serve
 
@@ -731,6 +756,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--text-file", action="append", metavar="URL=PATH", help="use saved article text for a paywalled/blocked URL (repeatable)")
         sp.add_argument("--force", action="store_true", help="produce even if the story is a duplicate or scores below the novelty threshold")
         sp.add_argument("--no-search", action="store_true", help="skip the corroboration search")
+        sp.add_argument("--no-article-media", action="store_true", help="do not download the pictures and videos of the articles")
+        sp.add_argument("--third-party-media", action="store_true", help="also use the articles' third-party posts and pictures (only if you have the right to)")
         sp.add_argument("--no-audit", action="store_true", help="skip the standards-editor audit of the script (faster, less safe)")
         sp.add_argument("--no-whisper", action="store_true", help="skip audio-based subtitle alignment")
         sp.add_argument("--llm", help="LLM provider for this job (ollama = free local default, claude_code, anthropic, openai)")
@@ -865,6 +892,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--again", action="store_true", help="upload again even though it was already published")
     sp.add_argument("--dry-run", action="store_true", help="show exactly what would be sent, without uploading")
     sp.set_defaults(fn=cmd_publish)
+
+    sp = sub.add_parser("fresh", help="the freshest GTA 6 stories worth a video, by category (news, secrets, map, missions, heists)")
+    sp.add_argument("--hours", type=float, help="only the last N hours (default fresh.hours: 48)")
+    sp.add_argument("--category", "-c", help="news | secrets | map | missions | heists")
+    sp.add_argument("-n", type=int, help="stories per category (default fresh.per_category)")
+    sp.add_argument("--json", action="store_true", help="print the JSON instead of the summary")
+    sp.set_defaults(fn=cmd_fresh)
 
     sp = sub.add_parser("dashboard", help="local web dashboard")
     sp.add_argument("--host")

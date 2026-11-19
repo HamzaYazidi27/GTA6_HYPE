@@ -99,6 +99,41 @@ python -m gta_factory footage list            # ce que contient la bibliothèque
   Les trailers de Rockstar et tes captures `--own` ne sont pas concernés par le 2 (le HUD du jeu n'est pas un logo). Le `REVIEW.md` liste tout ce qui a été écarté.
 - ⚠️ Les images appartiennent à Rockstar/Take-Two. Les chaînes d'actu les utilisent couramment, mais YouTube peut poser une **revendication Content ID** (monétisation reversée à Rockstar) ; c'est rare qu'une vidéo soit bloquée, mais c'est possible.
 
+## Trouver la prochaine vidéo : `fresh`
+
+```bash
+python -m gta_factory fresh                  # les histoires GTA 6 des dernières 48 h, par catégorie
+python -m gta_factory fresh -c map --hours 12
+```
+
+Catégories (section `fresh` de `config.yaml`, modifiables) : **news** (patchs, ventes, annonces), **secrets** (easter eggs, mystères), **map**, **missions** (guides), **heists** (braquages, argent). Sources lues en une fois, par RSS uniquement :
+
+- les flux des médias (`sources.feeds` + `fresh.feeds` : IGN, GameSpot, VGC, Eurogamer, PC Gamer, Kotaku, GamesRadar+, Insider Gaming, Polygon, Push Square, Pure Xbox) ;
+- Bing News et Google News pour les mots-clés de chaque catégorie ;
+- **r/GTA6** (rising / new) : la communauté trouve les secrets, les coins de la carte et les gains des braquages en premier. Ce sont des **idées à vérifier dans ton jeu**, jamais une source citée ni des images utilisées.
+
+Chaque histoire (les articles qui parlent de la même chose sont regroupés) reçoit un score de 0 à 100 : fraîcheur, fiabilité de la meilleure source (officielle > média fiable > le reste), nombre de médias qui en parlent, bruit dans la communauté, et **−40 si la chaîne a déjà fait la vidéo**. Pour chacune, la commande prête à lancer, avec les articles fiables en premier :
+
+```
+[ 63] How to Get All GTA 6 Ultimate Edition Bonuses: Claim Vintage City Rewards  (2 h)
+      sources: Insider Gaming (secondary)
+      python -m gta_factory new "https://insider-gaming.com/gta-6-ultimate-edition-vintage-city" --format guide
+```
+
+Le résultat complet est aussi enregistré dans `outputs/fresh/`.
+
+## Les images et vidéos des articles
+
+Ce que montre un article (le menu de sauvegarde, un coin de la carte, l'écran d'un braquage) est souvent exactement ce dont parle la vidéo. À l'étape `extract`, l'usine lit la page et garde :
+
+- **l'image principale et les images du texte de l'article** (pas les « related stories », menus et avatars), dans leur plus grande taille ;
+- **créditée à Rockstar** (« Image credit: Rockstar Games »), ou publiée par un **média fiable** sur GTA (« Image: GamesRadar+ ») ;
+- **les vidéos YouTube de Rockstar** et **les posts des comptes Rockstar**.
+
+Jamais : une **photo d'agence** (Getty, AP, Reuters… licenciée au média, pas à toi), une image qui n'est pas clairement sur GTA, le **post ou la chaîne de quelqu'un d'autre** (X, Instagram, TikTok, une chaîne fan), un site hors de la liste des médias fiables. `--third-party-media` les autorise pour un job si tu as le droit de les utiliser ; `--no-article-media` désactive tout.
+
+Les fichiers vont dans `assets/gta6_footage/photos/articles/<job>/` (et `videos/articles/<job>/`) et ne servent **qu'à la vidéo de ce job** : chacun est montré sur la scène qui parle de ce qu'il montre (au moins deux mots en commun avec sa légende), et l'image principale sur une des premières scènes qui n'a rien de précis à montrer. Ils passent les mêmes contrôles que le reste du footage (logo ou post incrusté, et le modèle de vision écarte aussi une **photo réelle** qui n'est pas une image du jeu). Le `REVIEW.md` liste ce qui a été pris et ce qui a été laissé, avec la raison.
+
 ## Un seul sujet et du rythme (toutes les vidéos)
 
 - **Un seul sujet.** L'analyse marque chaque affirmation et chaque citation : `core` (le sujet de l'article), `context` ou `off_topic` (une autre news dans la page : encadrés « related », promos, anniversaires…). Les `off_topic` sortent de la vidéo et sont listées dans le `REVIEW.md`. Le hook doit s'appuyer sur une affirmation `core` (sinon le script est réécrit, et le contrôle qualité `script.focus` bloque le statut `completed`).

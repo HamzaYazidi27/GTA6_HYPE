@@ -492,7 +492,8 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
                 continue
             known = old_photos.get((rel, st.st_size))
             crop = known["crop"] if known else photo_crop(p)
-            photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop, **({"allow_overlay": True} if side.get("allow_overlay") else {})}
+            photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop, **({"allow_overlay": True} if side.get("allow_overlay") else {}),
+                     **({"article_media": side["article_media"], "caption": side.get("caption", ""), "role": side.get("role", "")} if side.get("article_media") else {})}
             if side.get("from_video"):  # a still pulled from a trailer: same picture as that shot
                 photo.update(from_video=str(side["from_video"]), time=float(side.get("time") or 0), video_tags=canonical_tags(side.get("video_tags"), vocab))
             photos.append(photo)
@@ -622,8 +623,11 @@ def still_shot_key(index: dict[str, Any], photo: dict[str, Any]) -> str | None:
     return shot_key(v["file"], v.get("size", 0), sh) if sh else None
 
 
-def load_items(settings: Any, index: dict[str, Any] | None = None) -> dict[str, Any]:
+def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str | None = None) -> dict[str, Any]:
     """Every usable shot and photo with its weighted tags, plus the vocabulary that knows all of them.
+
+    Pictures and videos taken from a job's articles (``article_media``) belong to that job only: they are
+    left out for any other video, and marked ``story`` for their own job's (``job``).
 
     ``{"shots": [...], "photos": [...], "vocab": Vocabulary, "index": index}``. Each item has
     ``tags`` = {concept: weight} (see W_ITEM / W_AUTO / W_VIDEO / W_OBJECT).
@@ -644,20 +648,33 @@ def load_items(settings: Any, index: dict[str, Any] | None = None) -> dict[str, 
         add(tags, [o for o in a.get("objects") or [] if o not in GENERIC_OBJECTS], W_OBJECT)
 
     def overlaid(key: str, allowed: Any) -> bool:
-        """The vision tagger saw a watermark, channel logo or burned-in subtitles there."""
-        return bool((auto.get(key) or {}).get("overlay")) and not allowed
+        """The vision tagger saw a watermark, a post or burned-in subtitles there, or a real-world photo (not the game)."""
+        seen = auto.get(key) or {}
+        return (bool(seen.get("overlay")) and not allowed) or seen.get("game") is False
+
+    def belongs(story_job: Any) -> bool | None:
+        """None: not article media; True: this job's; False: another job's (never shown)."""
+        return None if not story_job else story_job == job
 
     shots, photos = [], []
     for v in index.get("videos", []):
+        side = v.get("sidecar") or {}
+        mine = belongs(side.get("article_media"))
+        if mine is False:
+            continue
         for sh in v.get("shots", []):
-            if not sh.get("ok") or overlaid(shot_key(v["file"], v.get("size", 0), sh), (v.get("sidecar") or {}).get("allow_overlay")):
+            if not sh.get("ok") or overlaid(shot_key(v["file"], v.get("size", 0), sh), side.get("allow_overlay")):
                 continue
             tags: dict[str, float] = {}
             add(tags, v.get("tags"), W_VIDEO)
             add_auto(tags, shot_key(v["file"], v.get("size", 0), sh))
             add(tags, sh.get("tags"), W_ITEM)
-            shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "crop": sh.get("crop"), "tags": tags, "key": f"{v['file']}@{sh['s']}", "autokey": shot_key(v["file"], v.get("size", 0), sh)})
+            shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "crop": sh.get("crop"), "tags": tags, "key": f"{v['file']}@{sh['s']}", "autokey": shot_key(v["file"], v.get("size", 0), sh),
+                          **({"story": True, "caption": side.get("caption", ""), "role": side.get("role", "")} if mine else {})})
     for p in index.get("photos", []):
+        mine = belongs(p.get("article_media"))
+        if mine is False:
+            continue
         own = photo_key(p["file"], p.get("size", 0))
         if overlaid(own if own in auto else (still_shot_key(index, p) or own), p.get("allow_overlay")):
             continue
@@ -665,7 +682,7 @@ def load_items(settings: Any, index: dict[str, Any] | None = None) -> dict[str, 
         add(tags, p.get("video_tags"), W_VIDEO)
         add_auto(tags, own if own in auto else (still_shot_key(index, p) or own))
         add(tags, p.get("tags"), W_ITEM)
-        photos.append({"kind": "photo", **p, "path": str(cropped_photo(root, p["file"], p.get("crop"))), "source_path": str(root / p["file"]), "tags": tags, "key": p["file"], "autokey": own if own in auto or not still_shot_key(index, p) else still_shot_key(index, p)})
+        photos.append({"kind": "photo", **p, "path": str(cropped_photo(root, p["file"], p.get("crop"))), "source_path": str(root / p["file"]), "tags": tags, "key": p["file"], "autokey": own if own in auto or not still_shot_key(index, p) else still_shot_key(index, p), **({"story": True} if mine else {})})
     every_tag = {t for it in shots + photos for t in it["tags"]}
     return {"shots": shots, "photos": photos, "vocab": vocab.with_tags(every_tag), "index": index}
 

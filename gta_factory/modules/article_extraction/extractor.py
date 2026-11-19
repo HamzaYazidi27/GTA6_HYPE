@@ -70,6 +70,7 @@ class Article:
     fetched_at: str
     content_hash: str
     warnings: list[str] = field(default_factory=list)
+    media: list[dict[str, Any]] = field(default_factory=list)  # pictures, videos and embedded posts of the page (media.find_media)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -274,7 +275,17 @@ def parse_article(html: str, url: str, final_url: str | None = None, *, tier_of=
         fetched_at=now_iso(),
         content_hash=sha1(text)[:16],
         warnings=warnings,
+        media=_media(html, final_url),
     )
+
+
+def _media(html: str, page_url: str) -> list[dict[str, Any]]:
+    try:
+        from .media import find_media
+
+        return find_media(html, page_url)
+    except Exception:  # pictures are a bonus: never lose the article over them
+        return []
 
 
 def extract_article(url: str, *, tier_of=None, allow_render: bool = True) -> Article:

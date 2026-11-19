@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...app.core.errors import RenderError
-from ...app.core.utils import stable_hash
+from ...app.core.utils import stable_hash, tokens
 from .library import DEFAULT_CREDIT, crop_filter, footage_dir, library_summary, load_items
 from .vocabulary import load_vocabulary, word_tokens
 
@@ -172,10 +172,10 @@ def best_item(want: dict[str, float], pool: list[dict[str, Any]], used: dict[str
 class _Library:
     """One footage library (GTA 6, or another game of a comparison) while footage is assigned to the scenes."""
 
-    def __init__(self, settings: Any, gid: str, *, ledger: dict[str, dict[str, Any]], cfg: dict[str, Any], max_clip: float, min_piece: float, photo_share: float):
+    def __init__(self, settings: Any, gid: str, *, ledger: dict[str, dict[str, Any]], cfg: dict[str, Any], max_clip: float, min_piece: float, photo_share: float, job: str | None = None):
         self.settings = settings
         self.gid = gid
-        self.items = load_items(settings)
+        self.items = load_items(settings, job=job)
         self.items["known"] = set(load_vocabulary(settings).concepts)
         self.summary = library_summary(self.items["index"])
         self.shots, self.photos = self.items["shots"], self.items["photos"]
@@ -207,7 +207,7 @@ class _Library:
         what = "Real GTA 6 footage (footage.ratio)" if self.gid == "gta6" else f"Real {self.name} footage, shown while the comparison talks about it"
         e = self.ledger.setdefault(aid, {
             "asset_id": aid,
-            "kind": "official_screenshot" if it["kind"] == "photo" else "official_trailer",
+            "kind": ("article_picture" if it.get("story") else "official_screenshot") if it["kind"] == "photo" else ("article_video" if it.get("story") else "official_trailer"),
             "file_path": str(self.root / file_rel),
             "origin_url": (it.get("source_url") if it["kind"] == "photo" else it["video"].get("source_url")) or "",
             "license": "Official Rockstar Games promotional material, used for news commentary (short excerpts, transformed with graphics, credited)",
@@ -256,6 +256,18 @@ class _Library:
                 got += 1.5  # enough screenshots for the fastest rhythm (a Short shows each ~1.6 s)
         return pieces, its
 
+    def assign_story(self, sc: dict[str, Any], it: dict[str, Any]) -> dict[str, Any]:
+        """A picture or video from the job's own articles, on the scene that talks about it."""
+        n = sc["scene_number"]
+        self.used[it["key"]] = self.used.get(it["key"], 0) + 1
+        if it["kind"] == "photo":
+            return {"kind": "photo", "file": it["path"], "credit": it.get("credit") or DEFAULT_CREDIT, "asset_ids": [self.ledger_add(it, n)], "beats": [], "story": True}
+        seq = self.by_video.get(it["file"]) or [it]
+        start = seq.index(it) if it in seq else 0
+        its = seq[start:] + seq[:start]
+        aids = list(dict.fromkeys(self.ledger_add(s, n) for s in its))
+        return {"kind": "video", "beats": [], "fill": [_piece(s, self.max_clip) for s in its], "credit": it["video"].get("credit") or DEFAULT_CREDIT, "asset_ids": aids, "story": True}
+
     def assign(self, sc: dict[str, Any], est: float, beats_plan: list[dict[str, Any]], matched: list[dict[str, Any]], *, allow_photo: bool = True) -> dict[str, Any] | None:
         """The footage of one scene (a whole screenshot, or a clip of beats + filler), or None when the library has nothing."""
         n = sc["scene_number"]
@@ -300,21 +312,63 @@ class _Library:
         return {"kind": "video", "beats": beats, "fill": fill, "credit": credit, "asset_ids": aids, **extra}
 
 
-def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None, checker: Callable[[Any, list[dict[str, Any]]], int] | None = None) -> dict[str, Any]:
+def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None, checker: Callable[[Any, list[dict[str, Any]]], int] | None = None, job: str | None = None) -> dict[str, Any]:
     """See ``_assign``. With a ``checker`` (``autotag.overlay_checker``), every picked shot or screenshot that
     was never checked for a watermark, a social-media post or burned-in subtitles is checked; when some are
     found, the footage is picked again without them."""
-    result, libs = _assign(settings, scenes, log=log)
+    result, libs = _assign(settings, scenes, log=log, job=job)
     if checker is None:
         return result
     flagged = sum(checker(x.settings, list(x.picked.values())) for x in libs.values() if x.picked)
     if flagged:
-        log(f"footage: {flagged} picked shot(s) / screenshot(s) carry a watermark, a post or burned-in subtitles: picking again without them")
-        result, _ = _assign(settings, scenes, log=log)
+        log(f"footage: {flagged} picked shot(s) / screenshot(s) carry a watermark, a post or burned-in subtitles, or are not game pictures: picking again without them")
+        result, _ = _assign(settings, scenes, log=log, job=job)
     return result
 
 
-def _assign(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None) -> tuple[dict[str, Any], dict[str, Any]]:
+# words too common to say that an article's picture shows what a scene says
+_STORY_GENERIC = {"gta", "grand", "theft", "auto", "vi", "game", "games", "rockstar", "image", "picture", "screenshot", "new", "trailer"}
+
+
+def _story_words(text: str) -> set[str]:
+    return {t for t in tokens(text or "") if t not in _STORY_GENERIC and len(t) > 2}
+
+
+def story_scenes(items: list[dict[str, Any]], scenes: list[dict[str, Any]], *, free_first: set[int] | frozenset[int] = frozenset()) -> dict[int, dict[str, Any]]:
+    """Which scene shows which picture / video of the job's articles: the scene whose words match its
+    caption (2 words or more in common), then the article's lead picture on the first scene that has
+    nothing specific to show (``free_first``). One article item per scene, each item once."""
+    by_video: dict[str, dict[str, Any]] = {}
+    pool = []
+    for it in items:
+        if it["kind"] == "shot":
+            if it["file"] in by_video:
+                continue
+            by_video[it["file"]] = it  # one entry per article video (its first usable shot)
+        pool.append(it)
+    pairs = []
+    for it in pool:
+        words = _story_words(" ".join([it.get("caption", ""), " ".join(it.get("tags") or [])]))
+        for sc in scenes:
+            common = words & _story_words(" ".join([sc.get("narration", ""), sc.get("on_screen_text", "")]))
+            if len(common) >= 2:
+                pairs.append((len(common), sc["scene_number"], it))
+    out: dict[int, dict[str, Any]] = {}
+    taken: set[str] = set()
+    for _, n, it in sorted(pairs, key=lambda x: (-x[0], x[1])):
+        if n not in out and it["key"] not in taken:
+            out[n] = it
+            taken.add(it["key"])
+    rest = [it for it in pool if it["key"] not in taken]
+    lead = next((it for it in rest if it.get("role") == "lead"), None) or (rest[0] if rest else None)
+    if lead is not None:
+        n = next((sc["scene_number"] for sc in scenes if sc["scene_number"] in free_first and sc["scene_number"] not in out), None)
+        if n is not None:
+            out[n] = lead
+    return out
+
+
+def _assign(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None, job: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Mutates ``scenes`` (adds ``footage``) and returns {"ledger": [...], "summary": {...}}.
 
     Scenes that already carry a fixed piece of footage (``kind: detail``, the "details you missed"
@@ -344,7 +398,7 @@ def _assign(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str],
         "min_piece": float(cfg.get("min_piece_seconds", 1.2)),
         "photo_share": max(0.0, min(1.0, float(cfg.get("photo_share", 0.25)))),
     }
-    main = _Library(settings, "gta6", **opts)
+    main = _Library(settings, "gta6", **opts, job=job)
     libs: dict[str, _Library] = {"gta6": main}
     for gid in sorted({g for sc in scenes for g in [sc.get("footage_game"), *(sc.get("footage_pair") or [])] if g and g != "gta6"}):
         libs[gid] = _Library(game_settings(settings, gid), gid, **opts)
@@ -373,6 +427,13 @@ def _assign(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str],
     else:
         chosen = _pick_scenes(free, ratio, wpm, lo=lo, hi=hi, matched={n for n, (b, _) in plans.items() if b}) if free else set()
 
+    story_items = [it for it in main.shots + main.photos if it.get("story")]
+    story_for: dict[int, dict[str, Any]] = {}
+    if story_items:
+        eligible = [sc for sc in scenes if sc["scene_number"] in chosen and not sc.get("footage_pair") and (sc.get("footage_game") or "gta6") == "gta6"]
+        story_for = story_scenes(story_items, eligible, free_first={n for n in chosen if not plans[n][0]})
+        if story_for:
+            log(f"footage: {len(story_for)} picture(s) / video(s) from the articles shown where the narration talks about them (scenes {', '.join(str(n) for n in sorted(story_for))})")
     time_total = sum(_est_seconds(sc, wpm) for sc in scenes) or 1.0
     time_footage = 0.0
     n_photo = n_video = n_split = 0
@@ -412,7 +473,7 @@ def _assign(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str],
                 for g in {right.gid, left.gid}:
                     per_game[g] = per_game.get(g, 0) + 1
             continue
-        fo = x.assign(sc, est, beats_plan, matched)
+        fo = main.assign_story(sc, story_for[n]) if n in story_for else x.assign(sc, est, beats_plan, matched)
         if fo is None:
             continue
         sc["footage"] = fo

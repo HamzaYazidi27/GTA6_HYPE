@@ -184,6 +184,48 @@ rhythm:
     min_cut_seconds: 0.9
 
 # ---------------------------------------------------------------------------
+# `python -m gta_factory fresh`: the freshest GTA 6 stories worth a video, by category.
+# Reputable outlets decide what a video can say; the community (Reddit) only gives ideas to check in your game.
+# ---------------------------------------------------------------------------
+fresh:
+  hours: 48                        # only what was published in the last N hours
+  per_category: 5                  # stories shown per category
+  categories:
+    news:
+      label: "News (patches, sales, announcements)"
+      format: short
+      queries: ["GTA 6", "Grand Theft Auto VI", "GTA 6 patch", "GTA 6 sales"]
+      keywords: [patch, update, sales, sold, record, announce, release, launch, delay, price, trailer]
+    secrets:
+      label: "Secrets / easter eggs (أسرار GTA 6)"
+      format: short
+      queries: ["GTA 6 secret", "GTA 6 easter egg", "GTA 6 hidden"]
+      keywords: [secret, easter egg, hidden, mystery, myth, legend, bigfoot, ufo, alien, ghost, sighting, reference, cameo, rare, did you know, details]
+    map:
+      label: "Map (ما تخفيه الخريطة)"
+      format: short
+      queries: ["GTA 6 map", "GTA 6 location"]
+      keywords: [map, location, island, region, area, leonida, vice city, keys, grassrivers, port gellhorn, ambrosia, kalaga, explore, size]
+    missions:
+      label: "Missions / guides (كيف تُنجز المهمات)"
+      format: guide
+      queries: ["GTA 6 mission", "GTA 6 walkthrough", "GTA 6 guide"]
+      keywords: [mission, walkthrough, guide, how to, chapter, objective, gold, checkpoint, side quest, strangers, collectible, trophy, achievement]
+    heists:
+      label: "Heists / stealing (كيف تسرق داخل اللعبة)"
+      format: short
+      queries: ["GTA 6 heist", "GTA 6 robbery", "GTA 6 make money fast"]
+      keywords: [heist, robbery, rob, steal, bank job, payout, loot, make money, money fast, money glitch, earn money, armored truck, getaway]
+  feeds:                           # extra outlet feeds read on top of sources.feeds
+    - {name: "Insider Gaming", url: "https://insider-gaming.com/feed/"}
+    - {name: "Polygon", url: "https://www.polygon.com/rss/index.xml"}
+    - {name: "Push Square", url: "https://www.pushsquare.com/feeds/latest"}
+    - {name: "Pure Xbox", url: "https://www.purexbox.com/feeds/latest"}
+  reddit:                          # community: first to find secrets, map spots, payouts (ideas, never a cited source)
+    - {name: "r/GTA6 rising", url: "https://www.reddit.com/r/GTA6/rising/.rss"}
+    - {name: "r/GTA6 new", url: "https://www.reddit.com/r/GTA6/new/.rss"}
+
+# ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
 video:
@@ -247,6 +289,7 @@ footage:
   credit: "Footage: Rockstar Games"
   cookies_from_browser: ""         # age-restricted trailer on YouTube? log into YouTube in a browser and put its name here: chrome, safari, firefox, edge, brave
   thumbnails: true                 # put a real GTA 6 picture behind the thumbnail text
+  article_media: true             # download the pictures / videos of a job's articles and show them where the narration talks about them
   auto_tag: true                   # look at new footage with a free local vision model (Ollama) to know what is in each shot
   vision_model: "auto"             # auto = qwen2.5vl:7b (16 GB RAM and more) or qwen2.5vl:3b
   sources:                         # official Rockstar uploads downloaded by `footage update` / `footage fetch`

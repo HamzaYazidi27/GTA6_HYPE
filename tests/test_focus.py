@@ -478,3 +478,156 @@ def test_breaking_needs_a_reported_claim(project):
     reported = [{**spec[0], "classification": "reported"}]
     scenes = plan_scenes(Planner(), project["settings"], script=script, fact_check=reported, quotes=[], articles=fresh, fmt="short", today="2026-11-19")
     assert scenes[0]["data"]["kicker"] == "Breaking"
+
+
+# ----------------------------------------------------------------- fresh: the next video to make
+def _entries():
+    from gta_factory.modules.fresh import Entry
+
+    return [
+        Entry("GTA 6 patch 1.02 fixes the save bug in missions", "https://support.rockstargames.com/articles/patch-102", "Rockstar Support", "support.rockstargames.com", "primary", "2026-11-19T08:00:00+00:00", "feed"),
+        Entry("GTA 6 patch 1.02 fixes save bug during missions, Rockstar says", "https://www.videogameschronicle.com/news/gta-6-patch-102/", "VGC", "videogameschronicle.com", "secondary", "2026-11-19T09:00:00+00:00", "feed"),
+        Entry("Someone found Bigfoot in GTA 6 already", "https://www.reddit.com/r/GTA6/comments/abc/bigfoot/", "r/GTA6 rising", "reddit.com", "community", "2026-11-19T10:00:00+00:00", "community", "", False),
+        Entry("GTA 6 Bigfoot sightings ramp up as Rockstar honors a legend", "https://www.gamesradar.com/games/gta-6-bigfoot/", "GamesRadar", "gamesradar.com", "secondary", "2026-11-19T07:00:00+00:00", "feed"),
+        Entry("Best GTA 6 heist payouts: every score ranked", "https://allthings.how/gta-6-heist-payouts/", "AllThingsHow", "allthings.how", "other", "2026-11-19T06:00:00+00:00", "bing_news_rss"),
+        Entry("Here's every GTA 6 mission and chapter", "https://www.gamesradar.com/games/gta-6-mission-list/", "GamesRadar", "gamesradar.com", "secondary", "2026-11-19T05:00:00+00:00", "feed"),
+        Entry("Clair Obscur writer has left Sandfall", "https://insider-gaming.com/clair-obscur/", "Insider Gaming", "insider-gaming.com", "secondary", "2026-11-19T09:00:00+00:00", "feed"),
+        Entry("GTA 6 trailer 1 breakdown", "https://www.ign.com/old", "IGN", "ign.com", "secondary", "2026-11-10T09:00:00+00:00", "feed"),
+    ]
+
+
+def test_fresh_sorts_groups_and_ranks_the_stories(project):
+    from datetime import datetime, timezone
+
+    from gta_factory.modules.fresh import fresh_stories, render_text
+
+    s = project["settings"]
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
+    out = fresh_stories(s, entries=_entries(), covered=[], used_urls=set(), now=now, log=lambda m: None)
+    assert set(out) == {"news", "secrets", "missions", "heists"}  # the non-GTA story and the 9-day-old one are gone
+    patch = out["news"][0]
+    assert len(patch.entries) == 2 and patch.entries[0].tier == "primary"  # Rockstar Support + VGC: one story
+    assert patch.command.startswith('python -m gta_factory new "https://support.rockstargames.com/') and "--format short" in patch.command
+    bigfoot = out["secrets"][0]
+    assert {e.tier for e in bigfoot.entries} == {"secondary", "community"} and "gamesradar.com" in bigfoot.command and "reddit" not in bigfoot.command
+    assert out["missions"][0].command.endswith("--format guide")
+    assert "RUMOR" in out["heists"][0].note  # only a site outside the reputable list
+    assert patch.score > out["heists"][0].score
+    text = render_text(out, s.get("fresh.categories"))
+    assert "Secrets" in text and "community: https://www.reddit.com/r/GTA6/comments/abc/bigfoot/" in text
+
+
+def test_fresh_marks_what_the_channel_already_made(project):
+    from datetime import datetime, timezone
+
+    from gta_factory.modules.fresh import fresh_stories
+
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
+    covered = [{"job_id": "20261119-x", "headline": "GTA 6 patch 1.02 fixes the save bug in missions"}]
+    out = fresh_stories(project["settings"], entries=_entries(), covered=covered, used_urls={"https://www.gamesradar.com/games/gta-6-mission-list"}, now=now, log=lambda m: None)
+    assert out["news"][0].covered_before == "20261119-x" and out["missions"][0].covered_before
+    assert all(st.score < 40 for st in (out["news"][0], out["missions"][0]))
+
+
+def test_fresh_reads_feeds_community_and_news_search(project):
+    from types import SimpleNamespace
+
+    from gta_factory.modules.fresh import read_sources
+
+    s = project["settings"]
+
+    def feeds(url, timeout):
+        if "reddit" in url:
+            return [{"title": "Hidden UFO in GTA 6", "link": "https://www.reddit.com/r/GTA6/comments/u/", "updated": "2026-11-19T10:00:00+00:00"}]
+        if "polygon" in url:
+            raise OSError("down")
+        return [{"title": "GTA 6 map size compared", "link": "https://www.ign.com/articles/gta-6-map?utm=x", "published": "Thu, 19 Nov 2026 09:00:00 GMT", "summary": "<p>Leonida</p>"}]
+
+    def search(provider, query):
+        return [SimpleNamespace(title=f"{query} news", url="https://news.google.com/x", publisher="Kotaku", domain="kotaku.com", published_at=None, snippet="", direct=False)] if provider == "google_news_rss" else []
+
+    got = read_sources(s, log=lambda m: None, feed_entries=feeds, search=search)
+    tiers = {e.tier for e in got}
+    assert {"secondary", "community"} <= tiers
+    assert any(e.url.startswith("https://www.ign.com/articles/gta-6-map") and e.published_at for e in got)
+    assert any(e.provider == "google_news_rss" and not e.direct for e in got)
+
+
+# ----------------------------------------------------------------- the articles' own pictures and videos
+PAGE = """<html><head><meta property="og:image" content="https://cdn.example.com/gta-6-save-menu-1920-80.jpg"></head><body>
+<article>
+<figure><picture><source srcset="https://cdn.example.com/gta6-map-island-480.jpg 480w, https://cdn.example.com/gta6-map-island-1600.jpg 1600w">
+<img src="https://cdn.example.com/gta6-map-island-480.jpg" alt="The GTA 6 map near the Leonida Keys"></picture><figcaption>The Keys (Image credit: Rockstar Games)</figcaption></figure>
+<figure><img src="https://cdn.example.com/zelnick-stage-1600.jpg" width="1600" alt="Strauss Zelnick on stage"><figcaption>(Image credit: Getty Images)</figcaption></figure>
+<p>Text.</p><img src="https://cdn.example.com/author-avatar-140.jpg" width="140" alt="Writer">
+<iframe src="https://www.youtube.com/embed/QdBZY2fkU-0"></iframe>
+<blockquote class="twitter-tweet"><p>wow</p><a href="https://twitter.com/RandomFan/status/1">link</a></blockquote>
+<blockquote class="twitter-tweet"><a href="https://twitter.com/RockstarGames/status/2">link</a></blockquote>
+</article>
+<aside><img src="https://cdn.example.com/gta-5-cheats-1600.jpg" width="1600" alt="GTA 5 cheats"></aside>
+</body></html>"""
+
+
+def test_article_media_found_and_sorted_by_who_owns_it(monkeypatch):
+    from gta_factory.modules.article_extraction import media as m
+
+    monkeypatch.setattr(m, "main_content_pictures", lambda html, url: {"gta6-map-island", "zelnick-stage", "author-avatar-140"})
+    found = m.find_media(PAGE, "https://www.gamesradar.com/gta-6-saves/")
+    by = {x["url"]: x for x in found}
+    assert "https://cdn.example.com/gta-5-cheats-1600.jpg" not in by  # not in the article's text
+    island = by["https://cdn.example.com/gta6-map-island-1600.jpg"]  # the widest <source>
+    assert island["credit"] == "Rockstar Games" and "Leonida Keys" in island["alt"]
+    decide = {x["url"]: m.media_policy(x, article_tier="secondary", publisher="GamesRadar+")[0] for x in found}
+    assert decide["https://cdn.example.com/gta-6-save-menu-1920-80.jpg"] == "article"  # the lead picture, from a reputable outlet
+    assert decide["https://cdn.example.com/gta6-map-island-1600.jpg"] == "official"
+    assert decide["https://cdn.example.com/zelnick-stage-1600.jpg"] == "skip"  # press-agency photo
+    assert decide["https://www.youtube.com/watch?v=QdBZY2fkU-0"] == "check_channel"
+    assert decide["https://twitter.com/RandomFan/status/1"] == "skip" and decide["https://twitter.com/RockstarGames/status/2"] == "official"
+    assert m.media_policy(island, article_tier="other", publisher="AllThingsHow")[0] == "official"  # Rockstar's picture is Rockstar's anywhere
+    lead = by["https://cdn.example.com/gta-6-save-menu-1920-80.jpg"]
+    assert m.media_policy(lead, article_tier="other", publisher="AllThingsHow")[0] == "skip"
+    assert m.media_policy(lead, article_tier="other", publisher="AllThingsHow", third_party_ok=True)[0] == "third_party"
+
+
+def test_article_media_downloaded_for_its_job_only(project, monkeypatch, tmp_path):
+    import subprocess
+    from types import SimpleNamespace
+
+    from gta_factory.app.core.utils import which
+    from gta_factory.modules.article_extraction import media as m
+    from gta_factory.modules.footage.library import build_index, load_items
+
+    if not which("ffmpeg"):
+        return
+    s = project["settings"]
+    monkeypatch.setattr(m, "main_content_pictures", lambda html, url: {"gta6-map-island", "zelnick-stage"})
+    art = SimpleNamespace(url="https://www.gamesradar.com/gta-6-saves/", publisher="GamesRadar+", source_tier="secondary", media=m.find_media(PAGE, "https://www.gamesradar.com/gta-6-saves/"))
+
+    def fake_download(url, dest, *, referer, max_bytes):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        out = dest.with_suffix(".jpg")
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720", "-frames:v", "1", str(out)], check=True)
+        return out
+
+    report = m.download_article_media(s, [art], job_id="job-a", download=fake_download, youtube_uploader=lambda u: "Rockstar Games", fetch_videos=lambda st, url, folder: [], log=lambda x: None)
+    files = {r["url"]: r for r in report["used"]}
+    assert set(files) == {"https://cdn.example.com/gta-6-save-menu-1920-80.jpg", "https://cdn.example.com/gta6-map-island-1600.jpg"}
+    assert files["https://cdn.example.com/gta6-map-island-1600.jpg"]["credit"] == "Image: Rockstar Games"
+    reasons = " ".join(r["reason"] for r in report["left_out"])
+    assert "press-agency" in reasons and "someone else's x post" in reasons
+    idx = build_index(s)
+    mine = [p for p in load_items(s, idx, job="job-a")["photos"] if p.get("story")]
+    assert len(mine) == 2 and any("leonida_keys" in p["tags"] for p in mine)
+    assert not [p for p in load_items(s, idx, job="job-b")["photos"] if "articles/" in p["file"]]  # another video never shows them
+
+
+def test_article_pictures_go_where_the_narration_talks_about_them():
+    from gta_factory.modules.footage.select import story_scenes
+
+    island = {"kind": "photo", "key": "a", "caption": "The GTA 6 map near the Leonida Keys, south islands", "tags": ["leonida_keys"], "role": ""}
+    lead = {"kind": "photo", "key": "b", "caption": "", "tags": [], "role": "lead"}
+    scenes = [{"scene_number": 1, "narration": "Rockstar just changed how saving works."},
+              {"scene_number": 2, "narration": "Patch notes mention missions."},
+              {"scene_number": 3, "narration": "Down in the Leonida Keys, the south islands hide a new save spot."}]
+    out = story_scenes([island, lead], scenes, free_first={1, 2})
+    assert out[3] is island and out[1] is lead
