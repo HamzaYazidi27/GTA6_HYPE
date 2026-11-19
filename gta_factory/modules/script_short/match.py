@@ -28,10 +28,9 @@ from typing import Any, Callable
 import numpy as np
 
 from .plan import GENERIC_DISTRACTORS
-from .vocabulary import SCENE_LABELS, content, synonyms
+from .vocabulary import NON_GAMEPLAY, SCENE_LABELS, content, synonyms
 
 STEP = 0.25  # window positions inside a shot, seconds
-START_MIN = 0.2  # a candidate window: the concept is a serious option on its first frame (the gate below decides)
 WEAK_MIN = 0.15
 MAX_SEGMENTS = 4  # windows of different shots one beat may chain to fill its length
 VOCAB_TOP = 5  # a candidate frame must rank the beat's concept among the 5 labels that fit it best (open vocabulary)...
@@ -239,13 +238,26 @@ def match_beats(
         comp = vocab[~np.array(synonyms(prompts + [b["concept"]]))] if specific else None
         comp_labels = [lab for lab, same in zip(SCENE_LABELS, synonyms(prompts + [b["concept"]])) if not same] if specific else []
 
+        concept_words = synonyms(prompts + [b["concept"]])
+        junk = [SCENE_LABELS.index(lab) for lab in NON_GAMEPLAY if not concept_words[SCENE_LABELS.index(lab)]]
+
+        def frame_vec(key: str, t: float) -> np.ndarray | None:
+            idx = L.rows_by_key.get(key) or []
+            return L.vecs[min(idx, key=lambda j: abs((L.rows[j]["t"] or 0.0) - t))] if idx else None
+
+        def not_gameplay(key: str, t: float) -> str:
+            """The label of a logo / title card / black frame / menu, when that is what the frame is."""
+            v = frame_vec(key, t)
+            if v is None:
+                return ""
+            top = int(np.argmax(vocab @ v))
+            return SCENE_LABELS[top] if top in junk else ""
+
         def gate(key: str, t: float) -> dict[str, Any]:
             """Where the concept ranks among everything this frame could be (CLIP, open vocabulary)."""
-            idx = L.rows_by_key.get(key) or []
-            if not idx:
+            v = frame_vec(key, t)
+            if v is None:
                 return {"ok": False, "strict": False, "rank": None, "looks_like": ""}
-            k = min(idx, key=lambda j: abs((L.rows[j]["t"] or 0.0) - t))
-            v = L.vecs[k]
             sc = float((pos @ v).max())
             others = comp @ v
             rank = 1 + int((others > sc).sum())
@@ -265,17 +277,22 @@ def match_beats(
                 break
             it = L.by_key[key]
             tt, pp = per_key[key]
-            if max(pp) < WEAK_MIN:
+            if not specific and max(pp) < WEAK_MIN:
                 break
             if it["kind"] == "photo":
                 win = (0.0, remaining, pp[0], pp[0])
             else:
                 win = best_window(tt, pp, it["s"], it["e"], remaining, used=used.get(it["file"], []))
-            if win is None or win[3] < (START_MIN if specific else WEAK_MIN):
+            # a specific beat is not pre-filtered by the vote: the gate and the vision model below decide
+            if win is None or (not specific and win[3] < WEAK_MIN):
                 continue
             a, z, mean, first = win
+            times = [a + min(0.12, (z - a) / 4), (a + z) / 2]
+            junk_label = next((lab for lab in (not_gameplay(key, t) for t in times) if lab), "")
+            if junk_label:  # a logo, a title card, a menu: never footage, not even for a hook
+                rejected.append({"file": it["file"], "at": round(a, 2), "why": f"not gameplay (looks like {junk_label!r})"})
+                continue
             if specific:  # frame-level verification of the first and the middle frame of the window
-                times = [a + min(0.12, (z - a) / 4), (a + z) / 2]
                 gates = [gate(key, t) for t in times]
                 why = ""
                 if not all(g["ok"] for g in gates):

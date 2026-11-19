@@ -46,6 +46,8 @@ SCENE_LABELS = [
     "a game menu", "a map screen", "a loading screen", "a black screen", "text on a screen", "a logo", "a video game heads-up display",
 ]
 
+# what is not gameplay: a window whose frame fits one of these best is never shown as footage
+NON_GAMEPLAY = ("a logo", "text on a screen", "a black screen", "a game menu", "a loading screen", "a map screen")
 
 STOP = {"a", "an", "the", "of", "with", "in", "on", "at", "to", "and", "or", "person", "people", "some", "his", "her", "their", "your", "you", "it", "is", "are", "be", "from", "for", "by", "into", "through"}
 
