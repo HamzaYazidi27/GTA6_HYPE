@@ -631,3 +631,14 @@ def test_article_pictures_go_where_the_narration_talks_about_them():
               {"scene_number": 3, "narration": "Down in the Leonida Keys, the south islands hide a new save spot."}]
     out = story_scenes([island, lead], scenes, free_first={1, 2})
     assert out[3] is island and out[1] is lead
+
+
+def test_article_pictures_with_strong_language_are_left_out():
+    from gta_factory.modules.article_extraction.media import media_policy
+
+    meme = {"kind": "image", "url": "https://cdn.example.com/gta-6-meme-900.jpg", "width": 900, "alt": "GTA 6 in-game meme saying &quot;yeah i like Ass&quot;", "caption": "(Image credit: Rockstar Games)", "credit": "Rockstar Games"}
+    decision, reason, _ = media_policy(meme, article_tier="secondary", publisher="GamesRadar+")
+    assert decision == "skip" and "advertiser-friendly" in reason
+    clean = {**meme, "alt": "GTA 6 police at night in Vice City"}
+    assert media_policy(clean, article_tier="secondary", publisher="GamesRadar+")[0] == "official"
+    assert media_policy({**meme, "alt": "GTA 6 class reunion"}, article_tier="secondary", publisher="GamesRadar+")[0] == "official"  # "class" is not "ass"

@@ -43,6 +43,8 @@ AGENCY = re.compile(r"\b(getty|getty images|wireimage|afp|associated press|ap ph
 OFFICIAL_CREDIT = re.compile(r"\b(rockstar( games)?|take[- ]?two( interactive)?|take 2)\b", re.I)
 ABOUT_GTA = re.compile(r"(gta|grand[\s_-]*theft[\s_-]*auto|rockstar|leonida|vice[\s_-]*city|lucia|jason|screenshot|trailer|gameplay|heist|mission)", re.I)
 OFFICIAL_ACCOUNTS = re.compile(r"(?:twitter\.com|x\.com|instagram\.com|tiktok\.com/@)/?(rockstargames|rockstarsupport|rockstar)\b", re.I)
+# words that make a picture not advertiser-friendly on YouTube (strong language, sexual content)
+NOT_AD_FRIENDLY = re.compile(r"\b(ass|asses|arse|fuck\w*|shit\w*|bitch\w*|dick|cock|pussy|porn\w*|nude|nudity|naked|sex|sexy|boob\w*|tits?|twerk\w*|stripper|strip club|nsfw)\b", re.I)
 CREDIT_IN_TEXT = re.compile(r"(?:image|photo|picture|screenshot|video)\s*(?:credit|courtesy|source)?\s*[:\-–]\s*([^)\]|]{2,60})", re.I)
 
 
@@ -126,7 +128,7 @@ class _PageReader(HTMLParser):
                 pass
             if not url:
                 return
-            item = {"kind": "image", "url": url, "width": w, "alt": normalize_ws(a.get("alt", "")), "class": cls, "in_article": self.depth_article > 0, "in_figure": self.figure is not None}
+            item = {"kind": "image", "url": url, "width": w, "alt": normalize_ws(html_lib.unescape(a.get("alt", ""))), "class": cls, "in_article": self.depth_article > 0, "in_figure": self.figure is not None}
             if self.figure is not None:
                 self.figure["items"].append(item)
             self.items.append(item)
@@ -261,6 +263,8 @@ def media_policy(item: dict[str, Any], *, article_tier: str, publisher: str, thi
         return "check_channel", "YouTube player: used only if the channel is Rockstar's", ""
     if AGENCY.search(text):
         return "skip", "press-agency photo (licensed to the outlet, not to the channel)", ""
+    if NOT_AD_FRIENDLY.search(html_lib.unescape(text)):
+        return "skip", "strong language or sexual content in the picture (not advertiser-friendly)", ""
     if item["kind"] == "image":
         if item.get("role") != "lead" and item.get("width", 0) and item["width"] < MIN_WIDTH:
             return "skip", f"small picture ({item['width']} px wide)", ""
