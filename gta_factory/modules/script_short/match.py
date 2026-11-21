@@ -14,10 +14,17 @@ says, during exactly as long as the beat lasts:
    the first and the middle frame ("verified_clip").
 
 A specific beat whose footage cannot be found or verified in the library is searched on the web
-(``websource.py``: YouTube videos, then pictures) and matched again with the same checks. Only when
-nothing found there shows it either is it **missing**: nothing unrelated is put in its place, the
-scene shows the words on the channel background, and QC refuses "fully verified". A picture stands
-in for gameplay only in the last pass (``allow_photos``), when no video at all shows the beat.
+(``websource.py``: YouTube videos, then pictures) and matched again with the same checks. A picture
+stands in for gameplay only in the last pass (``allow_photos``), when no video at all shows the beat.
+
+The screen is never left empty (:func:`fill_gaps`): a beat that nothing verified shows gets the
+**closest** footage there is (``related``: the frames most like the beat's description, videos and
+pictures alike, never a logo or a title card), and only when there is no frame index at all, the
+least shown gameplay of the library (``filler``). Both are marked in the report and keep the video
+from being "fully verified".
+
+Every pick also looks at what earlier Shorts showed (``history``: shot -> times used recently), so
+the same clip does not come back video after video.
 """
 from __future__ import annotations
 
@@ -34,6 +41,9 @@ from .vocabulary import NON_GAMEPLAY, SCENE_LABELS, content, synonyms
 
 STEP = 0.25  # window positions inside a shot, seconds
 WEAK_MIN = 0.15
+HISTORY_SPECIFIC = 0.05  # rank penalty per recent use of a shot in an earlier Short (specific beats: relevance first)
+HISTORY_GENERAL = 0.12  # ... for hooks, teasers, calls to action and the closest-footage pass
+REUSE_IN_JOB = 0.1  # a shot already on screen in this Short (another window of it) is tried after the others
 MAX_SEGMENTS = 4  # windows of different shots one beat may chain to fill its length
 VOCAB_TOP = 5  # a candidate frame must rank the beat's concept among the 5 labels that fit it best (open vocabulary)...
 CLIP_ALONE_TOP = 1  # ... and first of all when no vision model looks at it
@@ -101,7 +111,7 @@ class Library:
 
         self.gid = gid
         self.settings = game_settings(settings, gid) if gid != "gta6" else settings
-        self.items = load_items(self.settings, build_index(self.settings), job=job)
+        self.items = load_items(self.settings, build_index(self.settings), job=job, web=True)
         self.by_key = {it["key"]: it for it in self.items["shots"] + self.items["photos"]}
         self.rows, self.vecs = index_frames(self.settings, self.items, log=log, model=clip) if clip is not None else ([], np.zeros((0, 512), np.float32))
         self.rows_by_key: dict[str, list[int]] = {}
@@ -180,14 +190,20 @@ def match_beats(
     verify: Callable[[Path, float | None, str], dict[str, Any]] | None = None,
     allow_photos: bool = False,
     used: dict[str, list[tuple[float, float]]] | None = None,
+    relaxed: bool = False,
+    history: dict[str, int] | None = None,
     log: Callable[[str], None] = print,
 ) -> list[dict[str, Any]]:
     """One match per beat: {"status", "confidence", "segments": [...], "considered", "seen", ...}.
 
     ``needs``: seconds of footage each beat must fill (its scene's length). Statuses:
-    verified_vision | verified_clip | general (a hook / teaser / CTA: any strong gameplay) | weak | missing.
+    verified_vision | verified_clip | general (a hook / teaser / CTA: any strong gameplay) | related | weak | missing.
     ``used``: {file: [(start, end)]} moments already on screen (an earlier pass): never shown twice.
+    ``relaxed``: the closest footage to each beat's description, without the look-alike vote or the
+    vision check (``related``): what is put on screen when nothing verified shows the beat.
+    ``history``: {shot key: times used by recent Shorts}: less shown footage first.
     """
+    history = history or {}
     libs: dict[str, Library] = {}
 
     def lib(gid: str) -> Library:
@@ -204,7 +220,7 @@ def match_beats(
         gid = b.get("game") or "gta6"
         L = lib(gid)
         res: dict[str, Any] = {"beat": i, "text": b["text"], "concept": b["concept"], "game": gid, "specific": bool(b.get("specific")), "need": round(need, 3), "segments": [], "status": "missing", "confidence": 0.0, "considered": 0, "seen": ""}
-        if L.empty:
+        if L.empty and not (allow_photos and L.items["photos"]):
             res["reason"] = f"the {gid} footage library has no usable video"
             out.append(res)
             continue
@@ -213,8 +229,10 @@ def match_beats(
             out.append(res)
             continue
         prompts = b.get("prompts") or [b["concept"]]
-        specific = bool(b.get("specific"))
-        if not specific:
+        specific = bool(b.get("specific")) and not relaxed
+        if relaxed:
+            prompts = list(dict.fromkeys([*prompts, b["concept"]]))
+        elif not specific:
             prompts = prompts + GENERAL_PROMPTS
         pos = clip.embed_text(templated(prompts))
         own = [d for d in b.get("distractors") or [] if phrase(d).lower() not in " ".join(prompts).lower()]
@@ -239,8 +257,14 @@ def match_beats(
             tt, pp = per_key.setdefault(row["key"], ([], []))
             tt.append(row["t"] if row["t"] is not None else 0.0)
             pp.append(float(pr))
-        # the best match first; for a hook / teaser / call to action, shots not shown yet first
-        ranked = sorted(per_key, key=lambda k: (not specific and k in used_keys, -max(per_key[k][1])))[:40]
+        # the best match first; for a hook / teaser / call to action, shots not shown yet first;
+        # footage the recent Shorts showed, or already on screen in this one, after the rest
+        hw = HISTORY_SPECIFIC if specific else HISTORY_GENERAL
+
+        def rank(k: str) -> tuple[bool, float]:
+            return (not specific and k in used_keys, -max(per_key[k][1]) + hw * min(3, history.get(k, 0)) + (REUSE_IN_JOB if specific and k in used_keys else 0.0))
+
+        ranked = sorted(per_key, key=rank)[:40]
         comp = vocab[~np.array(synonyms(prompts + [b["concept"]]))] if specific else None
         comp_labels = [lab for lab, same in zip(SCENE_LABELS, synonyms(prompts + [b["concept"]])) if not same] if specific else []
 
@@ -283,14 +307,16 @@ def match_beats(
                 break
             it = L.by_key[key]
             tt, pp = per_key[key]
-            if not specific and max(pp) < WEAK_MIN:
+            if not specific and not relaxed and max(pp) < WEAK_MIN:
                 break
             if it["kind"] == "photo":
+                if used.get(it["file"]):  # a picture is shown once per Short
+                    continue
                 win = (0.0, remaining, pp[0], pp[0])
             else:
                 win = best_window(tt, pp, it["s"], it["e"], remaining, used=used.get(it["file"], []))
             # a specific beat is not pre-filtered by the vote: the gate and the vision model below decide
-            if win is None or (not specific and win[3] < WEAK_MIN):
+            if win is None or (not specific and not relaxed and win[3] < WEAK_MIN):
                 continue
             a, z, mean, first = win
             times = [a + min(0.12, (z - a) / 4), (a + z) / 2]
@@ -342,7 +368,7 @@ def match_beats(
             remaining -= grow
         conf = float(np.mean(means))
         res.update(segments=segments, confidence=round(conf, 3), first=round(starts[0], 3), short_by=round(max(0.0, remaining), 3))
-        res["status"] = "general" if not specific else "verified_vision" if verify is not None else "verified_clip"
+        res["status"] = "related" if relaxed else "general" if not specific else "verified_vision" if verify is not None else "verified_clip"
         out.append(res)
         log(f"match: beat {i + 1} “{b['text'][:48]}” -> {res['status']} ({conf:.2f}) {segments[0]['file']} @ {segments[0]['start']:.1f}s")
     return out
@@ -357,6 +383,7 @@ def _segment(settings: Any, L: Library, it: dict[str, Any], a: float, z: float, 
     path = it["path"]
     return {
         "kind": it["kind"],
+        "key": it["key"],
         "file": it["file"],
         "path": path,
         "game": L.gid,
@@ -375,11 +402,15 @@ def _segment(settings: Any, L: Library, it: dict[str, Any], a: float, z: float, 
     }
 
 
+MIN_SPEED = 0.5  # a shot too short for its beat is slowed down to half speed at most, then held
+
+
 def sequence_for(match: dict[str, Any], need: float, *, offset: float = 0.0) -> list[dict[str, Any]]:
     """The picture of one beat: its matched windows back to back, filling ``need`` seconds exactly.
 
     The last window never reads past the end of its shot: when the library had nothing more to
-    show, the missing time is a ``hold`` on the shot's last frame (reported by QC as frozen time).
+    show, the shot is played in slow motion (``speed``, down to half speed) so it fills the beat
+    while still moving; only what even that cannot fill is a ``hold`` on the last frame.
     """
     segs = []
     t = 0.0
@@ -391,10 +422,107 @@ def sequence_for(match: dict[str, Any], need: float, *, offset: float = 0.0) -> 
             seg["crop"] = sg["crop"]
         if sg["kind"] == "shot":
             avail = float(sg.get("shot_end", sg["end"])) - sg["start"]
-            if d > avail + 0.02:
-                seg["hold"] = round(d - avail, 3)
+            if d > avail + 0.02 and avail > 0:
+                speed = max(MIN_SPEED, avail / d)
+                seg["speed"] = round(speed, 3)
+                hold = d - avail / speed
+                if hold > 0.02:
+                    seg["hold"] = round(hold, 3)
         segs.append(seg)
         t += d
+    return segs
+
+
+def used_windows(matches: list[dict[str, Any]]) -> dict[str, list[tuple[float, float]]]:
+    """{file: [(start, end)]} of every window already chosen."""
+    out: dict[str, list[tuple[float, float]]] = {}
+    for m in matches:
+        for sg in m.get("segments") or []:
+            out.setdefault(sg["file"], []).append((sg["start"], sg["end"]))
+    return out
+
+
+def fill_gaps(
+    settings: Any,
+    beats: list[dict[str, Any]],
+    needs: list[float],
+    matches: list[dict[str, Any]],
+    *,
+    job: str | None,
+    clip: Any,
+    history: dict[str, int] | None = None,
+    log: Callable[[str], None] = print,
+) -> dict[str, list[int]]:
+    """Footage for every beat still without any: the screen is never left empty.
+
+    1. ``related``: the closest footage of the beat's game to its description (CLIP similarity,
+       videos and pictures alike, the web finds included, never a logo or a title card).
+    2. ``filler``: without a frame index (or anything close), the least shown gameplay of the beat's
+       game, then of GTA 6.
+    ``matches`` is updated in place; the beat's earlier reason is kept (what was looked for and why
+    nothing verified it). Returns {"related": [beat indices], "filler": [...]}.
+    """
+    history = history or {}
+    out: dict[str, list[int]] = {"related": [], "filler": []}
+    idx = [k for k, m in enumerate(matches) if not m["segments"]]
+    if not idx:
+        return out
+
+    def keep(k: int, m: dict[str, Any], status: str) -> None:
+        old = matches[k]
+        m.update(beat=old.get("beat", k), specific=old.get("specific", bool(beats[k].get("specific"))), status=status,
+                 reason=old.get("reason") or "", web=any(sg["rights"] == "web_found" or "/web/" in sg["file"] for sg in m["segments"]))
+        for key in ("search_url", "rejected", "best_candidates", "weak_segments"):
+            if old.get(key) and not m.get(key):
+                m[key] = old[key]
+        matches[k] = m
+        out[status].append(k)
+
+    if clip is not None:
+        got = match_beats(settings, [beats[k] for k in idx], [needs[k] for k in idx], job=job, clip=clip, verify=None, allow_photos=True,
+                          used=used_windows(matches), relaxed=True, history=history, log=log)
+        for k, m in zip(idx, got):
+            if m["segments"]:
+                keep(k, m, "related")
+    libs: dict[str, Library] = {}
+    for k in [k for k in idx if not matches[k]["segments"]]:
+        for gid in dict.fromkeys([beats[k].get("game") or "gta6", "gta6"]):
+            if gid not in libs:
+                try:
+                    libs[gid] = Library(settings, gid, job=job, clip=None, log=lambda m: None)
+                except Exception:
+                    continue
+            segs = filler_segments(settings, libs[gid], needs[k], used=used_windows(matches), history=history)
+            if segs:
+                keep(k, {"text": beats[k]["text"], "concept": beats[k].get("concept", ""), "game": beats[k].get("game") or "gta6", "need": round(needs[k], 3),
+                         "segments": segs, "confidence": 0.0, "considered": 0, "seen": ""}, "filler")
+                log(f"match: beat {k + 1} “{beats[k]['text'][:48]}” -> filler {segs[0]['file']} @ {segs[0]['start']:.1f}s (nothing closer in the library)")
+                break
+    return out
+
+
+def filler_segments(settings: Any, L: Library, need: float, *, used: dict[str, list[tuple[float, float]]], history: dict[str, int]) -> list[dict[str, Any]]:
+    """Windows of the least shown gameplay shots (then pictures) filling ``need`` seconds, none already on screen."""
+    taken = {f for f in used}
+    shots = sorted(L.items["shots"], key=lambda it: (history.get(it["key"], 0), it["file"] in taken, -(it["e"] - it["s"])))
+    segs: list[dict[str, Any]] = []
+    remaining = need
+    for it in shots:
+        if remaining <= 0.05 or len(segs) >= MAX_SEGMENTS:
+            break
+        length = min(remaining, it["e"] - it["s"])
+        if length < 0.4:
+            continue
+        a = it["s"] + (it["e"] - it["s"] - length) / 2  # the middle of the shot: away from its cuts
+        z = a + length
+        if any(min(z, y) - max(a, x) > 0.25 * length for x, y in used.get(it["file"], [])):
+            continue
+        segs.append(_segment(settings, L, it, a, z, 0.0, 0.0))
+        used.setdefault(it["file"], []).append((a, z))
+        remaining -= length
+    if not segs and L.items["photos"]:
+        it = min(L.items["photos"], key=lambda p: history.get(p["key"], 0))
+        segs.append(_segment(settings, L, it, 0.0, need, 0.0, 0.0))
     return segs
 
 

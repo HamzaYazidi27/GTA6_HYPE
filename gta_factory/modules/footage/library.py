@@ -493,6 +493,7 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
             known = old_photos.get((rel, st.st_size))
             crop = known["crop"] if known else photo_crop(p)
             photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop, **({"allow_overlay": True} if side.get("allow_overlay") else {}),
+                     **({"web_found": True} if side.get("web_found") else {}),
                      **({"article_media": side["article_media"], "caption": side.get("caption", ""), "role": side.get("role", "")} if side.get("article_media") else {})}
             if side.get("from_video"):  # a still pulled from a trailer: same picture as that shot
                 photo.update(from_video=str(side["from_video"]), time=float(side.get("time") or 0), video_tags=canonical_tags(side.get("video_tags"), vocab))
@@ -623,11 +624,15 @@ def still_shot_key(index: dict[str, Any], photo: dict[str, Any]) -> str | None:
     return shot_key(v["file"], v.get("size", 0), sh) if sh else None
 
 
-def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str | None = None) -> dict[str, Any]:
+def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str | None = None, web: bool | None = None) -> dict[str, Any]:
     """Every usable shot and photo with its weighted tags, plus the vocabulary that knows all of them.
 
     Pictures and videos taken from a job's articles (``article_media``) belong to that job only: they are
     left out for any other video, and marked ``story`` for their own job's (``job``).
+
+    Footage a Short found by itself on the web (``web_found``, kept in the library) is used by the
+    Shorts made from a script (``web=True``); the other videos use it only with
+    ``footage.use_web_found: true`` (its permission has not been checked).
 
     ``{"shots": [...], "photos": [...], "vocab": Vocabulary, "index": index}``. Each item has
     ``tags`` = {concept: weight} (see W_ITEM / W_AUTO / W_VIDEO / W_OBJECT).
@@ -656,11 +661,12 @@ def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str |
         """None: not article media; True: this job's; False: another job's (never shown)."""
         return None if not story_job else story_job == job
 
+    web = bool(settings.get("footage.use_web_found", False)) if web is None else web
     shots, photos = [], []
     for v in index.get("videos", []):
         side = v.get("sidecar") or {}
         mine = belongs(side.get("article_media"))
-        if mine is False:
+        if mine is False or (side.get("web_found") and not web and not mine):
             continue
         for sh in v.get("shots", []):
             if not sh.get("ok") or overlaid(shot_key(v["file"], v.get("size", 0), sh), side.get("allow_overlay")):
@@ -673,7 +679,7 @@ def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str |
                           **({"story": True, "caption": side.get("caption", ""), "role": side.get("role", "")} if mine else {})})
     for p in index.get("photos", []):
         mine = belongs(p.get("article_media"))
-        if mine is False:
+        if mine is False or (p.get("web_found") and not web and not mine):
             continue
         own = photo_key(p["file"], p.get("size", 0))
         if overlaid(own if own in auto else (still_shot_key(index, p) or own), p.get("allow_overlay")):

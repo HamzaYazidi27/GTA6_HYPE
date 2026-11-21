@@ -10,9 +10,11 @@
     "shot_hold_s": 2.2,
     "max_beat_s": 4.5,
     "zoom": {
-      "push_per_s": 0.025,
+      "push_per_s": 0.03,
       "punch_on_number": 1.12,
-      "punch_frames": 4
+      "punch_frames": 4,
+      "alternate": true,
+      "shake_on_number": 10
     },
     "grade": {
       "saturation": 1.0,
@@ -37,7 +39,7 @@
     },
     "music_gain_db": -19.0,
     "number_badge": true,
-    "item_transition": "cut",
+    "item_transition": "zoom",
     "sentence_gap_s": 0.08,
     "cut_lead_s": 0.05
   },

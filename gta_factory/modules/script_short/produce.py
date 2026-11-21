@@ -6,7 +6,8 @@
     sync         Word-level alignment: when every word, and so every beat, is spoken
     footage      Find footage: library, new official Rockstar videos, CLIP frame index
     match        Match each beat to the moment of real gameplay that shows it (frame-verified);
-                 beats the library cannot show are searched on the web (YouTube, then pictures)
+                 beats the library cannot show are searched on the web (YouTube, then pictures),
+                 and what is still missing gets the closest footage there is: never a blank screen
     edit         Build the timeline and apply the editing style (cuts, zoom, grade, captions, SFX)
     render / mix  (shared with the other videos)
     cover        Thumbnail from the best verified frame
@@ -409,9 +410,39 @@ def step_footage(ctx: Any) -> dict[str, Any]:
 
 
 # =========================================================================== match
+USAGE_FILE = "footage_usage.json"
+USAGE_JOBS = 25  # how many recent Shorts count when a clip was "already shown"
+
+
+def usage_path(settings: Any) -> Path:
+    return settings.jobs_dir / ".cache" / USAGE_FILE
+
+
+def load_usage(settings: Any, *, exclude_job: str | None = None) -> dict[str, int]:
+    """{shot key: how many of the recent Shorts showed it} (this job's own earlier run left out)."""
+    data = read_json(usage_path(settings), {}) or {}
+    counts: dict[str, int] = {}
+    for row in (data.get("jobs") or [])[-USAGE_JOBS:]:
+        if row.get("job") == exclude_job:
+            continue
+        for k in set(row.get("keys") or []):
+            counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def record_usage(settings: Any, job: str, matches: list[dict[str, Any]]) -> None:
+    """Remember which shots this Short shows, so the next ones pick other footage first."""
+    path = usage_path(settings)
+    data = read_json(path, {}) or {}
+    rows = [r for r in data.get("jobs") or [] if r.get("job") != job]
+    keys = sorted({sg["key"] for m in matches for sg in m["segments"] if sg.get("key")})
+    rows.append({"job": job, "keys": keys})
+    write_json(path, {"jobs": rows[-200:]})
+
+
 def step_match(ctx: Any) -> dict[str, Any]:
     from ..footage.clip import Clip
-    from .match import match_beats, vision_verifier
+    from .match import fill_gaps, match_beats, vision_verifier
 
     s = ctx.settings
     f = files(ctx)
@@ -423,18 +454,27 @@ def step_match(ctx: Any) -> dict[str, Any]:
     if verify is None:
         ctx.log("match: no local vision model (Ollama) - frames are verified with CLIP's vote only (status verified_clip)")
     clip = Clip.load(s)
-    matches = match_beats(s, beats, needs, job=ctx.job_id, clip=clip, verify=verify, allow_photos=bool(ctx.options.get("allow_photos")), log=ctx.log)
-    web = find_on_the_web(ctx, beats, needs, matches, clip=clip, verify=verify)
+    history = load_usage(s, exclude_job=ctx.job_id)
+    matches = match_beats(s, beats, needs, job=ctx.job_id, clip=clip, verify=verify, allow_photos=bool(ctx.options.get("allow_photos")), history=history, log=ctx.log)
+    web = find_on_the_web(ctx, beats, needs, matches, clip=clip, verify=verify, history=history)
     allow_weak = bool(ctx.options.get("allow_weak"))
     for m, t in zip(matches, timing["beats"]):
         if m["specific"] and not m["segments"] and m.get("weak_segments") and allow_weak:  # the operator accepts uncertain footage
             m.update(segments=m["weak_segments"][:1], status="weak", confidence=m["weak_segments"][0]["prob_mean"])
             m["segments"][0]["end"] = round(min(m["segments"][0]["shot_end"], m["segments"][0]["start"] + t["need"]), 3)
+    gaps: dict[str, list[int]] = {"related": [], "filler": []}
+    if s.get("script_short.never_blank", True) and not ctx.options.get("allow_blank"):
+        gaps = fill_gaps(s, beats, needs, matches, job=ctx.job_id, clip=clip, history=history, log=ctx.log)
+        for kind, idx in gaps.items():
+            if idx:
+                ctx.warn(f"match: {len(idx)} beat(s) show the {'closest footage' if kind == 'related' else 'least shown gameplay'} (nothing verified shows them): " + "; ".join(f"beat {k + 1} “{beats[k]['text'][:40]}”" for k in idx))
+    for m, t in zip(matches, timing["beats"]):
         m["beat"] = t["beat"]
         m.update({k: t[k] for k in ("start", "end", "scene")})
         m["role"] = plan["beats"][t["beat"]]["role"]
-    write_json(f.matches, {"verification": "vision" if verify else "clip", "matches": matches, "web": web})
+    write_json(f.matches, {"verification": "vision" if verify else "clip", "matches": matches, "web": web, "gaps": gaps})
     write_json(ctx.paths.rights, rights_review(s, matches))
+    record_usage(s, ctx.job_id, matches)
     counts: dict[str, int] = {}
     for m in matches:
         counts[m["status"]] = counts.get(m["status"], 0) + 1
@@ -442,21 +482,13 @@ def step_match(ctx: Any) -> dict[str, Any]:
     return counts
 
 
-def _used(matches: list[dict[str, Any]]) -> dict[str, list[tuple[float, float]]]:
-    out: dict[str, list[tuple[float, float]]] = {}
-    for m in matches:
-        for sg in m["segments"]:
-            out.setdefault(sg["file"], []).append((sg["start"], sg["end"]))
-    return out
-
-
-def find_on_the_web(ctx: Any, beats: list[dict[str, Any]], needs: list[float], matches: list[dict[str, Any]], *, clip: Any, verify: Any) -> dict[str, Any]:
+def find_on_the_web(ctx: Any, beats: list[dict[str, Any]], needs: list[float], matches: list[dict[str, Any]], *, clip: Any, verify: Any, history: dict[str, int] | None = None) -> dict[str, Any]:
     """The beats the library cannot show: footage searched and downloaded from the web, then matched again.
 
     Pass 2 looks at videos only (the new ones included); pass 3, for what is still missing, also
     accepts a picture (library screenshots, trailer stills, pictures found on the web).
     """
-    from .match import match_beats
+    from .match import match_beats, used_windows
     from .websource import defaults, search_url, source_missing
 
     s = ctx.settings
@@ -477,7 +509,7 @@ def find_on_the_web(ctx: Any, beats: list[dict[str, Any]], needs: list[float], m
     def again(idx: list[int], *, photos: bool) -> list[int]:
         if not idx:
             return []
-        got = match_beats(s, [beats[k] for k in idx], [needs[k] for k in idx], job=ctx.job_id, clip=clip, verify=verify, allow_photos=photos, used=_used(matches), log=ctx.log)
+        got = match_beats(s, [beats[k] for k in idx], [needs[k] for k in idx], job=ctx.job_id, clip=clip, verify=verify, allow_photos=photos, used=used_windows(matches), history=history, log=ctx.log)
         filled = []
         for k, m in zip(idx, got):
             if m["segments"]:
@@ -524,7 +556,7 @@ def rights_review(settings: Any, matches: list[dict[str, Any]]) -> dict[str, Any
 
 # =========================================================================== edit
 def scene_sequence(sc: dict[str, Any], placed: dict[str, Any], beats_t: list[dict[str, Any]], by_beat: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    """The picture of one narration take: each beat's matched footage, or a blank where it is missing."""
+    """The picture of one narration take: each beat's footage (a blank only when the library is empty)."""
     from .match import sequence_for
 
     segs: list[dict[str, Any]] = []
@@ -540,30 +572,35 @@ def scene_sequence(sc: dict[str, Any], placed: dict[str, Any], beats_t: list[dic
 
 def cut_sequence(segs: list[dict[str, Any]], total_frames: int, *, out: Path, cache_dir: Path, width: int, height: int, fps: int) -> Path:
     """One silent clip for a take: the segments back to back, cut on exact frames (cached by content)."""
-    from ..footage.select import _cover_filter, _pan_filter
+    from ..footage.select import _cover_filter, kenburns_filter
 
     bounds = [round(sg["t"] * fps) for sg in segs] + [total_frames]
     frames = [max(1, b - a) for a, b in zip(bounds, bounds[1:])]
     frames[-1] = max(1, total_frames - sum(frames[:-1]))
-    key = stable_hash({"s": segs, "f": frames, "w": width, "h": height, "fps": fps, "v": 1})
+    key = stable_hash({"s": segs, "f": frames, "w": width, "h": height, "fps": fps, "v": 2})
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / f"short_{key}.mp4"
     if not (cached.exists() and cached.stat().st_size > 0):
         cmd = ["ffmpeg", "-y", "-v", "error"]
         chains = []
+        photo_k = 0
         for i, (sg, nf) in enumerate(zip(segs, frames)):
             hold = min(nf - 1, int(round(float(sg.get("hold") or 0) * fps)))
             real = nf - hold
-            secs = real / fps + 0.25
+            speed = float(sg.get("speed") or 1.0)
+            secs = real * speed / fps + 0.25  # seconds of source read (a slowed shot reads less)
             if sg["type"] == "blank":
                 cmd += ["-f", "lavfi", "-t", f"{nf / fps + 0.1:.3f}", "-i", f"color=c=0x0b0d12:s={width}x{height}:r={fps}"]
                 vf = f"setsar=1,format=yuv420p"
-            elif sg["type"] == "photo":
-                cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{secs:.3f}", "-i", sg["file"]]
-                vf = _pan_filter(width, height, fps, nf, i)
+            elif sg["type"] == "photo":  # a picture never sits still: an eased zoom with a slow drift
+                cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{real / fps + 0.25:.3f}", "-i", sg["file"]]
+                vf = kenburns_filter(width, height, fps, nf, photo_k)
+                photo_k += 1
             else:
                 cmd += ["-ss", f"{sg['start']:.3f}", "-t", f"{secs:.3f}", "-i", sg["file"]]
                 vf = _cover_filter(width, height, fps, sg.get("crop"))
+                if speed < 0.999:  # slow motion: the shot fills its beat while still moving
+                    vf = f"setpts=(PTS-STARTPTS)/{speed:.4f}," + vf
             pad = f",tpad=stop_mode=clone:stop={hold}" if hold > 0 else ""
             chains.append(f"[{i}:v]{vf},trim=end_frame={real if sg['type'] != 'blank' else nf},setpts=PTS-STARTPTS{pad}[v{i}];")
         graph = "".join(chains) + "".join(f"[v{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0[out]"
@@ -610,6 +647,9 @@ def scene_data(sc: dict[str, Any], placed: dict[str, Any], beats_t: list[dict[st
             "badge": bool(ed["number_badge"]),
             "dim": float(ed["footage_dim"]),
             "flash": ed.get("item_transition") == "flash",
+            "zoomIn": ed.get("item_transition") == "zoom",
+            "alternate": bool(ed["zoom"].get("alternate", True)),
+            "shake": float(ed["zoom"].get("shake_on_number", 0)),
         },
     }
 
@@ -696,7 +736,7 @@ def step_edit(ctx: Any) -> dict[str, Any]:
             m = by_beat[sg["beat"]]
             src = next((x for x in m["segments"] if x["path"] == sg.get("file") and abs(x["start"] - sg.get("start", -1)) < 1e-3), None)
             rec_in = p["start_time"] + sg["t"]
-            ev = {"beat": sg["beat"], "text": plan["beats"][sg["beat"]]["text"], "type": sg["type"], "record_in": round(rec_in, 3), "record_out": round(rec_in + sg["d"], 3), "file": (src or {}).get("file"), "source_in": sg.get("start"), "hold": sg.get("hold")}
+            ev = {"beat": sg["beat"], "text": plan["beats"][sg["beat"]]["text"], "type": sg["type"], "record_in": round(rec_in, 3), "record_out": round(rec_in + sg["d"], 3), "file": (src or {}).get("file"), "source_in": sg.get("start"), "hold": sg.get("hold"), "speed": sg.get("speed"), "status": m["status"]}
             events.append(ev)
             if src:
                 manifest.append({
@@ -706,8 +746,8 @@ def step_edit(ctx: Any) -> dict[str, Any]:
                     "on_screen_start": ev["record_in"], "on_screen_end": ev["record_out"],
                     "shows": m["concept"], "seen_by_vision_model": m.get("seen") or None,
                     "file": src["file"], "game": src["game"], "source_url": src.get("source_url") or None, "creator": src.get("creator") or None, "credit": src.get("credit"),
-                    "source_timestamp": round(src["start"], 3), "clip_start": round(src["start"], 3), "clip_end": round(src["start"] + sg["d"] - float(sg.get("hold") or 0), 3),
-                    "frozen_seconds": sg.get("hold") or 0.0, "source_fps": src.get("fps"),
+                    "source_timestamp": round(src["start"], 3), "clip_start": round(src["start"], 3), "clip_end": round(src["start"] + (sg["d"] - float(sg.get("hold") or 0)) * float(sg.get("speed") or 1.0), 3),
+                    "frozen_seconds": sg.get("hold") or 0.0, "playback_speed": sg.get("speed") or 1.0, "source_fps": src.get("fps"),
                     "match_confidence": m["confidence"], "first_frame_confidence": src.get("prob_first"), "verification": m["status"], "rights": src["rights"],
                 })
     write_json(ctx.paths.scenes, scenes)

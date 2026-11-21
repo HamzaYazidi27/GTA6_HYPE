@@ -6,10 +6,14 @@ instead of waiting for the operator to add footage:
 1. **Videos** (YouTube search through yt-dlp): "<game> <what the beat shows> gameplay".
    Rockstar's own uploads first, then short gameplay videos whose title names the game.
    Fan-made concepts, mods, reactions, leaks and other games are skipped by title. The best few
-   are downloaded (720p, length-capped) into the job's own folder of the game's library
-   (``videos/web/<job>/``).
+   are downloaded (720p, length-capped) into the game's library (``videos/web/``).
 2. **Pictures**, for when no video shows it (Bing images, then DuckDuckGo images): pictures whose
-   title or page names the game, at least 640 px wide (``photos/web/<job>/``).
+   title or page names the game, at least 640 px wide (``photos/web/``).
+
+What is found **stays in the library** (``keep_in_library``, on by default): the next Short that
+needs the same thing finds it there without searching again, and a result already downloaded is
+never fetched twice. With ``keep_in_library: false`` the files go to ``videos/web/<job>/`` and are
+used by that job only.
 
 Nothing is used just because a search returned it: every file goes through the same checks as
 the library (re-upload logo / subtitle scan, CLIP's vote against look-alikes, the vision model).
@@ -20,6 +24,7 @@ Every network call is a parameter of :func:`source_missing`, so tests run offlin
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import re
@@ -53,6 +58,7 @@ def defaults(settings: Any) -> dict[str, Any]:
         "max_height": int(cfg.get("max_height", 720)),
         "search_results": int(cfg.get("search_results", 12)),
         "photo_fallback": bool(cfg.get("photo_fallback", True)),
+        "keep_in_library": bool(cfg.get("keep_in_library", True)),
         "exclude_words": [str(w) for w in cfg.get("exclude_words") or []],
     }
 
@@ -257,6 +263,30 @@ def _host(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.")
 
 
+_YT_ID = re.compile(r"\[([A-Za-z0-9_-]{11})\]")
+
+
+def known_web_files(folders: list[Path]) -> tuple[set[str], set[str]]:
+    """(YouTube ids, picture URLs) of the files directly in ``folders``: never fetched twice."""
+    from ..footage.library import _sidecar
+
+    ids: set[str] = set()
+    urls: set[str] = set()
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for f in folder.iterdir():
+            if not f.is_file() or f.suffix.lower() == ".json" or f.name.startswith("."):
+                continue
+            m = _YT_ID.search(f.name)
+            if m:
+                ids.add(m.group(1))
+            side = _sidecar(f)
+            if side.get("source_url"):
+                urls.add(str(side["source_url"]))
+    return ids, urls
+
+
 def source_missing(
     settings: Any,
     beats: list[dict[str, Any]],
@@ -270,9 +300,13 @@ def source_missing(
 ) -> dict[str, Any]:
     """Search and download web footage for ``beats`` (the missing ones). Returns the report.
 
-    Files land in the job's folders of each game's library, with a sidecar that keeps them for this
-    job only (``article_media``) and marks them ``web_found``.
+    Files land in each game's library (``videos/web/``, ``photos/web/``) with a sidecar that marks
+    them ``web_found`` and says what they were found for; they stay there for the next Shorts
+    (``keep_in_library``), or, with it off, in the job's own folders for this job only
+    (``article_media``). A result already in the library is not downloaded again.
     """
+    from datetime import date
+
     from ..footage.games import game, game_settings
     from ..footage.library import _cookies, footage_dir, sidecar_path
 
@@ -286,10 +320,18 @@ def source_missing(
     report: dict[str, Any] = {"beats": [], "videos": 0, "photos": 0, "errors": []}
     taken: set[str] = set()
     n_videos = 0
+    keep = cfg["keep_in_library"]
+    known: dict[str, tuple[set[str], set[str]]] = {}
     for b in beats:
         gid = b.get("game") or "gta6"
         g = game(settings, gid)
         root = footage_dir(game_settings(settings, gid))
+        vdir = root / "videos" / "web" / ("" if keep else job)
+        pdir = root / "photos" / "web" / ("" if keep else job)
+        if gid not in known:  # what this job can see: the shared web folders and its own (other jobs' private ones are not)
+            known[gid] = known_web_files([root / "videos" / "web", root / "photos" / "web", root / "videos" / "web" / job, root / "photos" / "web" / job] if keep
+                                         else [root / "videos" / "web" / job, root / "photos" / "web" / job])
+        have_ids, have_urls = known[gid]
         game_rx, other_rx = game_pattern(settings, gid), other_games(settings, gid)
         qs = queries(b, g["short"])
         row: dict[str, Any] = {"beat": b.get("index"), "text": b.get("text", ""), "game": gid, "queries": qs, "videos": [], "photos": [], "skipped": []}
@@ -303,6 +345,11 @@ def source_missing(
                 break  # the search engine is not reachable: the other queries would fail too
             for h in hits:
                 if h["id"] in cands or h["id"] in taken:
+                    continue
+                if h["id"] in have_ids:  # already in the library: the matcher has looked at it
+                    seen_before = row.setdefault("already_in_library", [])
+                    if h["url"] not in seen_before:
+                        seen_before.append(h["url"])
                     continue
                 why = keep_title(h["title"], game_rx=game_rx, other_rx=other_rx, blocked=blocked)
                 dur = h.get("duration")
@@ -319,7 +366,7 @@ def source_missing(
                 break
             log(f"web footage: beat “{b.get('text', '')[:40]}” <- {c['channel'] or 'YouTube'}: {c['title'][:70]}")
             try:
-                path, meta = download_video(c["url"], root / "videos" / "web" / job)
+                path, meta = download_video(c["url"], vdir)
             except Exception as exc:
                 row["skipped"].append({"url": c["url"], "title": c["title"][:90], "why": f"download failed: {str(exc).splitlines()[0][:120]}"})
                 continue
@@ -335,10 +382,11 @@ def source_missing(
             write_json(sidecar_path(path), {
                 "source_url": c["url"], "uploader": meta.get("uploader") or who, "channel": who, "channel_url": meta.get("channel_url") or c.get("channel_url", ""),
                 "title": c["title"], "credit": "Footage: Rockstar Games" if official else f"Footage: {who or 'YouTube'} (YouTube)",
-                "tags": [], "article_media": job, "query": c["query"],
+                "tags": [], "query": c["query"], **_found_for(b, job, keep, date.today().isoformat()),
                 **({} if official else {"web_found": True, "allow_third_party": True}),
             })
             taken.add(c["id"])
+            have_ids.add(c["id"])
             n_videos += 1
             row["videos"].append({"file": path.relative_to(root).as_posix(), "url": c["url"], "title": c["title"], "channel": who})
         # --- pictures: a still that shows it, for when no video does (cheap, always fetched)
@@ -354,22 +402,23 @@ def source_missing(
                 for k, h in enumerate(hits):
                     if len(row["photos"]) >= cfg["photos_per_beat"]:
                         break
-                    if h["url"] in taken:
+                    if h["url"] in taken or h["url"] in have_urls:
                         continue
                     why = keep_title(" ".join([h.get("title", ""), h.get("page", "")]), game_rx=game_rx, other_rx=other_rx, blocked=blocked)
                     if why:
                         row["skipped"].append({"url": h["url"], "title": h.get("title", "")[:90], "why": why})
                         continue
-                    stem = f"beat{int(b.get('index') or 0) + 1:02d}-{_slug(q, 30)}-{k:02d}"
-                    path = download_image(h["url"], root / "photos" / "web" / job / f"{stem}.bin", referer=h.get("page") or "")
+                    stem = f"{_slug(q, 40)}-{hashlib.sha1(h['url'].encode()).hexdigest()[:8]}" if keep else f"beat{int(b.get('index') or 0) + 1:02d}-{_slug(q, 30)}-{k:02d}"
+                    path = download_image(h["url"], pdir / f"{stem}.bin", referer=h.get("page") or "")
                     taken.add(h["url"])
+                    have_urls.add(h["url"])
                     if path is None:
                         row["skipped"].append({"url": h["url"], "title": h.get("title", "")[:90], "why": "could not be downloaded, or too small"})
                         continue
                     host = _host(h.get("page") or h["url"])
                     write_json(sidecar_path(path), {
                         "source_url": h["url"], "page_url": h.get("page") or "", "title": h.get("title", ""), "uploader": host,
-                        "credit": f"Image: {host}" if host else "Image: web", "tags": [], "article_media": job, "query": q,
+                        "credit": f"Image: {host}" if host else "Image: web", "tags": [], "query": q, **_found_for(b, job, keep, date.today().isoformat()),
                         "web_found": True, "allow_third_party": True,
                     })
                     row["photos"].append({"file": path.relative_to(root).as_posix(), "url": h["url"], "page": h.get("page") or ""})
@@ -378,6 +427,14 @@ def source_missing(
         report["beats"].append(row)
         log(f"web footage: beat “{b.get('text', '')[:40]}”: {len(row['videos'])} video(s), {len(row['photos'])} picture(s) downloaded")
     return report
+
+
+def _found_for(beat: dict[str, Any], job: str, keep: bool, today: str) -> dict[str, Any]:
+    """Sidecar fields: what the file was found for; ``article_media`` (this job only) when not kept."""
+    out: dict[str, Any] = {"found_for": {"text": str(beat.get("text") or "")[:160], "concept": str(beat.get("concept") or "")[:160], "job": job, "date": today}}
+    if not keep:
+        out["article_media"] = job
+    return out
 
 
 def search_url(query: str) -> str:

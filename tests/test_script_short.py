@@ -130,7 +130,7 @@ def test_best_window_never_reads_past_the_shot() -> None:
     assert (a, z) == (0.0, 1.0)
 
 
-def test_sequence_fills_the_beat_and_holds_when_the_shot_is_short() -> None:
+def test_sequence_fills_the_beat_in_slow_motion_when_the_shot_is_short() -> None:
     m = {"beat": 3, "segments": [
         {"kind": "shot", "path": "/a.mp4", "start": 1.0, "end": 2.0, "shot_end": 2.0},
         {"kind": "shot", "path": "/b.mp4", "start": 5.0, "end": 5.6, "shot_end": 5.6},
@@ -138,8 +138,12 @@ def test_sequence_fills_the_beat_and_holds_when_the_shot_is_short() -> None:
     seq = match.sequence_for(m, 2.0, offset=0.5)
     assert [s["t"] for s in seq] == [0.5, 1.5]
     assert sum(s["d"] for s in seq) == pytest.approx(2.0)
-    assert seq[-1]["hold"] == pytest.approx(0.4)  # 0.6 s of shot for a 1.0 s remainder
-    assert "hold" not in seq[0]
+    assert seq[-1]["speed"] == pytest.approx(0.6) and "hold" not in seq[-1]  # 0.6 s of shot played over 1.0 s, still moving
+    assert "hold" not in seq[0] and "speed" not in seq[0]
+    # slower than half speed would look broken: half speed, then the last frame is held
+    m["segments"][1]["shot_end"] = 5.3
+    last = match.sequence_for(m, 2.0)[-1]
+    assert last["speed"] == pytest.approx(0.5) and last["hold"] == pytest.approx(0.4)
 
 
 # ----------------------------------------------------------------------------- cutting, EDL, sound
@@ -155,6 +159,25 @@ def test_cut_sequence_is_frame_exact(tmp_path: Path) -> None:
     out = produce.cut_sequence(segs, 45, out=tmp_path / "o.mp4", cache_dir=tmp_path / "cache", width=180, height=320, fps=30)
     n = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames,width,height", "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout.strip()
     assert n == "180,320,45"
+
+
+@pytest.mark.skipif(not FFMPEG, reason="ffmpeg missing")
+def test_cut_sequence_slow_motion_and_moving_pictures_are_frame_exact(tmp_path: Path) -> None:
+    src = tmp_path / "src.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+    pic = tmp_path / "pic.jpg"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360", "-frames:v", "1", str(pic)], check=True)
+    segs = [
+        {"t": 0.0, "d": 1.0, "type": "shot", "file": str(src), "start": 1.0, "beat": 0, "speed": 0.5},
+        {"t": 1.0, "d": 1.0, "type": "photo", "file": str(pic), "beat": 1},
+        {"t": 2.0, "d": 0.5, "type": "shot", "file": str(src), "start": 3.7, "beat": 2, "speed": 0.5, "hold": 0.2},
+    ]
+    out = produce.cut_sequence(segs, 75, out=tmp_path / "o.mp4", cache_dir=tmp_path / "cache", width=180, height=320, fps=30)
+    n = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames,width,height", "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout.strip()
+    assert n == "180,320,75"
+    # the picture moves: its first and last frames differ (a still picture would be identical)
+    a, b = (subprocess.run(["ffmpeg", "-v", "error", "-i", str(out), "-vf", f"select=eq(n\\,{k})", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"], capture_output=True).stdout for k in (31, 58))
+    assert a and b and a != b
 
 
 def test_edl_lists_every_piece() -> None:

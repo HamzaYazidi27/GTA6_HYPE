@@ -640,12 +640,20 @@ def _cover_filter(w: int, h: int, fps: int, crop: list[int] | None = None) -> st
     return f"{crop_filter(crop)}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps={fps},format=yuv420p"
 
 
-def _pan_filter(w: int, h: int, fps: int, frames: int, k: int) -> str:
-    """A screenshot inside a clip: cover-cropped 10 % larger, then a slow horizontal pan (direction alternates)."""
-    W, H = (int(w * 1.1) // 2) * 2, (int(h * 1.1) // 2) * 2
+def kenburns_filter(w: int, h: int, fps: int, frames: int, k: int, *, zoom: float = 0.14, drift: float = 0.18) -> str:
+    """A picture as a smooth camera move: eased zoom (in or out, alternating) with a slow drift.
+
+    Rendered at twice the output size then scaled down, so the crop moves by half pixels and the
+    motion has no visible stepping. Even ``k``: zoom in drifting right; odd ``k``: zoom out drifting left.
+    """
     dur = max(1, frames) / fps
-    x = f"({W}-{w})*min(1,t/{dur:.3f})" if k % 2 == 0 else f"({W}-{w})*(1-min(1,t/{dur:.3f}))"
-    return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},crop={w}:{h}:x='{x}':y='({H}-{h})/2',setsar=1,fps={fps},format=yuv420p"
+    e = f"(1-pow(1-min(1,t/{dur:.3f}),2))"  # ease-out: the move settles instead of stopping dead at the cut
+    z = f"(1+{zoom}*{e})" if k % 2 == 0 else f"(1+{zoom}*(1-{e}))"
+    x = f"(iw-ow)*(0.5+{drift}*({e}-0.5))" if k % 2 == 0 else f"(iw-ow)*(0.5-{drift}*({e}-0.5))"
+    W, H = w * 2, h * 2
+    return (f"scale={W}:{H}:force_original_aspect_ratio=increase,setsar=1,"
+            f"scale=w='2*trunc(iw*{z}/2)':h=-2:eval=frame,crop={W}:{H}:x='{x}':y='(ih-oh)/2',"
+            f"scale={w}:{h},setsar=1,fps={fps},format=yuv420p")
 
 
 def cut_scene_clips(
@@ -712,7 +720,7 @@ def _cut_clip(sc: dict[str, Any], fo: dict[str, Any], need: float, words: list[d
     bounds = [round(s["t"] * fps) for s in segs] + [round(need * fps)]
     frames = [max(1, b - a) for a, b in zip(bounds, bounds[1:])]
     fo["segments"] = segs
-    key = stable_hash({"s": segs, "f": frames, "w": width, "h": height, "fps": fps, "v": 2})
+    key = stable_hash({"s": segs, "f": frames, "w": width, "h": height, "fps": fps, "v": 3})
     cached = cache_dir / f"clip_{key}.mp4"
     if not (cached.exists() and cached.stat().st_size > 0):
         cmd = ["ffmpeg", "-y", "-v", "error"]
@@ -721,7 +729,7 @@ def _cut_clip(sc: dict[str, Any], fo: dict[str, Any], need: float, words: list[d
             secs = nf / fps + 0.25  # a little extra input; trim cuts at the exact frame
             if s["type"] == "photo":
                 cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{secs:.3f}", "-i", s["file"]]
-                vf = _pan_filter(width, height, fps, nf, i + sc["scene_number"])
+                vf = kenburns_filter(width, height, fps, nf, i + sc["scene_number"])
             else:
                 cmd += ["-ss", f"{s['start']:.3f}", "-t", f"{secs:.3f}", "-i", s["file"]]
                 vf = _cover_filter(width, height, fps, s.get("crop"))

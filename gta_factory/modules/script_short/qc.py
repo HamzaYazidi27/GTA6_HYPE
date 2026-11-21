@@ -4,6 +4,8 @@ The technical checks (codec, size, fps, loudness, black frames ...) are the shar
 these are the checks specific to a Short cut to a script:
 
 * footage on every beat, and only verified footage on the beats that show something specific
+  (a beat that nothing verified shows gets the closest footage, ``related`` / ``filler``: a warning
+  that names it, so the screen is never empty and the operator knows what to replace)
 * frame-level sync: the RENDERED video, at the middle of every beat, shows the source frame that
   was matched to that beat (CLIP image similarity on the same crop), so an off-by-one cut, a wrong
   clip or a drift is caught in the file that will be published
@@ -28,6 +30,7 @@ from ...app.core.utils import read_json
 
 FRAME_SIM_MIN = 0.85  # rendered frame vs matched source frame, same crop (CLIP cosine)
 VERIFIED = ("verified_vision", "verified_clip")
+STAND_IN = ("related", "filler")  # the closest footage there was: on screen, never "verified"
 REGION = "crop=iw:ih*0.42:0:ih*0.2"  # above the captions, below the credit line
 
 
@@ -59,7 +62,7 @@ def frame_sync(settings: Any, video: Path, edl: list[dict[str, Any]], *, width: 
         live = d - float(ev.get("hold") or 0)
         mid = min(d / 2, max(0.0, live - 0.1))
         rendered = _frame(video, ev["record_in"] + mid, REGION)
-        source = _frame(Path(ev["path"]), float(ev["source_in"]) + mid, f"{crop_filter(ev.get('crop'))}scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},{REGION}")
+        source = _frame(Path(ev["path"]), float(ev["source_in"]) + mid * float(ev.get("speed") or 1.0), f"{crop_filter(ev.get('crop'))}scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},{REGION}")
         if rendered is None or source is None:
             out.append({**_short(ev), "at": round(ev["record_in"] + mid, 3), "similarity": None, "passed": False, "note": "frame could not be read"})
             continue
@@ -107,12 +110,15 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     specific = [m for m in matches if m.get("specific")]
     missing = [m for m in matches if not m["segments"]]
     missing_specific = [m for m in missing if m.get("specific")]
-    unverified = [m for m in specific if m["segments"] and m["status"] not in VERIFIED]
+    unverified = [m for m in specific if m["segments"] and m["status"] not in VERIFIED + STAND_IN]
+    stand_in = [m for m in matches if m["segments"] and m.get("status") in STAND_IN]
     checks.append(_check("footage.coverage", "critical", not missing_specific,
                          "Every phrase that names something has footage of it." if not missing_specific else f"{len(missing_specific)} phrase(s) have no verified footage and show their words instead: " + "; ".join(f"beat {m['beat'] + 1} “{m['text'][:40]}” ({m.get('reason', '')})" for m in missing_specific),
                          beats=[m["beat"] + 1 for m in missing_specific]))
     if missing and not missing_specific:
         checks.append(_check("footage.coverage_general", "warning", False, f"{len(missing)} hook / teaser / call-to-action beat(s) without footage."))
+    checks.append(_check("footage.closest", "warning", not stand_in, "Every beat shows footage found for it." if not stand_in else f"{len(stand_in)} beat(s) show the closest footage the library had, not verified to show the phrase (add footage for them and resume from `match`): " + "; ".join(f"beat {m['beat'] + 1} “{m['text'][:40]}” ({m['status']}: {m['segments'][0]['file']})" for m in stand_in)[:500],
+                         beats=[m["beat"] + 1 for m in stand_in]))
     checks.append(_check("footage.verified", "critical", not unverified, "Every specific beat's footage was verified frame by frame." if not unverified else f"{len(unverified)} beat(s) with an unverified match.", beats=[m["beat"] + 1 for m in unverified]))
     method = mdata.get("verification")
     checks.append(_check("footage.verification_method", "info", True, "Frames looked at by the local vision model and CLIP." if method == "vision" else "Frames verified by CLIP's vote against look-alikes (no vision model running: start Ollama with a vision model for a second opinion)."))
@@ -122,8 +128,11 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     photos = [sg for sg in segs if sg["kind"] != "shot"]
     checks.append(_check("authenticity.gameplay", "warning", not photos, "Only moving gameplay / trailer footage (no screenshot stands in for a clip)." if not photos else f"{len(photos)} picture(s) stand in where no gameplay video showed the phrase: " + "; ".join(sorted({f"beat {m['beat'] + 1}" for m in matches for sg in m['segments'] if sg['kind'] != 'shot'})),
                          beats=sorted({m["beat"] + 1 for m in matches for sg in m["segments"] if sg["kind"] != "shot"})))
-    wrong_game = [(m["beat"] + 1, sg["game"]) for m in matches for sg in m["segments"] if sg["game"] != (m.get("game") or "gta6")]
+    wrong_game = [(m["beat"] + 1, sg["game"]) for m in matches for sg in m["segments"] if sg["game"] != (m.get("game") or "gta6") and m.get("status") != "filler"]
+    filler_game = [(m["beat"] + 1, sg["game"]) for m in matches for sg in m["segments"] if sg["game"] != (m.get("game") or "gta6") and m.get("status") == "filler"]
     checks.append(_check("authenticity.game", "critical", not wrong_game, "Every clip is from the game its phrase talks about." if not wrong_game else f"Clips from another game: {wrong_game}"))
+    if filler_game:
+        checks.append(_check("authenticity.game_filler", "warning", False, f"The library of the game these beats talk about is empty: they show GTA 6 instead {filler_game}."))
     unrighted = [sg for sg in segs if sg["rights"] not in ("official", "own", "licensed", "third_party_allowed", "web_found")]
     checks.append(_check("rights.documented", "critical", not unrighted, "Every clip's origin and permission is documented." if not unrighted else f"{len(unrighted)} clip(s) without documented rights: " + ", ".join(sorted({sg['file'] for sg in unrighted}))[:300]))
     web = [sg for sg in segs if sg["rights"] == "web_found"]
@@ -184,7 +193,7 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     smeasured = style.get("status") == "measured"
     checks.append(_check("style.reference", "warning", smeasured, "Editing style measured from the reference channel." if smeasured else "The reference channel's style has not been measured yet: the channel's default editing is used (`python -m gta_factory style analyze`)."))
 
-    fully = not missing and not unverified and not photos and not web and not wrong_game and not unrighted and bool(fsync) and not bad and not late and burned == script_words and not contradicted and not unchecked
+    fully = not missing and not unverified and not stand_in and not photos and not web and not wrong_game and not unrighted and bool(fsync) and not bad and not late and burned == script_words and not contradicted and not unchecked
     sync = {
         "fully_verified": fully,
         "beats": [_beat_row(t, by_beat.get(t["beat"]), [x for x in fsync if x["beat"] == t["beat"] + 1]) for t in timing.get("beats") or []],
@@ -203,7 +212,7 @@ def _beat_row(t: dict[str, Any], m: dict[str, Any] | None, fchecks: list[dict[st
         "status": m.get("status"),
         "confidence": m.get("confidence"),
         "seen": m.get("seen") or None,
-        "reason": m.get("reason") if not m.get("segments") else None,
+        "reason": m.get("reason") if not m.get("segments") or m.get("status") in STAND_IN else None,
         "footage": [{"file": sg["file"], "source_url": sg.get("source_url") or None, "source_timestamp": sg["start"], "clip_start": sg["start"], "clip_end": sg["end"], "rights": sg["rights"], "credit": sg.get("credit")} for sg in m.get("segments") or []],
         "frame_check": [{"at": x["at"], "similarity": x["similarity"], "passed": x["passed"]} for x in fchecks],
     }
@@ -238,6 +247,8 @@ def production_report(ctx: Any, report: dict[str, Any], extra: dict[str, Any]) -
     ]
     for r in extra["sync"]["beats"]:
         src = "<br>".join(f"{x['file']} @ {_ts(x['source_timestamp'])}-{_ts(x['clip_end'])} ({x['rights']})" for x in r["footage"]) or f"**MISSING** - {r.get('reason') or ''}"
+        if r["footage"] and r.get("status") in STAND_IN:
+            src += f"<br>**closest footage** - {r.get('reason') or 'nothing verified shows it'}"
         fc = ", ".join(f"{x['similarity']}" + ("" if x["passed"] else " FAIL") for x in r["frame_check"]) or "-"
         out.append(f"| {r['beat']} | {_ts(r['start'])}-{_ts(r['end'])} | {r['narration']} | {r['shows'] or ''}" + (f" (seen: {r['seen']})" if r.get("seen") else "") + f" | {src} | {r['status']} | {r['confidence']} | {fc} |")
     out += ["", "## Checks", ""]
@@ -255,6 +266,9 @@ def production_report(ctx: Any, report: dict[str, Any], extra: dict[str, Any]) -
     todo = []
     if not extra["fully_verified"]:
         missing = [r for r in extra["sync"]["beats"] if not r["footage"]]
+        closest = [r for r in extra["sync"]["beats"] if r["footage"] and r.get("status") in STAND_IN]
+        if closest:
+            todo.append("These beats show the closest footage there was, not footage verified to show them: add footage that does (`python -m gta_factory footage add <file or URL>`), then resume from `match`: " + "; ".join(f"beat {r['beat']} “{r['narration']}”" for r in closest))
         if missing:
             todo.append("Add real footage for the missing beats (`python -m gta_factory footage add <file or URL>`), then resume from `footage`: " + "; ".join(f"beat {r['beat']} “{r['narration']}”" for r in missing))
         if any(not c["passed"] and c["id"] == "rights.documented" for c in report["checks"]):

@@ -40,7 +40,7 @@
   .s-needs_review, .s-paused { background:rgba(255,170,43,.15); color:var(--amber); }
   .s-stopped { background:rgba(155,166,204,.15); color:var(--mute); }
   .v-confirmed { color:var(--lime); } .v-reported { color:var(--cyan); } .v-rumor { color:var(--amber); } .v-speculation { color:var(--violet); } .v-unverified { color:var(--amber); }
-  .b-verified_vision, .b-verified_clip { color:var(--lime); } .b-general { color:var(--cyan); } .b-weak { color:var(--amber); } .b-missing { color:var(--coral); }
+  .b-verified_vision, .b-verified_clip { color:var(--lime); } .b-general { color:var(--cyan); } .b-weak, .b-related, .b-filler { color:var(--amber); } .b-missing { color:var(--coral); }
   .bar { height:6px; background:var(--ink2); border-radius:99px; overflow:hidden; margin:8px 0 4px; }
   .bar > div { height:100%; background:linear-gradient(90deg, var(--coral), var(--sun)); }
   .steps { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
@@ -212,7 +212,7 @@ function outlineCard(o) {
       el('td', {class: 'muted'}, [...(it.claim_ids || []), ...(it.game_fact_ids || [])].join(' ')))))));
 }
 
-const BEAT_FR = {verified_vision:'vérifié (vision)', verified_clip:'vérifié (CLIP)', general:'gameplay libre', weak:'incertain', missing:'MANQUANT'};
+const BEAT_FR = {verified_vision:'vérifié (vision)', verified_clip:'vérifié (CLIP)', general:'gameplay libre', weak:'incertain', related:'le plus proche (à remplacer)', filler:'remplissage (à remplacer)', missing:'MANQUANT'};
 function shortCard(d) {
   const sh = d.short;
   if (!sh) return null;

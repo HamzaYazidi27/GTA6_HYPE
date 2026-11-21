@@ -23,14 +23,14 @@ REFERENCE_CHANNEL = "https://www.youtube.com/@Tacticalpath"
 DEFAULT_EDITOR = {
     "shot_hold_s": 2.2,          # longest continuous piece of one shot
     "max_beat_s": 4.5,           # a beat longer than this is cut into several shots
-    "zoom": {"push_per_s": 0.025, "punch_on_number": 1.12, "punch_frames": 4},
+    "zoom": {"push_per_s": 0.03, "punch_on_number": 1.12, "punch_frames": 4, "alternate": True, "shake_on_number": 10},
     "grade": {"saturation": 1.0, "contrast": 1.0, "brightness": 0.0, "sharpen": 0.0},
     "captions": {"top": 0.69, "size": 76, "max_words": 3, "uppercase": True, "highlight": "accent"},
     "footage_dim": 0.06,
     "sfx": {"number": "impact", "item_cut": "whoosh", "inner_cut": "none", "cta": "pop", "hook": "riser"},
     "music_gain_db": -19.0,
     "number_badge": True,
-    "item_transition": "cut",    # cut | flash: how a new list item comes in
+    "item_transition": "zoom",   # cut | flash | zoom (a fast zoom-in with motion blur): how a new list item comes in
     "sentence_gap_s": 0.08,      # breath between two sentences of the narration
     "cut_lead_s": 0.05,          # a cut lands this long before the word it illustrates
 }
@@ -58,6 +58,8 @@ def load_profile(settings: Any) -> dict[str, Any]:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return default_profile("style_profile.json could not be read.")
+    if data.get("status") != "measured":  # an unmeasured profile holds a copy of old defaults: the current ones apply
+        data["editor"] = {}
     editor = {**json.loads(json.dumps(DEFAULT_EDITOR)), **(data.get("editor") or {})}
     for k in ("zoom", "grade", "captions", "sfx"):
         editor[k] = {**DEFAULT_EDITOR[k], **((data.get("editor") or {}).get(k) or {})}
@@ -102,7 +104,7 @@ def derive_editor(measured: dict[str, Any]) -> dict[str, Any]:
         e["captions"]["max_words"] = int(clamp(round(cap.get("words_on_screen_median") or 3), 1, 6, 3))
     tr = measured.get("transitions") or {}
     if tr.get("flash_share") is not None:
-        e["item_transition"] = "flash" if tr["flash_share"] >= 0.15 else "cut"
+        e["item_transition"] = "flash" if tr["flash_share"] >= 0.15 else "zoom" if (cam.get("punch_in_share_of_cuts") or 0) >= 0.08 else "cut"
     aud = measured.get("audio") or {}
     if aud.get("music_db_below_voice") is not None:
         e["music_gain_db"] = round(-clamp(aud["music_db_below_voice"], 8, 30, 19), 1)

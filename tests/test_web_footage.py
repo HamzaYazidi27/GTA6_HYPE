@@ -55,7 +55,7 @@ def _jpeg(path: Path) -> Path:
     return path.with_suffix(".jpg")
 
 
-def test_missing_beats_are_searched_downloaded_and_kept_for_their_job(project) -> None:
+def test_missing_beats_are_searched_downloaded_and_kept_in_the_library(project) -> None:
     s = project["settings"]
     searched: list[str] = []
 
@@ -88,16 +88,48 @@ def test_missing_beats_are_searched_downloaded_and_kept_for_their_job(project) -
     root = footage_dir(s)
     video = root / row["videos"][0]["file"]
     side = _sidecar(video)
-    assert side["web_found"] and side["article_media"] == "job1" and side["credit"] == "Footage: Some Gamer (YouTube)"
+    assert side["web_found"] and "article_media" not in side and side["credit"] == "Footage: Some Gamer (YouTube)"
+    assert side["found_for"]["text"] == "or paddle a kayak." and side["found_for"]["job"] == "job1"
     assert rights_of(s, side) == "web_found"
-    # the picture is in the library for this job only, never for another one
+    assert row["videos"][0]["file"].startswith("videos/web/") and row["videos"][0]["file"].count("/") == 2  # the shared web folder
+    # the picture and the video stay in the library: the next Shorts use them too
     photo = root / row["photos"][0]["file"]
     assert rights_of(s, _sidecar(photo)) == "web_found"
     index = build_index(s)
     assert any(p["file"] == row["photos"][0]["file"] for p in index["photos"])
-    assert any(p["file"] == row["photos"][0]["file"] for p in load_items(s, index, job="job1")["photos"])
-    assert not any(p["file"] == row["photos"][0]["file"] for p in load_items(s, index, job="job2")["photos"])
+    for job in ("job1", "job2"):
+        items = load_items(s, index, job=job, web=True)
+        assert any(p["file"] == row["photos"][0]["file"] for p in items["photos"])
+    # the other videos (news, comparisons...) leave web finds out unless footage.use_web_found is on
+    plain = load_items(s, index, job="job2")
+    assert not any(p["file"] == row["photos"][0]["file"] for p in plain["photos"]) and not any(v["file"] == row["videos"][0]["file"] for v in plain["shots"])
     assert any(v["file"] == row["videos"][0]["file"] for v in index["videos"])
+    # a second Short needing the same thing: nothing already in the library is downloaded again
+    downloads: list[str] = []
+    again = ws.source_missing(s, [{"index": 0, "text": "Paddle a kayak.", "concept": "a person paddling a kayak", "game": "gta6"}], job="job2", log=lambda m: None,
+                              search_videos=search_videos, download_video=lambda url, folder: downloads.append(url) or (None, {}),
+                              search_images=search_images, download_image=lambda url, dest, referer: downloads.append(url) or None)
+    assert downloads == [] and again["beats"][0]["already_in_library"] == ["https://www.youtube.com/watch?v=aaaaaaaaaaa"]
+
+
+def test_web_finds_can_stay_with_their_job_only(project) -> None:
+    import yaml
+
+    from gta_factory.app.config.settings import get_settings, reset_settings_cache
+
+    root = project["root"]
+    cfg = yaml.safe_load((root / "config.yaml").read_text())
+    cfg["script_short"] = {"web_footage": {"keep_in_library": False}}
+    (root / "config.yaml").write_text(yaml.safe_dump(cfg))
+    reset_settings_cache()
+    s = get_settings(root=root, config_file=root / "config.yaml")
+    assert ws.defaults(s)["keep_in_library"] is False
+    rep = ws.source_missing(s, [{"index": 0, "text": "Paddle a kayak.", "concept": "kayak", "game": "gta6"}], job="job1", log=lambda m: None,
+                            search_videos=lambda q, n: [], download_video=None,
+                            search_images=lambda q, n: [{"url": "https://img.example.com/k.jpg", "title": "GTA 6 kayak", "page": "https://news.example.com/gta-6"}],
+                            download_image=lambda url, dest, referer: _jpeg(dest))
+    f = rep["beats"][0]["photos"][0]["file"]
+    assert f.startswith("photos/web/job1/") and _sidecar(footage_dir(s) / f)["article_media"] == "job1"
 
 
 def test_a_broken_download_is_dropped(project) -> None:

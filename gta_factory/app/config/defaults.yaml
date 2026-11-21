@@ -148,6 +148,7 @@ script_short:
   style_profile: style/style_profile.json   # editing style measured from the reference channel (python -m gta_factory style analyze ...)
   vision_verify: true              # look at the chosen frames with the local vision model (Ollama) when it runs
   fetch_new_official: true         # check the official Rockstar channels for new videos before matching
+  never_blank: true                # a beat nothing verified shows gets the closest footage there is (marked "related" in the report), never an empty screen
   web_footage:                     # a beat the library cannot show is searched on the internet, by itself
     enabled: true                  # YouTube videos first, then pictures (Bing / DuckDuckGo images); all verified like the library
     videos_per_beat: 2             # videos downloaded per missing beat
@@ -157,6 +158,7 @@ script_short:
     max_height: 720
     search_results: 12             # results read per search
     photo_fallback: true           # a picture (slow zoom) rather than a blank when no video shows the phrase
+    keep_in_library: true          # what is found stays in the library (videos/web, photos/web) for the next Shorts; never downloaded twice
     exclude_words: []              # more title words that mark a result as not real footage (fan-made, mods... are built in)
 
 script:
@@ -304,6 +306,7 @@ footage:
   photo_hold_seconds: 3.5          # a screenshot inside a scene stays this long
   max_clip_seconds: 6              # longest continuous excerpt of one trailer shot (a scene chains several shots)
   min_piece_seconds: 1.2           # shortest cut
+  use_web_found: false             # also use, in the other videos, the footage Script to Short found on the web (permission not checked)
   dir: "assets/gta6_footage"       # videos/ and photos/ inside; drop files there, or `footage add`, or the dashboard
   tags_file: "knowledge/footage_tags.yaml"   # your own characters, places, things the narration can call for
   credit: "Footage: Rockstar Games"
