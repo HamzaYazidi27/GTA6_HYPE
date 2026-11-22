@@ -721,7 +721,10 @@ def step_mix(ctx: JobContext) -> dict[str, Any]:
         from ...modules.script_short.produce import files as short_files
         from ...modules.script_short.style import editor_params
 
-        extra = {"events": read_json(short_files(ctx).sfx, []) or [], "music_gain_db": float(editor_params(ctx.settings)["music_gain_db"])}
+        extra = {"events": read_json(short_files(ctx).sfx, []) or [], "music_gain_db": float(editor_params(ctx.settings, ctx.options.get("edit_style"))["music_gain_db"])}
+        if ctx.options.get("edit_style") == "replay":
+            cut_list = read_json(short_files(ctx).edl_json, {}) or {}
+            extra["source_events"] = [ev for ev in cut_list.get("events", []) if ev.get("source_audio_path")]
     stats = build_mix(ctx.settings, master=master, scenes=ctx.need(ctx.paths.scenes), voice_path=ctx.paths.voiceover, out_wav=ctx.paths.mix, **extra)
     write_json(ctx.paths.mix_stats, stats)
     mux(ctx.settings, video=ctx.paths.video_silent, audio=ctx.paths.mix, out=ctx.paths.final_video)

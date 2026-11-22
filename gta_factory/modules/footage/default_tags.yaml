@@ -71,7 +71,7 @@ beach:
   say: ["beach", "beaches", "shoreline", "seaside", "sand"]
   look: "a beach: sand, sea, sunbathers"
 police:
-  say: ["police", "cops", "cop", "sheriff", "law enforcement", "arrest", "arrested", "swat"]
+  say: ["police", "cops", "cop", "sheriff", "law enforcement", "arrest", "arrested", "swat", "wanted level"]
   look: "police: officers, patrol cars, sirens, an arrest"
 chase:
   say: ["chase", "chases", "pursuit", "getaway", "car chase", "police chase"]

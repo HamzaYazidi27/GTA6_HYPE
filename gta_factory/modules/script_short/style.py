@@ -65,7 +65,14 @@ def load_profile(settings: Any) -> dict[str, Any]:
     return data
 
 
-def editor_params(settings: Any) -> dict[str, Any]:
+def editor_params(settings: Any, preset: str | None = None) -> dict[str, Any]:
+    if preset in ("focus", "replay"):
+        return {
+            **DEFAULT_EDITOR, "status": preset, "reason": "", "number_badge": False,
+            "zoom": {"push_per_s": 0.014, "punch_on_number": 1.0, "punch_frames": 4},
+            "captions": {**DEFAULT_EDITOR["captions"], "max_words": 6 if preset == "replay" else 4, "size": 108},
+            "sfx": {"hook": "impact", "number": "tick", "reveal": "tick", "cta": "pop", "item_cut": "none", "inner_cut": "none"},
+        }
     prof = load_profile(settings)
     return {**prof["editor"], "status": prof.get("status", "not_measured"), "reason": prof.get("reason", "")}
 

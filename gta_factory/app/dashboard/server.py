@@ -192,7 +192,7 @@ def short_payload(settings: Any, job_id: str, job: dict[str, Any], root: Path, o
         "beats": beats,
         "fully_verified": qc.get("fully_verified"),
         "verdict": qc.get("verdict"),
-        "style": style.get("status") or (read_json(settings.root / "style" / "style_profile.json") or {}).get("status", "not_measured"),
+        "style": style.get("status") or (job.get("options", {}).get("edit_style") if job.get("options", {}).get("edit_style") in ("focus", "replay") else None) or (read_json(settings.root / "style" / "style_profile.json") or {}).get("status", "not_measured"),
         "files": files,
         "cover": f"/files/{job_id}/out/cover.png" if (out_dir / "cover.png").exists() else None,
         "report": report.read_text(encoding="utf-8") if report.exists() else None,
@@ -521,7 +521,7 @@ class Handler(BaseHTTPRequestHandler):
                 from ...modules.script_short.produce import create_script_job
 
                 adv = body.get("options") or {}
-                options = {k: adv[k] for k in ("no_search", "whisper", "allow_weak", "offline", "no_web") if k in adv} | voice_options(adv)
+                options = {k: adv[k] for k in ("no_search", "whisper", "allow_weak", "offline", "no_web", "edit_style") if k in adv} | voice_options(adv)
                 if str(adv.get("fps") or "") in ("30", "60", "auto"):
                     options["fps"] = str(adv["fps"])
                 if adv.get("llm") in ("ollama", "claude_code", "anthropic", "openai", "none"):

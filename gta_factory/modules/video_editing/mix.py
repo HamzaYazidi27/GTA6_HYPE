@@ -125,8 +125,34 @@ def normalize_master(mix: np.ndarray, work: Path, out: Path, *, lufs: float, tru
     return {"input_lufs": measured["lufs"], "applied_gain_db": round(gain_db, 2), "limiter_max_reduction_db": round(reduction, 2), "output_lufs": final["lufs"], "output_true_peak_db": final["true_peak_db"], "output_lra": final["lra"]}
 
 
-def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, Any]], voice_path: Path, out_wav: Path, events: list[dict[str, Any]] | None = None, music_gain_db: float | None = None) -> dict[str, Any]:
-    """``events``: extra sound effects at absolute times ({"sfx", "at", "timing": "end_at"?}), e.g. on the beats of a Short."""
+def _mix_source_audio(mix: np.ndarray, activity: np.ndarray, cuts: list[dict[str, Any]]) -> int:
+    """Put the live part of each selected original under the corresponding narration."""
+    used = 0
+    for cut in cuts:
+        at = round(cut["record_in"] * WORK_SR)
+        duration = cut["record_out"] - cut["record_in"] - (cut.get("hold") or 0)
+        if duration <= 0 or at < 0 or at >= len(mix):
+            continue
+        audio = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(cut["source_in"]), "-i", cut["source_audio_path"],
+                                "-t", str(duration), "-map", "0:a:0", "-ac", "2", "-ar", str(WORK_SR),
+                                "-f", "f32le", "pipe:1"], capture_output=True)
+        if audio.returncode or not audio.stdout:
+            continue
+        clip = np.frombuffer(audio.stdout, dtype="<f4").reshape(-1, 2)[:len(mix)-at]
+        gain = min(1., 0.065 / max(0.001, float(np.sqrt(np.mean(clip**2)))))
+        level = gain * (1 - 0.84 * activity[at:at+len(clip)])
+        edge = min(round(.015 * WORK_SR), len(clip) // 2)
+        if edge:
+            fade = np.linspace(0, 1, edge)
+            level[:edge] *= fade
+            level[-edge:] *= fade[::-1]
+        mix[at:at+len(clip)] += clip * level[:, None]
+        used += 1
+    return used
+
+
+def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, Any]], voice_path: Path, out_wav: Path, events: list[dict[str, Any]] | None = None, music_gain_db: float | None = None, source_events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Mix sound cues with optional explicit start/end alignment and per-event gain trim in dB."""
     voice, sr = read_wav(voice_path)
     voice = resample(voice, sr)
     n = len(voice)
@@ -156,9 +182,9 @@ def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, A
     placed = {p["scene_number"]: p for p in master["scenes"]}
     cache: dict[str, np.ndarray] = {}
     used: list[dict[str, Any]] = []
-    cues = [(sc["scene_number"], sc.get("sound_effect") or "none", placed[sc["scene_number"]]["start_time"], None) for sc in scenes]
-    cues += [(None, ev["sfx"], float(ev["at"]), ev.get("timing")) for ev in events or []]
-    for scene_n, name, start, how in cues:
+    cues = [(sc["scene_number"], sc.get("sound_effect") or "none", placed[sc["scene_number"]]["start_time"], None, 0.0) for sc in scenes]
+    cues += [(None, ev["sfx"], float(ev["at"]), ev.get("timing"), float(ev.get("trim_db", 0.0))) for ev in events or []]
+    for scene_n, name, start, how, trim_db in cues:
         if name == "none":
             continue
         path = lib / "sound_effects" / f"{name}.wav"
@@ -177,15 +203,19 @@ def build_mix(settings: Any, *, master: dict[str, Any], scenes: list[dict[str, A
         end = min(n, at + len(src))
         if end <= at:
             continue
-        g = 10 ** ((sfx_gain + SFX_EXTRA_DB.get(name, 0.0)) / 20)
+        g = 10 ** ((sfx_gain + SFX_EXTRA_DB.get(name, 0.0) + trim_db) / 20)
         sfx[at:end] += src[: end - at] * g
         used.append({"scene_number": scene_n, "sfx": name, "at": round(at / WORK_SR, 3)})
+        if trim_db:
+            used[-1]["trim_db"] = trim_db
 
     voice_st = np.repeat(voice[:, None], 2, axis=1)
     mix = voice_st + music + sfx
     # stats for QC: how far the voice sits above the music while it is speaking
     speaking = activity > 0.6
     stats = {"music_mood": mood, "sfx_events": len(used), "sfx": used}
+    if source_events:
+        stats["source_audio_cuts"] = _mix_source_audio(mix, activity, source_events)
     if speaking.any():
         stats["voice_db_while_speaking"] = round(_db(voice[speaking]), 2)
         stats["music_db_while_speaking"] = round(_db(music[speaking].mean(axis=1)), 2)

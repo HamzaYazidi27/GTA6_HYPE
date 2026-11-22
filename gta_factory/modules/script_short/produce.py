@@ -28,6 +28,7 @@ from typing import Any
 
 from ...app.core.errors import ConfigError, FactoryError
 from ...app.core.utils import read_json, slugify, stable_hash, write_json, write_text
+from .focus import CHOICE_CUE, DETAIL_CUE, focus_panels, frame_subjects
 from .plan import plan_script, sentences_of
 from .style import editor_params, load_profile
 
@@ -98,8 +99,16 @@ def create_script_job(settings: Any, script: str, *, options: dict[str, Any] | N
     """A finished vertical Short from a narration script (``python -m gta_factory short-from-script``)."""
     from ...app.core.pipeline import create_job
 
+    from .replay import split_source_links
+
+    opts = {"edit_style": "replay", **(options or {}), "kind": "script"}
+    if opts["edit_style"] == "replay":
+        script, refs = split_source_links(script)
+        opts["replay_sources"] = refs
     text = check_script(script)
-    opts = {**(options or {}), "kind": "script", "script_text": text}
+    opts["script_text"] = text
+    if opts.get("edit_style", "standard") not in ("standard", "focus", "replay"):
+        raise ConfigError("Unknown Script to Short editing style.")
     label = "script:" + (slugify(" ".join(text.split()[:8]))[:40] or "short")
     return create_job(settings, [label], fmt="script_short", options=opts)
 
@@ -120,10 +129,24 @@ def voice_units(beats: list[dict[str, Any]], words: list[str]) -> list[tuple[int
     return out
 
 
+_ENGAGEMENT_ONLY = re.compile(
+    r"^\s*\d[\d,.]*\s*(?:[kmb]|thousand|million|billion)?\s+(?:views|likes|shares|saves)\s*[.!?]*\s*$", re.I
+)
+
+
 def number_items(beats: list[dict[str, Any]]) -> None:
     """Each beat knows the list item it belongs to (the badge stays on screen for the whole item)."""
     item = None
+    subject = None
     for b in beats:
+        if _ENGAGEMENT_ONLY.fullmatch(b.get("text", "")):
+            if subject and subject.get("game") == b.get("game"):
+                # The metric describes the previous clip; its own words still drive captions and voice.
+                for field in ("concept", "prompts", "distractors", "specific"):
+                    b[field] = subject[field]
+                b["visual_text"] = subject["text"]
+        else:
+            subject = b if b.get("role") not in ("suspense", "cta") else None
         if b.get("number"):
             item = b["number"]
         elif b["role"] in ("hook", "suspense", "cta"):
@@ -138,7 +161,7 @@ def step_script_plan(ctx: Any) -> dict[str, Any]:
     plan = plan_script(_llm(ctx), text, log=ctx.log)
     beats, words = plan["beats"], plan["words"]
     number_items(beats)
-    ed = editor_params(ctx.settings)
+    ed = editor_params(ctx.settings, ctx.options.get("edit_style"))
     units = voice_units(beats, words)
     scenes = []
     for k, (a, b, idx) in enumerate(units, 1):
@@ -348,7 +371,7 @@ def step_sync(ctx: Any) -> dict[str, Any]:
     write_json(ctx.paths.cues, cues)
     write_text(ctx.paths.srt, to_srt(cues))
     write_text(ctx.paths.vtt, to_vtt(cues))
-    ed = editor_params(s)
+    ed = editor_params(s, ctx.options.get("edit_style"))
     beats = beat_times(plan, scenes, placed, scene_words, cut_lead=float(ed["cut_lead_s"]))
     write_json(f.beats, {"fps": fps, "total_seconds": master["total_seconds"], "beats": beats})
     ctx.log(f"sync: {master['total_seconds']:.1f}s at {fps} fps, {len(all_words)} words ({methods}), {len(beats)} beats, shortest {min(b['need'] for b in beats):.2f}s")
@@ -419,11 +442,34 @@ def step_match(ctx: Any) -> dict[str, Any]:
     timing = ctx.need(f.beats)
     needs = [b["need"] for b in timing["beats"]]
     beats = [plan["beats"][b["beat"]] for b in timing["beats"]]
+    from .vocabulary import synonyms
+
+    # A named subject needs a real match even in an opening question or a CTA.
+    beats = [dict(b) for b in beats]
+    for beat in beats:
+        if any(synonyms([beat["text"]])) or re.search(r"\b(?:Jason|Lucia)\b", beat["text"], re.I):
+            beat["specific"] = True
+    if ctx.options.get("edit_style") == "replay":
+        for previous, beat in zip(beats, beats[1:]):
+            if (DETAIL_CUE.search(beat["text"]) and previous["game"] == beat["game"]
+                    and beat.get("number") is None and beat.get("item") == previous.get("item")):
+                # A detail such as "watch the spray" refers to the subject already on screen.
+                beat["visual_text"] = previous.get("visual_text") or previous["text"]
+                beat["concept"] = f"{previous['concept']}. {beat['concept']}"
+                beat["prompts"] = [beat["concept"], *beat["prompts"]]
     verify = vision_verifier(s, ctx.log) if s.get("script_short.vision_verify", True) else None
     if verify is None:
         ctx.log("match: no local vision model (Ollama) - frames are verified with CLIP's vote only (status verified_clip)")
     clip = Clip.load(s)
-    matches = match_beats(s, beats, needs, job=ctx.job_id, clip=clip, verify=verify, allow_photos=bool(ctx.options.get("allow_photos")), log=ctx.log)
+    from .replay import linked_matches
+
+    linked = linked_matches(ctx, beats, needs) if ctx.options.get("replay_sources") else {}
+    pending = [i for i in range(len(beats)) if i not in linked]
+    found = match_beats(s, [beats[i] for i in pending], [needs[i] for i in pending], job=ctx.job_id, clip=clip,
+                        verify=verify, allow_photos=bool(ctx.options.get("allow_photos")),
+                        used=_used(list(linked.values())), log=ctx.log) if pending else []
+    by_index = {**linked, **dict(zip(pending, found))}
+    matches = [by_index[i] for i in range(len(beats))]
     web = find_on_the_web(ctx, beats, needs, matches, clip=clip, verify=verify)
     allow_weak = bool(ctx.options.get("allow_weak"))
     for m, t in zip(matches, timing["beats"]):
@@ -433,6 +479,8 @@ def step_match(ctx: Any) -> dict[str, Any]:
         m["beat"] = t["beat"]
         m.update({k: t[k] for k in ("start", "end", "scene")})
         m["role"] = plan["beats"][t["beat"]]["role"]
+    _fill_unmatched(ctx, matches, clip, timing["beats"])
+    frame_subjects(matches, clip, aspect=9 / 8 if ctx.options.get("edit_style") == "replay" else 9 / 16)
     write_json(f.matches, {"verification": "vision" if verify else "clip", "matches": matches, "web": web})
     write_json(ctx.paths.rights, rights_review(s, matches))
     counts: dict[str, int] = {}
@@ -440,6 +488,24 @@ def step_match(ctx: Any) -> dict[str, Any]:
         counts[m["status"]] = counts.get(m["status"], 0) + 1
     ctx.log("match: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
     return counts
+
+
+def _fill_unmatched(ctx: Any, matches: list[dict[str, Any]], clip: Any, timing: list[dict[str, Any]]) -> None:
+    from .match import fill_illustrations
+    from .websource import defaults
+
+    allow_photos = defaults(ctx.settings)["photo_fallback"] or bool(ctx.options.get("allow_photos"))
+    focus_beats = timing if ctx.options.get("edit_style") in ("focus", "replay") else None
+    tails = [(m, {**m, "need": m["short_by"], "segments": [], "status": "missing"})
+             for m in matches if m.get("segments") and m.get("short_by", 0) > 0.25]
+    fill_illustrations(ctx.settings, matches, job=ctx.job_id, clip=clip, allow_photos=allow_photos, log=ctx.log, focus_beats=focus_beats)
+    if tails:
+        # Keep the verified beginning; cover only the remaining narration with an illustration.
+        fill_illustrations(ctx.settings, matches + [tail for _, tail in tails], job=ctx.job_id, clip=clip,
+                           allow_photos=allow_photos, log=ctx.log)
+        for original, tail in tails:
+            original["segments"].extend(tail["segments"])
+            original.update(status="illustration", confidence=0.0, short_by=0.0, web=original.get("web", False) or tail["web"])
 
 
 def _used(matches: list[dict[str, Any]]) -> dict[str, list[tuple[float, float]]]:
@@ -462,39 +528,63 @@ def find_on_the_web(ctx: Any, beats: list[dict[str, Any]], needs: list[float], m
     s = ctx.settings
     cfg = defaults(s)
     report: dict[str, Any] = {"enabled": cfg["enabled"], "searched": [], "videos": 0, "photos": 0, "filled": [], "photo_filled": []}
-    missing = [k for k, m in enumerate(matches) if not m["segments"]]
+    def outstanding(k):
+        m = matches[k]
+        return m.get("short_by", 0.0) if m["segments"] else needs[k]
+
+    missing = [k for k, m in enumerate(matches) if not m["segments"] or outstanding(k) > 0.25]
     if not missing:
         return report
-    if not cfg["enabled"] or ctx.options.get("offline") or ctx.options.get("no_web"):
+    online = cfg["enabled"] and not ctx.options.get("offline") and not ctx.options.get("no_web")
+    if not online:
         report["note"] = "web search off (offline / no_web / script_short.web_footage.enabled)"
-    else:
-        ctx.log(f"web footage: {len(missing)} beat(s) not in the library - searching the web (YouTube, then pictures)")
-        found = source_missing(s, [{**beats[k], "index": k} for k in missing], job=ctx.job_id, log=ctx.log)
-        report.update(searched=found["beats"], videos=found["videos"], photos=found["photos"], errors=found["errors"])
+
+    def search(indices: list[int], media: str) -> int:
+        found = source_missing(s, [{**beats[k], "index": k} for k in indices], job=ctx.job_id, log=ctx.log, media=media)
+        report[media] += found[media]
+        report.setdefault("errors", []).extend(found["errors"])
         for e in found["errors"][:3]:
             ctx.warn(f"web footage: {e}")
+        previous = {row["beat"]: row for row in report["searched"]}
+        for row in found["beats"]:
+            if row["beat"] in previous:
+                for field in ("videos", "photos", "skipped"):
+                    previous[row["beat"]].setdefault(field, []).extend(row.get(field, []))
+            else:
+                report["searched"].append(row)
+        return found[media]
 
     def again(idx: list[int], *, photos: bool) -> list[int]:
         if not idx:
             return []
-        got = match_beats(s, [beats[k] for k in idx], [needs[k] for k in idx], job=ctx.job_id, clip=clip, verify=verify, allow_photos=photos, used=_used(matches), log=ctx.log)
+        got = match_beats(s, [beats[k] for k in idx], [outstanding(k) for k in idx], job=ctx.job_id, clip=clip, verify=verify, allow_photos=photos, used=_used(matches), log=ctx.log)
         filled = []
         for k, m in zip(idx, got):
             if m["segments"]:
+                previous = matches[k]
+                if previous["segments"]:
+                    m = {**previous, "segments": previous["segments"] + m["segments"],
+                         "short_by": m.get("short_by", 0.0), "confidence": min(previous["confidence"], m["confidence"])}
                 m["beat"] = k
                 m["web"] = any(sg["rights"] == "web_found" or "/web/" in sg["file"] for sg in m["segments"])
                 matches[k] = m
                 filled.append(k)
                 ctx.log(f"match: beat {k + 1} “{m['text'][:48]}” -> {m['status']} ({m['confidence']:.2f}) {m['segments'][0]['file']}" + (" [web]" if m["web"] else "") + (" [picture]" if m["segments"][0]["kind"] == "photo" else ""))
-            else:  # the newest reason; the weak candidates of the library pass stay when this one has none
+            elif not matches[k]["segments"]:  # the newest reason; the weak candidates of the library pass stay when this one has none
                 weak = m.get("weak_segments") or matches[k].get("weak_segments")
-                matches[k] = {**m, "beat": k, **({"weak_segments": weak} if weak else {})}
+                rejected = matches[k].get("rejected_moments", []) + m.get("rejected_moments", [])
+                matches[k] = {**m, "beat": k, "rejected_moments": sorted(set(map(tuple, rejected))),
+                              **({"weak_segments": weak} if weak else {})}
         return filled
 
-    if report["videos"] or report["photos"]:
-        report["filled"] = again(missing, photos=bool(ctx.options.get("allow_photos")))
+    if online and search(missing, "videos"):
+        report["filled"] = again(missing, photos=False)
     if cfg["photo_fallback"]:
-        report["photo_filled"] = again([k for k in missing if not matches[k]["segments"]], photos=True)
+        remaining = [k for k in missing if outstanding(k) > 0.25 or not matches[k]["segments"]]
+        report["photo_filled"] = again(remaining, photos=True)
+        remaining = [k for k in remaining if outstanding(k) > 0.25 or not matches[k]["segments"]]
+        if remaining and online and search(remaining, "photos"):
+            report["photo_filled"].extend(again(remaining, photos=True))
     for k in missing:
         if not matches[k]["segments"]:
             row = next((r for r in report["searched"] if r.get("beat") == k), None)
@@ -524,17 +614,16 @@ def rights_review(settings: Any, matches: list[dict[str, Any]]) -> dict[str, Any
 
 # =========================================================================== edit
 def scene_sequence(sc: dict[str, Any], placed: dict[str, Any], beats_t: list[dict[str, Any]], by_beat: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    """The picture of one narration take: each beat's matched footage, or a blank where it is missing."""
+    """Build the take from source-backed beats, including contextual illustrations."""
     from .match import sequence_for
 
     segs: list[dict[str, Any]] = []
     for t in beats_t:
         m = by_beat[t["beat"]]
         offset = t["start"] - placed["start_time"]
-        if m["segments"]:
-            segs += sequence_for(m, t["need"], offset=offset)
-        else:
-            segs.append({"t": round(offset, 3), "d": round(t["need"], 3), "type": "blank", "beat": t["beat"]})
+        if not m["segments"]:
+            raise FactoryError(f"Beat {t['beat'] + 1} has no visual.", hint="Resume from match to select footage.")
+        segs += sequence_for(m, t["need"], offset=offset)
     return segs
 
 
@@ -560,10 +649,10 @@ def cut_sequence(segs: list[dict[str, Any]], total_frames: int, *, out: Path, ca
                 vf = f"setsar=1,format=yuv420p"
             elif sg["type"] == "photo":
                 cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{secs:.3f}", "-i", sg["file"]]
-                vf = _pan_filter(width, height, fps, nf, i)
+                vf = _pan_filter(width, height, fps, nf, i, sg.get("focus_x"))
             else:
                 cmd += ["-ss", f"{sg['start']:.3f}", "-t", f"{secs:.3f}", "-i", sg["file"]]
-                vf = _cover_filter(width, height, fps, sg.get("crop"))
+                vf = _cover_filter(width, height, fps, sg.get("crop"), sg.get("focus_x"), sg.get("focus_y"))
             pad = f",tpad=stop_mode=clone:stop={hold}" if hold > 0 else ""
             chains.append(f"[{i}:v]{vf},trim=end_frame={real if sg['type'] != 'blank' else nf},setpts=PTS-STARTPTS{pad}[v{i}];")
         graph = "".join(chains) + "".join(f"[v{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0[out]"
@@ -615,8 +704,33 @@ def scene_data(sc: dict[str, Any], placed: dict[str, Any], beats_t: list[dict[st
 
 
 def sfx_events(plan: dict[str, Any], beats_t: list[dict[str, Any]], ed: dict[str, Any]) -> list[dict[str, Any]]:
-    """Sound design from the beats: a hit on each list number, a whoosh into each item, a riser into the first one."""
+    """Place cut and speech accents for the selected editing style."""
     sfx = ed["sfx"]
+    if ed.get("status") in ("focus", "replay"):
+        events: list[dict[str, Any]] = []
+        numbered = any(plan["beats"][t["beat"]].get("number") is not None for t in beats_t)
+        previous_role = ""
+        for index, t in enumerate(beats_t):
+            beat = plan["beats"][t["beat"]]
+            role = beat["role"]
+            at = t["start"]
+            if index == 0:
+                cue, trim = "hook", -8.0
+            elif beat.get("number") is not None:
+                cue, trim = "number", -3.0
+                at = t["number_at"] if t.get("number_at") is not None else at
+            elif role == "cta" and previous_role != role:
+                cue, trim = "cta", -7.0
+            elif (not numbered and previous_role == "hook") or (role == "comparison" and previous_role != role):
+                cue, trim = "reveal", -5.0
+            else:
+                cue, trim = "none", 0.0
+            previous_role = role
+            sound = sfx.get(cue, "none")
+            if sound != "none" and (not events or at - events[-1]["at"] >= 2.2):
+                events.append({"sfx": sound, "at": round(at, 3), "timing": "start_at", "trim_db": trim})
+        return events
+
     out: list[dict[str, Any]] = []
     first_item = next((t for t in beats_t if plan["beats"][t["beat"]].get("number")), None)
     if sfx.get("hook", "none") != "none" and first_item and first_item["start"] > 1.0:
@@ -663,20 +777,37 @@ def step_edit(ctx: Any) -> dict[str, Any]:
     from ..branding import stage_brand
     from ..video_editing.render import stage_footage
     from ..video_editing.timeline import build_render_props, scene_local_words
+    from .match import long_focus_still
 
     s = ctx.settings
     f = files(ctx)
     plan = ctx.need(f.plan)
     timing = ctx.need(f.beats)
-    matches = ctx.need(f.matches)["matches"]
+    match_data = ctx.need(f.matches)
+    matches = match_data["matches"]
+    focus = ctx.options.get("edit_style") in ("focus", "replay")
+    pending = [m for m in matches if not m["segments"] or (focus and long_focus_still(m))]
+    if pending:  # resume an older edit without redoing verified matches
+        from ..footage.clip import Clip
+
+        clip = Clip.load(s)
+        _fill_unmatched(ctx, matches, clip, timing["beats"])
+        frame_subjects(pending, clip, aspect=9 / 8 if ctx.options.get("edit_style") == "replay" else 9 / 16)
+        write_json(f.matches, match_data)
+        write_json(ctx.paths.rights, rights_review(s, matches))
     scenes = ctx.need(ctx.paths.scenes)
     master = ctx.need(ctx.paths.master)
     script = ctx.need(ctx.paths.script)
     fps = int(master["fps"])
     prof = s.video_profile(ctx.fmt)
     width, height = int(prof["width"]), int(prof["height"])
-    ed = editor_params(s)
-    profile = load_profile(s)
+    ed = editor_params(s, ctx.options.get("edit_style"))
+    from .replay import replay_cards, source_label
+
+    replay = ed["status"] == "replay"
+    cards = replay_cards(plan["beats"], script["title"]) if replay else []
+    panel_height = 2 * round(height / 4) if replay else height
+    profile = ed if ed["status"] in ("focus", "replay") else load_profile(s)
     write_json(f.style, {"status": profile.get("status"), "reason": profile.get("reason", ""), "reference": profile.get("reference"), "editor": ed})
     placed = {p["scene_number"]: p for p in master["scenes"]}
     by_beat = {m["beat"]: m for m in matches}
@@ -688,15 +819,37 @@ def step_edit(ctx: Any) -> dict[str, Any]:
         p = placed[sc["scene_number"]]
         bt = [t for t in timing["beats"] if t["scene"] == sc["scene_number"]]
         segs = scene_sequence(sc, p, bt, by_beat)
-        clip = cut_sequence(segs, p["duration_frames"], out=ctx.paths.media / f"footage_scene_{sc['scene_number']:03d}.mp4", cache_dir=cache_dir, width=width, height=height, fps=fps)
+        clip = cut_sequence(segs, p["duration_frames"], out=ctx.paths.media / f"footage_scene_{sc['scene_number']:03d}.mp4", cache_dir=cache_dir, width=width, height=panel_height, fps=fps)
         credits = sorted({sg["credit"] for t in bt for sg in by_beat[t["beat"]]["segments"] if sg.get("credit")})
         sc["footage"] = {"kind": "video", "clip": str(clip), "credit": " / ".join(credits)}
         sc["data"] = scene_data(sc, p, bt, by_beat, plan, segs, ed, fps)
+        if replay:
+            sc["data"].update(editStyle="replay", credits=[], sectionLabel="GTA VI")
+            for t, card in zip(bt, sc["data"]["beats"]):
+                card.update(cards[t["beat"]])
+                card["gameLabel"] = "GTA V" if plan["beats"][t["beat"]].get("game") == "gta5" else "GTA VI"
+        if ed["status"] == "focus":
+            sc["data"]["editStyle"] = "focus"
+            for t, beat_data in zip(bt, sc["data"]["beats"]):
+                text = beat_data["label"]
+                beat_data["detail"] = bool(DETAIL_CUE.search(text))
+                beat_data["verifiedDetail"] = by_beat[t["beat"]]["status"] in ("verified_clip", "verified_vision")
+                if beat_data["role"] == "cta" and CHOICE_CUE.search(text):
+                    beat_data["panels"] = focus_panels(matches, t["beat"])
         for sg in segs:
             m = by_beat[sg["beat"]]
             src = next((x for x in m["segments"] if x["path"] == sg.get("file") and abs(x["start"] - sg.get("start", -1)) < 1e-3), None)
             rec_in = p["start_time"] + sg["t"]
             ev = {"beat": sg["beat"], "text": plan["beats"][sg["beat"]]["text"], "type": sg["type"], "record_in": round(rec_in, 3), "record_out": round(rec_in + sg["d"], 3), "file": (src or {}).get("file"), "source_in": sg.get("start"), "hold": sg.get("hold")}
+            if replay:
+                ev["replay_panel"] = True
+                if src and sg["type"] == "shot" and (m["status"] == "source_link" or source_label(src).startswith("@")):
+                    ev["source_audio_path"] = src["path"]
+                sc["data"]["credits"].append({"from": round(sg["t"] * fps), "label": source_label(src or {})})
+            if ed["status"] == "focus":
+                display = next(b for b, t in zip(sc["data"]["beats"], bt) if t["beat"] == sg["beat"])
+                if display.get("panels"):
+                    ev["recap_beats"] = [panel["beat"] for panel in display["panels"]]
             events.append(ev)
             if src:
                 manifest.append({
@@ -704,7 +857,9 @@ def step_edit(ctx: Any) -> dict[str, Any]:
                     "narration": plan["beats"][sg["beat"]]["text"],
                     "narration_start": round(m["start"], 3), "narration_end": round(m["end"], 3),
                     "on_screen_start": ev["record_in"], "on_screen_end": ev["record_out"],
-                    "shows": m["concept"], "seen_by_vision_model": m.get("seen") or None,
+                    "shows": m["concept"] if m["status"] != "illustration" else None,
+                    **({"recap_beats": ev["recap_beats"]} if "recap_beats" in ev else {}),
+                    "requested_visual": m["concept"], "seen_by_vision_model": m.get("seen") or None,
                     "file": src["file"], "game": src["game"], "source_url": src.get("source_url") or None, "creator": src.get("creator") or None, "credit": src.get("credit"),
                     "source_timestamp": round(src["start"], 3), "clip_start": round(src["start"], 3), "clip_end": round(src["start"] + sg["d"] - float(sg.get("hold") or 0), 3),
                     "frozen_seconds": sg.get("hold") or 0.0, "source_fps": src.get("fps"),
@@ -749,7 +904,9 @@ def step_cover(ctx: Any) -> dict[str, Any]:
         t = (sg["start"] + sg["end"]) / 2
         from ..footage.library import crop_filter
 
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", sg["path"], "-frames:v", "1", "-vf", f"{crop_filter(sg.get('crop'))}scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720", "-q:v", "2", str(photo)], capture_output=True)
+        seek = ["-ss", f"{t:.3f}"] if sg["kind"] == "shot" else []
+        crop = crop_filter(sg.get("crop")) if sg["kind"] == "shot" else ""
+        subprocess.run(["ffmpeg", "-y", "-v", "error", *seek, "-i", sg["path"], "-frames:v", "1", "-vf", f"{crop}scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720", "-q:v", "2", str(photo)], capture_output=True)
         if not photo.exists():
             photo = None
     nums = [b["number"] for b in plan["beats"] if b.get("number")]
@@ -786,7 +943,7 @@ def step_short_metadata(ctx: Any) -> dict[str, Any]:
         _llm(ctx), ctx.settings, fmt=ctx.fmt, script=script, story={"working_title": script["title"], "angle": script.get("angle") or {}},
         fact_check=fact_check, chapters=[], total_seconds=master["total_seconds"], sources=claims.get("sources") or [], rights=ctx.need(ctx.paths.rights),
         voice_provider=ctx.tts_name, log=ctx.log,
-        how="Every clip is real GTA VI footage matched to the words it plays under; sources of the footage are credited below.",
+        how="The edit uses game footage and may include illustrative shots or screenshots where the exact action could not be verified. Visual sources are credited below.",
     )
     meta["hashtags"] = list(dict.fromkeys([*(meta.get("hashtags") or []), "Shorts"]))[:4]
     if "#Shorts" not in meta["description"]:

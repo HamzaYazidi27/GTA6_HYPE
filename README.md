@@ -213,11 +213,16 @@ Les **bandes noires** des trailers au format cinéma sont détectées plan par p
 
 ## Script to Short : ton script → un Short fini
 
+**Ghost Plates Replay** est présélectionné pour les nouveaux Shorts. La première phrase sert d’accroche. Le montage adapte les titres et les sous-titres à la narration et affiche les rangs et les compteurs de vues quand le script les donne (par exemple `Number two: the airport.` et `14.9 million views.`). Pour choisir un extrait, colle son lien TikTok ou YouTube sur la même ligne après la phrase, avec éventuellement `#t=18` pour commencer à la dix-huitième seconde. Le lien reste hors narration. Sans lien, le montage utilise la recherche de footage habituelle.
+
+Dans **Style de montage**, choisis **Ghost Plates Focus** pour afficher une accroche courte en entier dès la première image. Écris-la en première phrase du script. Le cadrage vertical suit le sujet, les sous-titres soulignent les mots au moment où ils sont prononcés et les accents sonores ponctuent les révélations. Si une photo d’illustration dure au moins 4,5 secondes, le montage cherche un second plan pertinent et cale la coupe sur la narration. Une question de choix en conclusion peut rappeler les images déjà montrées.
+
 Tu colles ta narration, tu cliques **Générer** (carte **Script to Short** du dashboard), et l'usine livre un Short 9:16 prêt à publier où **chaque phrase passe sur les vraies images de GTA VI qui la montrent**, au moment exact où elle est dite.
 
 ```bash
 python -m gta_factory short-from-script "GTA 5 never let you do any of these. Seven: go viral on in-game social media. ... Comment the number you're trying first."
 python -m gta_factory short-from-script --file mon_script.txt --fps 60
+python -m gta_factory short-from-script --file mon_script.txt --edit-style focus
 ```
 
 Les étapes (reprenables une par une, comme les autres vidéos) :
@@ -229,7 +234,7 @@ Les étapes (reprenables une par une, comme les autres vidéos) :
 | `voice` | La voix (Kokoro par défaut), une prise par phrase. |
 | `sync` | Alignement **mot par mot** sur l'audio (faster-whisper, `pip install -e ".[align]"`) : chaque coupe tombe 0,05 s avant le mot qu'elle illustre. |
 | `footage` | Bibliothèque locale d'abord, puis nouvelles vidéos officielles Rockstar, puis l'index **CLIP** de toutes les images (2 par seconde, en cache). |
-| `match` | Pour chaque beat : la fenêtre de gameplay qui montre **exactement** ça (vote CLIP contre les sosies, l'action visible dès la première image), vérifiée par le modèle de vision local (Ollama) quand il tourne. Une correspondance incertaine **n'est pas montrée** (`--allow-weak` pour l'autoriser) ; un beat que la bibliothèque ne montre pas est **cherché tout seul sur internet** (voir « Footage trouvé sur internet » plus bas) ; seulement si rien de vérifié n'est trouvé non plus, il affiche ses mots sur le fond de la chaîne et est signalé **MANQUANT** : jamais d'image sans rapport à la place. |
+| `match` | Pour chaque beat : la fenêtre de gameplay qui montre **exactement** ça (vote CLIP contre les sosies, l'action visible dès la première image), vérifiée par le modèle de vision local (Ollama) quand il tourne. Si la bibliothèque ne suffit pas, le moteur cherche aussi sur internet. Il privilégie une vidéo vérifiée, puis une photo vérifiée. À défaut, il choisit une illustration du même jeu selon la narration. Les photos ont un mouvement doux. Le dashboard et le manifeste identifient les illustrations. Si la bibliothèque ne contient aucun visuel utilisable, le job indique quel jeu doit être complété avant le rendu. Avec `--allow-weak`, une correspondance incertaine passe avant l’illustration. |
 | `edit` | Timeline et style : clips coupés à l'image près, zoom lent qui repart à chaque coupe, punch-in sur le numéro, étalonnage, badge « #n », sous-titres 1-3 mots, sons (riser vers le n°1, whoosh + impact sur chaque numéro, pop sur l'appel à commenter). EDL et manifeste des sources. |
 | `render`, `mix` | Remotion 1080×1920 (60 i/s si le footage est en 60), H.264 / AAC, −14 LUFS. |
 | `cover`, `short_metadata` | Couverture depuis la meilleure image vérifiée, titre, description (crédits du footage), hashtags. |
@@ -240,10 +245,10 @@ Dans le dashboard, la carte du job montre chaque beat avec son footage et son st
 
 **Footage trouvé sur internet** : pour chaque beat **MANQUANT** après la bibliothèque, l'usine cherche toute seule, sans que tu ajoutes rien :
 
-1. **des vidéos YouTube** (« GTA 6 + les mots de la phrase + gameplay ») : celles de Rockstar d'abord, puis des vidéos de gameplay courtes dont le titre nomme le bon jeu. Les titres « fan made », concept, mods, réaction, leak, ou d'un autre jeu (une recherche GTA 6 qui ramène du GTA 5) sont écartés. Les meilleures (2 par beat, 720p, 10 min max) sont téléchargées dans `videos/web/<job>/` ;
-2. **des images** (Bing Images, puis DuckDuckGo) dont le titre ou la page nomme le jeu, 640 px minimum, dans `photos/web/<job>/`.
+1. **des vidéos YouTube** (« GTA 6 + les mots de la phrase + gameplay ») : celles de Rockstar d'abord, puis des vidéos de gameplay courtes dont le titre nomme le bon jeu. Les titres « fan made », concept, mods, réaction, leak, ou d'un autre jeu (une recherche GTA 6 qui ramène du GTA 5) sont écartés. Les meilleures (2 par beat, 720p, 10 min max) sont téléchargées dans `videos/web/<source>/` ;
+2. **des images** (Bing Images, puis DuckDuckGo) dont le titre ou la page nomme le jeu, 640 px minimum, dans `photos/web/<source>/`.
 
-Tout ce qui est trouvé passe **les mêmes contrôles** que la bibliothèque (logo / sous-titres incrustés, vote CLIP contre les sosies, modèle de vision) puis le beat est re-matché : une vidéo d'abord, une image (zoom lent) seulement si aucune vidéo ne montre la phrase. Un beat de comparaison (« GTA 5 stopped at five ») remplit aussi tout seul la bibliothèque GTA 5 avec ses vidéos officielles. Ce footage n'est utilisé que pour ce job. Le rapport le marque **web** (« · web », « · photo » dans le dashboard) avec le lien de la source : le contrôle qualité passe avec un avertissement (« vérifie que tu peux l'utiliser avant de publier ») et la vidéo n'est pas « entièrement vérifiée » tant que tu ne l'as pas remplacé ou validé. Réglages : `script_short.web_footage` dans `config.yaml` ; `--no-web` (ou la case du dashboard) pour ne pas chercher, `--offline` pour ne rien télécharger du tout.
+Tout ce qui est trouvé passe **les mêmes contrôles** que la bibliothèque (logo / sous-titres incrustés, vote CLIP contre les sosies, modèle de vision) puis le beat est re-matché : une vidéo d'abord, une image (zoom lent) seulement si aucune vidéo ne montre la phrase. Un beat de comparaison (« GTA 5 stopped at five ») remplit aussi tout seul la bibliothèque GTA 5 avec ses vidéos officielles. Les prochains Shorts cherchent aussi dans ces téléchargements et ceux des anciens jobs. Une URL déjà en bibliothèque est écartée des nouveaux téléchargements. Le rapport le marque **web** (« · web », « · photo » dans le dashboard) avec le lien de la source : le contrôle qualité passe avec un avertissement (« vérifie que tu peux l'utiliser avant de publier ») et la vidéo n'est pas « entièrement vérifiée » tant que tu ne l'as pas remplacé ou validé. Réglages : `script_short.web_footage` dans `config.yaml` ; `--no-web` (ou la case du dashboard) pour ne pas chercher, `--offline` pour ne rien télécharger du tout.
 
 **Le footage** : la qualité du Short dépend de ta bibliothèque. Ajoute tes captures de gameplay (`footage add ~/Captures/gta6 --own`) ou les vidéos officielles (`footage update`) puis `python -m gta_factory footage index` (index CLIP, une fois ; le modèle ~150 Mo est téléchargé au premier usage, `pip install -e ".[clip]"`). Une vidéo d'un autre créateur n'est utilisée que si tu as le droit (`--third-party-ok`) ; sinon elle est signalée « droits non documentés » et bloque « entièrement vérifié ».
 

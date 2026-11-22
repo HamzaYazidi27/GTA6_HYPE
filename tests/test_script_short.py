@@ -47,11 +47,19 @@ def test_validate_beats_rejects_gaps_and_overlaps() -> None:
     assert plan.validate_beats([{"words": [0, 4]}, {"words": [5, 9]}], 10) is None
 
 
+@pytest.mark.parametrize(("answer", "words"), [("bad score", ["bad", "score"]), (["score"], ["score"]), ({"bad": 1}, [])])
+def test_model_emphasis_keeps_whole_words(answer, words) -> None:
+    beat = plan.segment_script("One bad score.")["beats"][0]
+    assert plan._merge(beat, {"emphasis": answer})["emphasis"] == words
+
+
 def test_lead_numbers() -> None:
     assert plan.lead_number("Seven: go viral") == 7
     assert plan.lead_number("Number 3. Dive") == 3
     assert plan.lead_number("Six-star wanted levels") is None
     assert plan.lead_number("#4 - airboats") == 4
+    assert plan.lead_number("14.9 million views.") is None
+    assert plan.lead_number("17,500,000 views.") is None
 
 
 def test_voice_units_keep_beats_inside_one_take() -> None:
@@ -142,6 +150,94 @@ def test_sequence_fills_the_beat_and_holds_when_the_shot_is_short() -> None:
     assert "hold" not in seq[0]
 
 
+def test_photo_only_library_fills_rejected_beats(project, monkeypatch) -> None:
+    from gta_factory.app.core.errors import FactoryError
+    from gta_factory.modules.footage import clip as footage_clip
+    from gta_factory.modules.footage.library import footage_dir
+    from PIL import Image
+
+    s = project["settings"]
+    folder = footage_dir(s) / "photos"
+    folder.mkdir(parents=True)
+    Image.new("RGB", (640, 480), "green").save(folder / "park.jpg")
+
+    def indexed(settings, items, **kwargs):
+        rows = [dict(key=p["key"], kind="photo", t=None) for p in items["photos"]]
+        return rows, np.ones((len(rows), 2))
+
+    class Clip:
+        def embed_text(self, texts):
+            return np.ones((len(texts), 2))
+
+    monkeypatch.setattr(footage_clip, "index_frames", indexed)
+    beat = {"text": "Shoot hoops.", "concept": "a basketball hoop", "specific": True, "game": "gta6"}
+    matches = match.match_beats(s, [beat], [1.5], clip=Clip(), allow_photos=True, log=lambda _: None)
+    assert matches[0]["considered"] == 1 and matches[0]["status"] == "missing"
+    with pytest.raises(FactoryError, match="No usable gta6 visual"):
+        match.fill_illustrations(s, matches, job="test", clip=Clip(), allow_photos=False, log=lambda _: None)
+    match.fill_illustrations(s, matches, job="test", clip=Clip(), allow_photos=True, log=lambda _: None)
+    result = matches[0]
+    assert result["status"] == "illustration" and result["confidence"] == 0
+    assert match.sequence_for(result, 1.5) == [
+        {"beat": 0, "d": 1.5, "t": 0.0, "type": "photo", "file": str(folder / "park.jpg"), "start": 0.0}
+    ]
+
+
+@pytest.mark.parametrize("has_alternate", [True, False])
+def test_long_focus_still_cuts_on_spoken_clause_only_with_eligible_alternate(project, monkeypatch, has_alternate) -> None:
+    from copy import deepcopy
+    from PIL import Image
+    from gta_factory.modules.footage import clip as footage_clip
+    from gta_factory.modules.footage.library import footage_dir, sidecar_path
+
+    settings = project["settings"]
+    folder = footage_dir(settings) / "photos"
+    folder.mkdir(parents=True)
+    vectors = {"first": [0.8, 0.6, 0.0], "copy": [0.8, 0.6, 0.0],
+               "unlicensed": [0.9, -0.4, 0.0], "unrelated": [0.1, 0.0, 0.99]}
+    if has_alternate:
+        vectors["second"] = [0.79, -0.6, 0.0]
+    for name in vectors:
+        photo = folder / f"{name}.jpg"
+        Image.new("RGB", (400, 300), "green").save(photo)
+        if name != "unlicensed":
+            sidecar_path(photo).write_text(json.dumps({"own_capture": True}))
+
+    def indexed(settings, items, **kwargs):
+        rows = [dict(key=p["key"], kind="photo", t=None) for p in items["photos"]]
+        return rows, np.array([vectors[Path(row["key"]).stem] for row in rows])
+
+    class Clip:
+        def embed_text(self, texts):
+            return np.tile([1.0, 0.0, 0.0], (len(texts), 1))
+
+    monkeypatch.setattr(footage_clip, "index_frames", indexed)
+    first = dict(file="photos/first.jpg", path=str(folder / "first.jpg"), kind="photo", start=0.0, end=6.3, rights="own")
+    match_ = dict(beat=4, need=6.3, game="gta6", text="A bad score, pulling them into trouble.",
+                  concept="a car chase", segments=[first], status="illustration", confidence=0, reason="unverified")
+    kwargs = dict(job="test", clip=Clip(), allow_photos=True, log=lambda _: None)
+    timing = [dict(beat=4, start=9.133, need=6.3, words=[
+        {"w": "score,", "s": 10.973, "e": 11.373}, {"w": "pulling", "s": 11.813, "e": 12.033},
+        {"w": "them", "s": 12.033, "e": 12.233}, {"w": "into", "s": 12.233, "e": 12.433}])]
+
+    original = deepcopy(match_)
+    match.fill_illustrations(settings, [match_], **kwargs)
+    assert match_ == original
+    verified = dict(original, status="verified_clip")
+    match.fill_illustrations(settings, [verified], focus_beats=timing, **kwargs)
+    assert verified == dict(original, status="verified_clip")
+
+    match.fill_illustrations(settings, [match_], focus_beats=timing, **kwargs)
+    sequence = match.sequence_for(match_, 6.3)
+    assert match_["status"] == "illustration" and match_["reason"] == "unverified" and match_["confidence"] == 0
+    assert [sg["d"] for sg in sequence] == ([2.68, 3.62] if has_alternate else [6.3])
+    assert [Path(sg["file"]).stem for sg in sequence] == (["first", "second"] if has_alternate else ["first"])
+    assert all(a["review_status"] == "cleared" for a in produce.rights_review(settings, [match_])["assets"])
+    saved = deepcopy(match_)
+    match.fill_illustrations(settings, [match_], focus_beats=timing, **kwargs)
+    assert match_ == saved
+
+
 # ----------------------------------------------------------------------------- cutting, EDL, sound
 @pytest.mark.skipif(not FFMPEG, reason="ffmpeg missing")
 def test_cut_sequence_is_frame_exact(tmp_path: Path) -> None:
@@ -173,6 +269,19 @@ def test_sfx_events_hit_the_numbers() -> None:
     assert {"sfx": "riser", "at": 2.0, "timing": "end_at"} in ev
     assert {"sfx": "impact", "at": 2.05} in ev and {"sfx": "whoosh", "at": 1.75} in ev
     assert {"sfx": "pop", "at": 5.1} in ev
+
+
+def test_focus_sound_starts_on_picture_and_spaces_out_speech_accents() -> None:
+    ed = style.editor_params(None, "focus")
+    plan = {"beats": [{"role": "hook"}, {"role": "item", "number": 2}, {"role": "item", "number": 1}, {"role": "cta"}]}
+    times = [{"beat": 0, "start": 0.0}, {"beat": 1, "start": 2.7, "number_at": 2.82},
+             {"beat": 2, "start": 3.9, "number_at": 4.0}, {"beat": 3, "start": 6.2}]
+    cues = produce.sfx_events(plan, times, ed)
+    assert [(c["sfx"], c["at"]) for c in cues] == [("impact", 0.0), ("tick", 2.82), ("pop", 6.2)]
+    assert all(c["timing"] == "start_at" and c["trim_db"] < 0 for c in cues)
+
+    plan = {"beats": [{"role": "hook"}, {"role": "claim"}, {"role": "claim"}, {"role": "comparison"}]}
+    assert [(c["sfx"], c["at"]) for c in produce.sfx_events(plan, times, ed)] == [("impact", 0.0), ("tick", 2.7), ("tick", 6.2)]
 
 
 # ----------------------------------------------------------------------------- style profile and reference analyzer
@@ -245,6 +354,37 @@ def test_script_plan_step_writes_takes_and_scenes(project) -> None:
     assert claims["status"] == "not_checked" and all(c["status"] == "unverified" for c in claims["claims"])
 
 
+def test_reencoded_picture_is_reserved_across_beats_and_web_passes(project, monkeypatch):
+    from gta_factory.modules.footage import clip as footage_clip
+    from gta_factory.modules.footage.library import footage_dir
+    from PIL import Image
+
+    folder = footage_dir(project["settings"]) / "photos"
+    folder.mkdir(parents=True)
+    for name in ["a", "copy", "other", "noise"]:
+        Image.new("RGB", (320, 180), "blue").save(folder / f"{name}.jpg")
+
+    def indexed(settings, items, **kwargs):
+        rows = [dict(key=p["key"], kind="photo", t=None) for p in items["photos"]]
+        vectors = {"a": [1., 0.], "copy": [1., 0.], "other": [0.96, 0.28], "noise": [0., 1.]}
+        return rows, np.array([vectors[Path(r["key"]).stem] for r in rows])
+
+    class Clip:
+        def embed_text(self, texts):
+            return np.tile([1., 0.], (len(texts), 1))
+
+    monkeypatch.setattr(footage_clip, "index_frames", indexed)
+    opts = dict(clip=Clip(), allow_photos=True, log=lambda _: None)
+    beat = {"game": "gta6", "text": "Look closely.", "concept": "a car", "specific": False}
+    # Reserve a photo from pass one. Its duplicate must be rejected even when it ranks highest.
+    got = match.match_beats(project["settings"], [beat], [1.5], used={"photos/a.jpg": [(0, 2)]}, **opts)
+    assert got[0]["segments"][0]["file"] == "photos/other.jpg"
+    missing = dict(beat, beat=0, need=1.5, segments=[], status="missing")
+    reserved = dict(beat, beat=1, need=1, segments=[dict(path=str(folder/"a.jpg"), start=0, end=1)], status="general")
+    match.fill_illustrations(project["settings"], [missing, reserved], job="new", **opts)
+    assert missing["segments"][0]["file"] == "photos/other.jpg"
+
+
 def test_dashboard_creates_a_script_job(project) -> None:
     import threading
     import urllib.request
@@ -257,10 +397,11 @@ def test_dashboard_creates_a_script_job(project) -> None:
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/script-short", data=json.dumps({"script": EXAMPLE, "options": {"fps": "60", "allow_weak": True, "llm": "none"}}).encode(), method="POST",
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/script-short", data=json.dumps({"script": EXAMPLE, "options": {"fps": "60", "allow_weak": True, "llm": "none", "edit_style": "focus"}}).encode(), method="POST",
                                      headers={"Content-Type": "application/json", "X-Factory": "1"})
         job_id = json.loads(urllib.request.urlopen(req).read())["id"]
         d = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/jobs/{job_id}").read())
+        assert d["job"]["options"]["edit_style"] == "focus" and d["short"]["style"] == "focus"
         assert d["short"]["script"].startswith("GTA 5") and d["job"]["options"]["fps"] == "60" and d["job"]["options"]["allow_weak"] is True
     finally:
         httpd.shutdown()
@@ -315,3 +456,79 @@ def test_model_only_describes_the_rule_beats() -> None:
     assert [b["words"] for b in p["beats"]] == [b["words"] for b in rules]
     failed = plan.plan_script(LLM(RuntimeError("timeout")), EXAMPLE)
     assert failed["method"] == "rules" and failed["title"] == "GTA 5 never let you do any of these"
+
+
+def test_source_still_and_parent_shot_reserve_the_same_picture():
+    from types import SimpleNamespace
+
+    lib = SimpleNamespace(by_key={
+        "shot": dict(file="t.mp4", path="/t.mp4", kind="shot", s=140.0, e=141.5),
+        "still": dict(file="pic.jpg", path="/pic.jpg", kind="photo"),
+        "next": dict(file="t.mp4", path="/t.mp4", kind="shot", s=141.5, e=143.0)
+    }, origin={"shot": "trailer@140", "still": "trailer@140", "next": "trailer@142"})
+    assert match._used_origins(lib, {"pic.jpg": [(0, 2)]}) == {"trailer@140"}
+    assert match._used_origins(lib, {"t.mp4": [(140.3, 141.1)]}) == {"trailer@140"}
+
+
+def test_clip_alone_does_not_verify_a_near_tie_with_a_kayak(project, monkeypatch):
+    from gta_factory.modules.footage import clip as footage_clip
+    from gta_factory.modules.footage.library import footage_dir
+    from PIL import Image
+
+    settings = project["settings"]
+    folder = footage_dir(settings) / "photos"
+    folder.mkdir(parents=True)
+    Image.new("RGB", (320, 180)).save(folder / "boat.jpg")
+
+    def indexed(s, items, **kw):
+        return [{"key": items["photos"][0]["key"], "t": None, "kind": "photo"}], np.array([[1., 0.]])
+
+    class Clip:
+        def embed_text(self, texts):
+            return np.array([[0.325 if "jet ski" in t else 0.324 if "kayak" in t else 0.1, 0.] for t in texts])
+
+    monkeypatch.setattr(footage_clip, "index_frames", indexed)
+    beat = dict(text="Another jet ski.", concept="a person on a jet ski", specific=True)
+    result, = match.match_beats(settings, [beat], [1.], clip=Clip(), allow_photos=True, log=lambda _: None)
+    assert result["status"] == "missing" and not result["segments"]
+
+
+def test_view_count_uses_previous_action_for_footage():
+    from gta_factory.modules.script_short.websource import queries
+    beats = plan.segment_script("Number three: the airport. Jason walks through security. 14.9 million views.")["beats"]
+    produce.number_items(beats)
+    metric = beats[-1]
+    assert metric["text"] == "14.9 million views."
+    assert metric["number"] is None and metric["item"] == 3
+    assert metric["concept"] == beats[1]["concept"] and metric["visual_text"] == beats[1]["text"]
+    assert all("views" not in query for query in queries(metric, "GTA 6"))
+
+
+def test_replay_script_sources_stay_out_of_voice_and_metrics_stay_with_item(project) -> None:
+    from gta_factory.modules.script_short.replay import replay_cards
+
+    url = "https://www.tiktok.com/@someone/video/1234567890123456789"
+    script = f"Number two: the airport. Walk through security. 14.9 million views. {url}#t=18\nNumber one: the beach. Which one would you visit?"
+    s = project["settings"]
+    job = produce.create_script_job(s, script)
+    opts = json.loads((s.jobs_dir / job / "job.json").read_text())["options"]
+    assert opts["edit_style"] == "replay"
+    assert "https" not in opts["script_text"]
+    assert opts["replay_sources"] == [dict(first=0, last=9, url=url, start=18)]
+    beats = plan.segment_script(opts["script_text"])["beats"]
+    produce.number_items(beats)
+    cards = replay_cards(beats, "fallback")
+    assert [c["value"] for c in cards[:3]] == ["14.9M"] * 3
+    assert all(c["headline"] == "the airport" for c in cards[:3])
+    assert all("value" not in c for c in cards[3:])
+    assert beats[-1]["item"] is None
+    assert cards[-1]["headline"] == "Which one would you visit?"
+
+
+def test_replay_rank_spoken_alone_uses_the_next_subject():
+    from gta_factory.modules.script_short.replay import replay_cards
+
+    beats = plan.segment_script("Four. Open the truck. Three. Through airport security.")["beats"]
+    produce.number_items(beats)
+    assert [c["headline"] for c in replay_cards(beats, "unused")] == [
+        "Open the truck", "Open the truck", "Through airport security", "Through airport security"]

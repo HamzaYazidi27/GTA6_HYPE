@@ -55,7 +55,7 @@ def _jpeg(path: Path) -> Path:
     return path.with_suffix(".jpg")
 
 
-def test_missing_beats_are_searched_downloaded_and_kept_for_their_job(project) -> None:
+def test_missing_beats_are_downloaded_once_and_shared_by_short_jobs(project) -> None:
     s = project["settings"]
     searched: list[str] = []
 
@@ -90,13 +90,21 @@ def test_missing_beats_are_searched_downloaded_and_kept_for_their_job(project) -
     side = _sidecar(video)
     assert side["web_found"] and side["article_media"] == "job1" and side["credit"] == "Footage: Some Gamer (YouTube)"
     assert rights_of(s, side) == "web_found"
-    # the picture is in the library for this job only, never for another one
+    # Article workflows retain their own scope; Script to Short shares web sources.
     photo = root / row["photos"][0]["file"]
     assert rights_of(s, _sidecar(photo)) == "web_found"
     index = build_index(s)
     assert any(p["file"] == row["photos"][0]["file"] for p in index["photos"])
     assert any(p["file"] == row["photos"][0]["file"] for p in load_items(s, index, job="job1")["photos"])
     assert not any(p["file"] == row["photos"][0]["file"] for p in load_items(s, index, job="job2")["photos"])
+    assert any(p["file"] == row["photos"][0]["file"] for p in load_items(s, index, job="job2", shared_web=True)["photos"])
+    def unexpected(*args, **kwargs):
+        raise AssertionError("duplicate download")
+    retry = ws.source_missing(s, [{"text": "paddle a kayak", "game": "gta6"}], job="job2",
+                              search_videos=search_videos, search_images=search_images,
+                              download_video=unexpected, download_image=unexpected)
+    assert retry["videos"] == retry["photos"] == 0
+    assert all("duplicate download" not in x["why"] for x in retry["beats"][0]["skipped"])
     assert any(v["file"] == row["videos"][0]["file"] for v in index["videos"])
 
 
@@ -186,3 +194,29 @@ def test_offline_jobs_do_not_search_the_web(project, monkeypatch) -> None:
     m = [{"beat": 0, "text": "x", "concept": "x", "segments": [], "status": "missing", "reason": "r"}]
     rep = produce.find_on_the_web(ctx, [{"text": "x", "concept": "x"}], [1.0], m, clip=None, verify=None)
     assert "off" in rep["note"] and m[0]["search_url"].startswith("https://www.youtube.com/results")
+
+
+def test_missing_tail_keeps_verified_beginning_and_searches_images_after_video_failure(project, monkeypatch):
+    from types import SimpleNamespace
+    from gta_factory.modules.script_short import match, produce
+
+    beat = {"text": "Race jet skis.", "concept": "a jet ski", "specific": True}
+    first = {"file": "videos/first.mp4", "start": 4.0, "end": 5.0, "kind": "shot", "rights": "official"}
+    photo = {"file": "photos/web/next.jpg", "start": 0.0, "end": 1.5, "kind": "photo", "rights": "web_found"}
+    original = {**beat, "beat": 0, "need": 2.5, "segments": [first], "short_by": 1.5, "status": "verified_clip", "confidence": 0.8}
+    searches = []
+    def fetch(s, bs, *, media, **kwargs):
+        searches.append(media)
+        hits = [photo] if media == "photos" else []
+        return {"videos": 0, "photos": len(hits), "errors": [], "beats": [
+            {"beat": 0, "videos": [], "photos": hits, "queries": ["jet ski"], "skipped": []}]}
+    def rematch(s, bs, needs, **kwargs):
+        assert needs == [1.5] and kwargs["used"] == {"videos/first.mp4": [(4.0, 5.0)]}
+        return [{**original, "segments": [photo] if "photos" in searches else [], "short_by": 0}]
+    monkeypatch.setattr(ws, "source_missing", fetch)
+    monkeypatch.setattr(match, "match_beats", rematch)
+    matches = [original]
+    ctx = SimpleNamespace(settings=project["settings"], options={}, job_id="j", log=lambda _: None, warn=lambda _: None)
+    report = produce.find_on_the_web(ctx, [beat], [2.5], matches, clip=None, verify=None)
+    assert searches == ["videos", "photos"] and report["photo_filled"] == [0]
+    assert matches[0]["segments"] == [first, photo] and matches[0]["short_by"] == 0

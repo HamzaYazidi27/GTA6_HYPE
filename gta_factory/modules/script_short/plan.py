@@ -26,7 +26,7 @@ from ...app.core.utils import normalize_ws
 
 NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
                 "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20}
-_LEAD_NUMBER = re.compile(r"^(?:number\s+)?(#?\d{1,2}|" + "|".join(NUMBER_WORDS) + r")\s*(?:[:.)–—,]|-(?!\w))", re.I)  # "Six:" yes, "Six-star" no
+_LEAD_NUMBER = re.compile(r"^(?:number\s+)?(#?\d{1,2}|" + "|".join(NUMBER_WORDS) + r")\s*(?:[:.)–—,](?!\d)|-(?!\w))", re.I)  # "Six:" yes, "Six-star" no
 _TEASE = re.compile(r"\bnumber\s+(" + "|".join(NUMBER_WORDS) + r"|\d{1,2})\b", re.I)
 _CTA = re.compile(r"\b(comment|subscribe|let me know|tell me|which one|follow for|like if|drop a)\b", re.I)
 _SENT = re.compile(r"(?<=[.!?])\s+(?=\S)")
@@ -129,18 +129,19 @@ which exact footage must be on screen while it is spoken. You never change the w
 PLAN_PROMPT = """The narration is already cut into numbered BEATS (one visual idea each):
 {beats}
 
-For EVERY beat, say what must be on screen. Return JSON:
+For EVERY beat, anchor the image to the people, objects and actions actually named in the narration. Do not invent screens, scenery, props or actions. For abstract commentary describe a visible subject from the surrounding narration. Return JSON:
 {{"title": short video title (max 70 chars),
  "beats": [ {{
   "i": the beat number above,
   "role": hook | item | claim | comparison | suspense | cta,
+  "headline": a short, contiguous phrase from this beat suitable as an on-screen title (up to five words),
   "concept": what the viewer must SEE, concretely (subject + action + place),
   "prompts": 1-3 short picture descriptions for an image search ("a person riding a jet ski on the ocean"),
   "distractors": 2-4 look-alike scenes that would be WRONG ("a motorboat", "a person swimming"),
   "game": "gta6", or "gta5" when the beat is about GTA 5 (a comparison),
   "specific": true when only footage of exactly this fits; false for the hook, a teaser ("number one changes everything") and the call to action,
   "claim": the factual statement about the game the beat makes, or null,
-  "emphasis": 1-2 words of the beat to highlight
+  "emphasis": an array of 1-2 words from the beat to highlight
  }} ]
 }}
 One entry per beat, {n} entries, in order. Short values: this is a plan, not prose."""
@@ -172,6 +173,9 @@ def rule_title(words: list[str]) -> str:
 def _merge(rule: dict[str, Any], ans: dict[str, Any]) -> dict[str, Any]:
     """The model's description of one beat over the rule beat: the words, numbers and roles of the rules stay."""
     out = dict(rule)
+    headline = normalize_ws(str(ans.get("headline") or ""))
+    if headline and len(headline.split()) <= 5 and len(headline) <= 45 and headline.casefold() in rule["text"].casefold():
+        out["headline"] = headline
     concept = normalize_ws(str(ans.get("concept") or ""))
     if concept:
         out["concept"] = concept[:160]
@@ -192,7 +196,10 @@ def _merge(rule: dict[str, Any], ans: dict[str, Any]) -> dict[str, Any]:
         out["specific"] = False
     claim = ans.get("claim")
     out["claim"] = normalize_ws(str(claim))[:200] if claim and out["specific"] else (rule["claim"] if out["specific"] else None)
-    out["emphasis"] = [normalize_ws(str(e)) for e in ans.get("emphasis") or [] if str(e).strip()][:2]
+    emphasis = ans.get("emphasis")
+    if isinstance(emphasis, str):
+        emphasis = emphasis.split()
+    out["emphasis"] = [normalize_ws(e) for e in emphasis if isinstance(e, str) and e.strip()][:2] if isinstance(emphasis, list) else []
     return out
 
 

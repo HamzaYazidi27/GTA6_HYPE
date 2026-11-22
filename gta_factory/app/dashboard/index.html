@@ -40,7 +40,7 @@
   .s-needs_review, .s-paused { background:rgba(255,170,43,.15); color:var(--amber); }
   .s-stopped { background:rgba(155,166,204,.15); color:var(--mute); }
   .v-confirmed { color:var(--lime); } .v-reported { color:var(--cyan); } .v-rumor { color:var(--amber); } .v-speculation { color:var(--violet); } .v-unverified { color:var(--amber); }
-  .b-verified_vision, .b-verified_clip { color:var(--lime); } .b-general { color:var(--cyan); } .b-weak { color:var(--amber); } .b-missing { color:var(--coral); }
+  .b-verified_vision, .b-verified_clip { color:var(--lime); } .b-general { color:var(--cyan); } .b-weak, .b-illustration { color:var(--amber); } .b-missing { color:var(--coral); }
   .bar { height:6px; background:var(--ink2); border-radius:99px; overflow:hidden; margin:8px 0 4px; }
   .bar > div { height:100%; background:linear-gradient(90deg, var(--coral), var(--sun)); }
   .steps { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
@@ -88,6 +88,9 @@
     </div>
     <div class="card">
       <h2>Script to Short</h2>
+      <label for="ss-style">Style de montage</label>
+      <select id="ss-style" style="margin:4px 0 8px"><option value="replay" selected>Ghost Plates Replay</option><option value="standard">Style actuel</option><option value="focus">Ghost Plates Focus</option></select>
+      <p id="replay-hint" class="muted" style="font-size:12px">Pour choisir un extrait précis, ajoute son lien TikTok ou YouTube à la fin de sa phrase. Ajoute #t=18 pour démarrer à 18 secondes.</p>
       <textarea id="ss-script" rows="7" placeholder="Colle ta narration (en anglais), ex. « GTA 5 never let you do any of these. Seven: go viral on in-game social media. Six: … Comment the number you're trying first. »"></textarea>
       <details style="margin-top:8px"><summary class="muted" style="cursor:pointer;font-size:12px">Réglages avancés</summary>
         <div class="row" style="margin-top:6px;flex-wrap:nowrap"><select id="ss-fps"><option value="auto">Images/s : auto (60 si le footage est en 60)</option><option value="60">60 images/s</option><option value="30">30 images/s</option></select></div>
@@ -98,7 +101,7 @@
         <label class="chk"><input type="checkbox" id="ss-noweb"> Ne pas chercher sur internet les phrases sans footage (YouTube, images)</label>
         <label class="chk"><input type="checkbox" id="ss-nowhisper"> Timings des mots estimés (plus rapide, moins précis)</label>
       </details>
-      <p class="muted" style="margin:6px 0 0;font-size:12px">Voix, alignement mot par mot, vrai footage GTA VI vérifié image par image sur chaque phrase, montage, sous-titres, sons, contrôle qualité : MP4 1080×1920, SRT, EDL, manifeste des sources, titre et description.</p>
+      <p class="muted" style="margin:6px 0 0;font-size:12px">Voix, alignement mot par mot, footage vérifié en priorité, puis illustration du même jeu avec mouvement sur les photos, montage, sous-titres, sons, contrôle qualité : MP4 1080×1920, SRT, EDL, manifeste des sources, titre et description.</p>
       <div class="row" style="margin-top:8px"><button id="ss-go">Générer</button><span id="ss-msg" class="muted"></span></div>
     </div>
     <div class="card">
@@ -126,6 +129,7 @@
 </main>
 <script>
 const $ = (s) => document.querySelector(s);
+$('#ss-style').onchange = () => { $('#replay-hint').hidden = $('#ss-style').value !== 'replay'; };
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -212,13 +216,15 @@ function outlineCard(o) {
       el('td', {class: 'muted'}, [...(it.claim_ids || []), ...(it.game_fact_ids || [])].join(' ')))))));
 }
 
-const BEAT_FR = {verified_vision:'vérifié (vision)', verified_clip:'vérifié (CLIP)', general:'gameplay libre', weak:'incertain', missing:'MANQUANT'};
+const BEAT_FR = {source_link: 'extrait sélectionné', verified_vision:'vérifié (vision)', verified_clip:'vérifié (CLIP)', general:'gameplay libre', weak:'incertain', illustration:'illustration · non vérifiée', missing:'MANQUANT'};
 function shortCard(d) {
   const sh = d.short;
   if (!sh) return null;
   const card = el('div', {class: 'card'}, el('h2', {}, 'Script to Short'));
   if (sh.verdict) card.append(el('p', {}, el('b', {class: sh.fully_verified ? 'qc-pass' : 'qc-warning'}, sh.fully_verified ? '✓ Entièrement vérifié' : '! Pas entièrement vérifié'), el('span', {class: 'muted'}, ' · contrôle qualité ' + sh.verdict.toUpperCase())));
-  card.append(el('p', {class: sh.style === 'measured' ? 'muted' : 'qc-warning', style: 'font-size:12px'}, sh.style === 'measured' ? 'Style de montage mesuré sur la chaîne de référence.' : 'Style de la chaîne de référence pas encore mesuré : montage par défaut (python -m gta_factory style analyze).'));
+  if (sh.style === 'replay') card.append(el('p', {class: 'muted'}, 'Style de montage · Ghost Plates Replay'));
+  else if (sh.style === 'focus') card.append(el('p', {class: 'muted'}, 'Style de montage · Ghost Plates Focus'));
+  else card.append(el('p', {class: sh.style === 'measured' ? 'muted' : 'qc-warning', style: 'font-size:12px'}, sh.style === 'measured' ? 'Style de montage mesuré sur la chaîne de référence.' : 'Style de la chaîne de référence pas encore mesuré : montage par défaut (python -m gta_factory style analyze).'));
   if (sh.beats.length) card.append(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, 'Temps'), el('th', {}, 'Narration → à l\'écran'), el('th', {}, 'Footage'), el('th', {}, 'Statut'))),
     el('tbody', {}, sh.beats.map((b) => el('tr', {},
       el('td', {}, String(b.beat)),
@@ -469,7 +475,7 @@ $('#t-go').addEventListener('click', () => act(async () => {
 $('#ss-go').addEventListener('click', () => act(async () => {
   const script = $('#ss-script').value.trim();
   if (script.split(/\s+/).length < 8) throw new Error('Colle la narration complète du Short (au moins une phrase d\'accroche et un point).');
-  const options = {fps: $('#ss-fps').value};
+  const options = {fps: $('#ss-fps').value, edit_style: $('#ss-style').value};
   if ($('#ss-llm').value) options.llm = $('#ss-llm').value;
   if ($('#ss-weak').checked) options.allow_weak = true;
   if ($('#ss-nosearch').checked) options.no_search = true;

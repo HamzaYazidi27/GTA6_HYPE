@@ -35,8 +35,9 @@ def _check(cid: str, severity: str, passed: bool, detail: str, **extra: Any) -> 
     return {"id": cid, "severity": severity, "passed": bool(passed), "detail": detail, **extra}
 
 
-def _frame(path: Path, t: float, vf: str) -> np.ndarray | None:
-    proc = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{max(0.0, t):.3f}", "-i", str(path), "-frames:v", "1", "-vf", f"{vf},scale=224:224", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], capture_output=True)
+def _frame(path: Path, t: float | None, vf: str) -> np.ndarray | None:
+    seek = ["-ss", f"{max(0.0, t):.3f}"] if t is not None else []
+    proc = subprocess.run(["ffmpeg", "-v", "error", *seek, "-i", str(path), "-frames:v", "1", "-vf", f"{vf},scale=224:224", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], capture_output=True)
     if proc.returncode != 0 or len(proc.stdout) < 224 * 224 * 3:
         return None
     return np.frombuffer(proc.stdout[: 224 * 224 * 3], dtype=np.uint8).reshape(224, 224, 3)
@@ -46,6 +47,7 @@ def frame_sync(settings: Any, video: Path, edl: list[dict[str, Any]], *, width: 
     """For the middle of every footage event: does the rendered video show the matched source frame?"""
     from ..footage.clip import Clip
     from ..footage.library import crop_filter
+    from ..footage.select import crop_position, photo_pan_size
 
     model = Clip.load(settings)
     if model is None:
@@ -53,13 +55,21 @@ def frame_sync(settings: Any, video: Path, edl: list[dict[str, Any]], *, width: 
     out = []
     pairs = []
     for ev in edl:
-        if ev["type"] != "shot" or not ev.get("path"):
+        if ev["type"] not in ("shot", "photo") or not ev.get("path"):
             continue
         d = ev["record_out"] - ev["record_in"]
         live = d - float(ev.get("hold") or 0)
         mid = min(d / 2, max(0.0, live - 0.1))
-        rendered = _frame(video, ev["record_in"] + mid, REGION)
-        source = _frame(Path(ev["path"]), float(ev["source_in"]) + mid, f"{crop_filter(ev.get('crop'))}scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},{REGION}")
+        region = "crop=iw:ih*0.20:0:ih*0.40" if ev.get("recap_beats") else REGION
+        panel = ev.get("replay_panel")
+        rendered_region = f"crop={width}:{2 * round(height / 4)}:0:{round(height * 390 / 1920)},{region}" if panel else region
+        rendered = _frame(video, ev["record_in"] + mid, rendered_region)
+        photo = ev["type"] == "photo"
+        crop = "" if photo else crop_filter(ev.get("crop"))
+        # At the midpoint the still is centered in both pan directions, already enlarged for the pan.
+        source_h = 2 * round(height / 4) if panel else height
+        w, h = photo_pan_size(width, source_h) if photo else (width, source_h)
+        source = _frame(Path(ev["path"]), None if photo else float(ev["source_in"]) + mid, f"{crop}scale={w}:{h}:force_original_aspect_ratio=increase,crop={width}:{source_h}{crop_position(ev.get('focus_x'), ev.get('focus_y'))},{region}")
         if rendered is None or source is None:
             out.append({**_short(ev), "at": round(ev["record_in"] + mid, 3), "similarity": None, "passed": False, "note": "frame could not be read"})
             continue
@@ -99,9 +109,11 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     by_beat = {m["beat"]: m for m in matches}
     segs_by_path = {(sg["file"], round(sg["start"], 3)): sg for m in matches for sg in m["segments"]}
     for ev in edl:
-        sg = segs_by_path.get((ev.get("file"), round(float(ev.get("source_in") or -1), 3)))
+        sg = segs_by_path.get((ev.get("file"), round(float(ev["source_in"]), 3))) if ev.get("source_in") is not None else None
         if sg:
             ev["path"], ev["crop"] = sg["path"], sg.get("crop")
+            ev["focus_x"] = sg.get("focus_x")
+            ev["focus_y"] = sg.get("focus_y")
 
     # --- coverage and verification
     specific = [m for m in matches if m.get("specific")]
@@ -109,11 +121,15 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     missing_specific = [m for m in missing if m.get("specific")]
     unverified = [m for m in specific if m["segments"] and m["status"] not in VERIFIED]
     checks.append(_check("footage.coverage", "critical", not missing_specific,
-                         "Every phrase that names something has footage of it." if not missing_specific else f"{len(missing_specific)} phrase(s) have no verified footage and show their words instead: " + "; ".join(f"beat {m['beat'] + 1} “{m['text'][:40]}” ({m.get('reason', '')})" for m in missing_specific),
+                         "Every specific phrase has a visual." if not missing_specific else f"{len(missing_specific)} phrase(s) have no footage: " + "; ".join(f"beat {m['beat'] + 1} “{m['text'][:40]}” ({m.get('reason', '')})" for m in missing_specific),
                          beats=[m["beat"] + 1 for m in missing_specific]))
     if missing and not missing_specific:
         checks.append(_check("footage.coverage_general", "warning", False, f"{len(missing)} hook / teaser / call-to-action beat(s) without footage."))
-    checks.append(_check("footage.verified", "critical", not unverified, "Every specific beat's footage was verified frame by frame." if not unverified else f"{len(unverified)} beat(s) with an unverified match.", beats=[m["beat"] + 1 for m in unverified]))
+    linked = [m for m in matches if m["status"] == "source_link"]
+    if linked:
+        checks.append(_check("footage.source_selection", "info", True, f"{len(linked)} beat(s) use a source chosen in the script.", beats=[m["beat"] + 1 for m in linked]))
+    severity = "warning" if unverified and all(m["status"] == "source_link" for m in unverified) else "critical"
+    checks.append(_check("footage.verified", severity, not unverified, "Every specific beat's footage was verified frame by frame." if not unverified else f"{len(unverified)} beat(s) with an unverified match.", beats=[m["beat"] + 1 for m in unverified]))
     method = mdata.get("verification")
     checks.append(_check("footage.verification_method", "info", True, "Frames looked at by the local vision model and CLIP." if method == "vision" else "Frames verified by CLIP's vote against look-alikes (no vision model running: start Ollama with a vision model for a second opinion)."))
 
@@ -182,9 +198,13 @@ def script_checks(settings: Any, *, job_root: Path, files: Any, video: Path, mas
     checks.append(_check("claims.contradicted", "critical", not contradicted, "No claim is contradicted by a source." if not contradicted else "Contradicted: " + "; ".join(c["claim"][:60] for c in contradicted)))
     checks.append(_check("claims.supported", "warning", not unchecked, f"All {len(cl)} claim(s) are supported by a source." if not unchecked else f"{len(unchecked)} claim(s) not confirmed by any source read ({claims.get('reason') or 'see claims_report.md'})."))
     smeasured = style.get("status") == "measured"
-    checks.append(_check("style.reference", "warning", smeasured, "Editing style measured from the reference channel." if smeasured else "The reference channel's style has not been measured yet: the channel's default editing is used (`python -m gta_factory style analyze`)."))
+    if style.get("status") in ("focus", "replay"):
+        checks.append(_check("style.preset", "info", True, f"Ghost Plates {style['status'].title()} editing preset."))
+    else:
+        checks.append(_check("style.reference", "warning", smeasured, "Editing style measured from the reference channel." if smeasured else "The reference channel's style has not been measured yet: the channel's default editing is used (`python -m gta_factory style analyze`)."))
 
-    fully = not missing and not unverified and not photos and not web and not wrong_game and not unrighted and bool(fsync) and not bad and not late and burned == script_words and not contradicted and not unchecked
+    illustrated = any(m["status"] == "illustration" for m in matches)
+    fully = not illustrated and not missing and not unverified and not photos and not web and not wrong_game and not unrighted and bool(fsync) and not bad and not late and burned == script_words and not contradicted and not unchecked
     sync = {
         "fully_verified": fully,
         "beats": [_beat_row(t, by_beat.get(t["beat"]), [x for x in fsync if x["beat"] == t["beat"] + 1]) for t in timing.get("beats") or []],
@@ -199,7 +219,7 @@ def _beat_row(t: dict[str, Any], m: dict[str, Any] | None, fchecks: list[dict[st
         "beat": t["beat"] + 1,
         "narration": t["text"],
         "start": t["start"], "end": t["end"], "speech_start": t["speech_start"], "speech_end": t["speech_end"],
-        "shows": m.get("concept"),
+        "shows": m.get("concept") if m.get("status") != "illustration" else "Contextual illustration",
         "status": m.get("status"),
         "confidence": m.get("confidence"),
         "seen": m.get("seen") or None,

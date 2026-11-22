@@ -1,3 +1,5 @@
+import {ReplayShot} from './ReplayShot';
+import {FocusShot} from './FocusShot';
 /**
  * Main composition. Used for long-form (16:9) and Shorts (9:16): every scene
  * adapts through `useLayout()`, so one storyboard renders in both formats.
@@ -74,6 +76,12 @@ const SceneFrame: React.FC<{scene: SceneData; timeline: Timeline}> = ({scene, ti
       </AbsoluteFill>
     );
   }
+  if (scene.template === 'shot' && scene.data?.editStyle === 'replay') {
+    return <ReplayShot scene={scene} today={timeline.today} brand={timeline.brand} accent={C.coral} captions={timeline.burnCaptions} />;
+  }
+  if (scene.template === 'shot' && scene.data?.editStyle === 'focus') {
+    return <FocusShot scene={scene} today={timeline.today} brand={timeline.brand} accent={C.coral} captions={timeline.burnCaptions} />;
+  }
   if (scene.template === 'shot') {
     // Script to Short: the matched gameplay full screen, styled by the scene itself; no grain, no dip between takes
     return (
@@ -139,8 +147,10 @@ export const Video: React.FC<{timeline: Timeline}> = ({timeline}) => {
           <SceneFrame scene={scene} timeline={timeline} />
         </Sequence>
       ))}
+      {timeline.scenes[0]?.data?.editStyle !== 'replay' && <>
       <Watermark brand={timeline.brand} hideFrom={outro?.startFrame} hideTo={outro ? outro.startFrame + outro.durationFrames : undefined} />
       <ProgressRail frame={frame} total={timeline.totalFrames} chapters={timeline.chapters} />
+      </>}
     </AbsoluteFill>
   );
 };

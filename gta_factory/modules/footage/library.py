@@ -38,6 +38,7 @@ video's tags. Shots are found with ffmpeg's scene-change detector. Dark shots
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -417,7 +418,8 @@ def cropped_photo(root: Path, rel: str, crop: list[int] | None) -> Path:
     src = root / rel
     if not crop:
         return src
-    dest = root / ".cropped" / f"{re.sub(r'[^A-Za-z0-9_-]+', '_', Path(rel).stem)[:60]}_{crop[1]}x{crop[3]}.jpg"
+    source_key = hashlib.sha256(rel.encode()).hexdigest()[:16]
+    dest = root / ".cropped" / f"{source_key}_{re.sub(r'[^A-Za-z0-9_-]+', '_', Path(rel).stem)[:60]}_{crop[1]}x{crop[3]}.jpg"
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         proc = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", crop_filter(crop).rstrip(","), "-q:v", "2", str(dest)], capture_output=True)
@@ -623,7 +625,7 @@ def still_shot_key(index: dict[str, Any], photo: dict[str, Any]) -> str | None:
     return shot_key(v["file"], v.get("size", 0), sh) if sh else None
 
 
-def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str | None = None) -> dict[str, Any]:
+def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str | None = None, shared_web: bool = False) -> dict[str, Any]:
     """Every usable shot and photo with its weighted tags, plus the vocabulary that knows all of them.
 
     Pictures and videos taken from a job's articles (``article_media``) belong to that job only: they are
@@ -652,14 +654,16 @@ def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str |
         seen = auto.get(key) or {}
         return (bool(seen.get("overlay")) and not allowed) or seen.get("game") is False
 
-    def belongs(story_job: Any) -> bool | None:
+    def belongs(story_job: Any, file: str) -> bool | None:
         """None: not article media; True: this job's; False: another job's (never shown)."""
+        if shared_web and file.startswith(("videos/web/", "photos/web/")):
+            return None
         return None if not story_job else story_job == job
 
     shots, photos = [], []
     for v in index.get("videos", []):
         side = v.get("sidecar") or {}
-        mine = belongs(side.get("article_media"))
+        mine = belongs(side.get("article_media"), v["file"])
         if mine is False:
             continue
         for sh in v.get("shots", []):
@@ -672,7 +676,7 @@ def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str |
             shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "crop": sh.get("crop"), "tags": tags, "key": f"{v['file']}@{sh['s']}", "autokey": shot_key(v["file"], v.get("size", 0), sh),
                           **({"story": True, "caption": side.get("caption", ""), "role": side.get("role", "")} if mine else {})})
     for p in index.get("photos", []):
-        mine = belongs(p.get("article_media"))
+        mine = belongs(p.get("article_media"), p["file"])
         if mine is False:
             continue
         own = photo_key(p["file"], p.get("size", 0))

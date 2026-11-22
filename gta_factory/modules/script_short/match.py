@@ -11,19 +11,18 @@ says, during exactly as long as the beat lasts:
    action visible from the first frame of the window (no reveal several seconds late).
 4. **Verification**: with a local vision model (Ollama) running, frames of the chosen window are
    looked at and must show the concept ("verified_vision"); without it, CLIP's vote must be clear on
-   the first and the middle frame ("verified_clip").
+   the beginning, middle and end of the cut ("verified_clip").
 
 A specific beat whose footage cannot be found or verified in the library is searched on the web
-(``websource.py``: YouTube videos, then pictures) and matched again with the same checks. Only when
-nothing found there shows it either is it **missing**: nothing unrelated is put in its place, the
-scene shows the words on the channel background, and QC refuses "fully verified". A picture stands
-in for gameplay only in the last pass (``allow_photos``), when no video at all shows the beat.
+(``websource.py``: YouTube videos, then pictures) and matched again with the same checks.
+Unresolved beats receive an explicitly unverified illustration from the same game's library.
 """
 from __future__ import annotations
 
 import json
 import re
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable
 
@@ -36,9 +35,9 @@ STEP = 0.25  # window positions inside a shot, seconds
 WEAK_MIN = 0.15
 MAX_SEGMENTS = 4  # windows of different shots one beat may chain to fill its length
 VOCAB_TOP = 5  # a candidate frame must rank the beat's concept among the 5 labels that fit it best (open vocabulary)...
+CLIP_MIN_MARGIN = 0.012  # near ties between visual subjects need a separate vision check
 CLIP_ALONE_TOP = 1  # ... and first of all when no vision model looks at it
 MAX_VISION_CANDIDATES = 6  # windows the vision model looks at, per beat
-GENERAL_PROMPTS = ["intense action", "a car chase in a sunny city", "a character driving fast at night"]
 # every text is read in the same frame, so the vote compares WHAT is shown, not how the sentence is phrased
 TEMPLATE = "a screenshot from a video game showing {}"
 NULL = "a screenshot from a video game"  # the null hypothesis: the concept's words must add something to it
@@ -82,10 +81,10 @@ def rights_of(settings: Any, side: dict[str, Any]) -> str:
         return "own"
     if side.get("license") or side.get("license_file"):
         return "licensed"
+    if side.get("web_found"):  # keep provenance on subsequent uses of an automatic download
+        return "web_found"
     if _official(settings, side) or (side.get("source_url") and third_party(settings, side) is None):
         return "official"
-    if side.get("web_found"):  # found automatically by a web search: permission not checked yet
-        return "web_found"
     if side.get("allow_third_party"):
         return "third_party_allowed"
     return "unverified"
@@ -97,12 +96,13 @@ class Library:
     def __init__(self, settings: Any, gid: str, *, job: str | None, clip: Any, log: Callable[[str], None]):
         from ..footage.clip import index_frames
         from ..footage.games import game_settings
-        from ..footage.library import build_index, load_items
+        from ..footage.library import build_index, load_items, still_shot_key
 
         self.gid = gid
         self.settings = game_settings(settings, gid) if gid != "gta6" else settings
-        self.items = load_items(self.settings, build_index(self.settings), job=job)
+        self.items = load_items(self.settings, build_index(self.settings), job=job, shared_web=True)
         self.by_key = {it["key"]: it for it in self.items["shots"] + self.items["photos"]}
+        self.origin = {key: still_shot_key(self.items["index"], it) or it["autokey"] for key, it in self.by_key.items()}
         self.rows, self.vecs = index_frames(self.settings, self.items, log=log, model=clip) if clip is not None else ([], np.zeros((0, 512), np.float32))
         self.rows_by_key: dict[str, list[int]] = {}
         for i, r in enumerate(self.rows):
@@ -114,6 +114,47 @@ class Library:
         return not self.items["shots"]
 
 
+def _used_origins(lib: Library, used: dict[str, list[tuple[float, float]]]) -> set[str]:
+    origins = set()
+    for key, it in lib.by_key.items():
+        spans = used.get(it["file"]) or used.get(it["path"]) or []
+        if spans and (it["kind"] == "photo" or any(a < it["e"] and z > it["s"] for a, z in spans)):
+            origins.add(lib.origin[key])
+    return origins
+
+
+def _shown_frames(lib: Library, used: dict[str, list[tuple[float, float]]]) -> np.ndarray:
+    """Reference frames for detecting the same picture in stills and other uploads."""
+    indices = []
+    for key, rows in lib.rows_by_key.items():
+        it = lib.by_key[key]
+        spans = used.get(it["file"]) or used.get(it["path"]) or []
+        for a, z in spans:
+            if it["kind"] == "photo":
+                indices.append(rows[0])
+            elif it["s"] < z and it["e"] > a:
+                inside = [i for i in rows if a <= lib.rows[i]["t"] < z]
+                indices.extend(inside or [min(rows, key=lambda i: abs(lib.rows[i]["t"] - (a + z) / 2))])
+    return lib.vecs[indices]
+
+
+def _recent_cuts(settings: Any, job: str | None) -> dict[str, list[tuple[float, float]]]:
+    """Use recent exported Shorts as a soft tie-breaker. A unique good match stays eligible."""
+    manifests = sorted(settings.outputs_dir.glob("*/edit_decision_list.json"), reverse=True)
+    history: dict[str, list[tuple[float, float]]] = {}
+    for path in [p for p in manifests if p.parent.name != job][:3]:
+        try:
+            events = json.loads(path.read_text()).get("events", [])
+            for ev in events:
+                if ev.get("type") in ("shot", "photo") and ev.get("file"):
+                    start = float(ev.get("source_in") or 0)
+                    end = start + float(ev["record_out"]) - float(ev["record_in"])
+                    history.setdefault(ev["file"], []).append((start, end))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return history
+
+
 def zero_shot(sims_pos: np.ndarray, sims_neg: np.ndarray, temp: float = 100.0) -> np.ndarray:
     """P(concept) per frame in a softmax vote against the distractors (CLIP's zero-shot classification)."""
     logits = np.concatenate([sims_pos[:, None], sims_neg], axis=1) * temp
@@ -122,7 +163,8 @@ def zero_shot(sims_pos: np.ndarray, sims_neg: np.ndarray, temp: float = 100.0) -
     return e[:, 0] / e.sum(axis=1)
 
 
-def best_window(times: list[float], probs: list[float], s: float, e: float, need: float, *, used: list[tuple[float, float]] = ()) -> tuple[float, float, float, float] | None:
+def best_window(times: list[float], probs: list[float], s: float, e: float, need: float, *,
+                used: list[tuple[float, float]] = (), max_overlap: float = 0.0) -> tuple[float, float, float, float] | None:
     """(start, end, mean prob, prob at start) of the best ``need``-second window of a shot [s, e]."""
     if not times:
         return None
@@ -140,7 +182,7 @@ def best_window(times: list[float], probs: list[float], s: float, e: float, need
             mean = float(p[inside].mean())
             overlap = sum(max(0.0, min(w0 + length, b) - max(w0, a)) for a, b in used)
             score = mean + 0.15 * first
-            if overlap <= 0.25 * length and (best is None or score > best[0]):  # never the same moment twice
+            if overlap <= max_overlap * length and (best is None or score > best[0]):
                 best = (score, w0, w0 + length, mean, float(first))
         w0 += STEP
     return best[1:] if best else None
@@ -158,7 +200,7 @@ def vision_verifier(settings: Any, log: Callable[[str], None]) -> Callable[[Path
         return None
 
     def verify(path: Path, t: float | None, concept: str) -> dict[str, Any]:
-        prompt = (f"Look only at what is visible in this video game picture. Does it clearly show: {concept}?\n"
+        prompt = (f"Check only visible evidence. Reject live-action photos, talking heads, renders with unrelated text, and shots where only the setting fits. Is this an in-game or trailer image clearly showing {concept}?\n"
                   'Answer with JSON only: {"shows": true or false, "seen": "what the picture shows, in at most 10 words"}')
         try:
             ans = call(frame_jpeg(path, t), prompt)
@@ -196,7 +238,7 @@ def match_beats(
         return libs[gid]
 
     used = {k: list(v) for k, v in (used or {}).items()}
-    used_keys: set[str] = set()
+    recent = _recent_cuts(settings, job)
     out = []
     generic_neg = clip.embed_text(templated(GENERIC_DISTRACTORS)) if clip is not None else None
     vocab = clip.embed_text(templated(SCENE_LABELS)) if clip is not None else None
@@ -204,8 +246,8 @@ def match_beats(
         gid = b.get("game") or "gta6"
         L = lib(gid)
         res: dict[str, Any] = {"beat": i, "text": b["text"], "concept": b["concept"], "game": gid, "specific": bool(b.get("specific")), "need": round(need, 3), "segments": [], "status": "missing", "confidence": 0.0, "considered": 0, "seen": ""}
-        if L.empty:
-            res["reason"] = f"the {gid} footage library has no usable video"
+        if L.empty and not (allow_photos and L.items["photos"]):
+            res["reason"] = f"the {gid} footage library has no usable footage for this pass"
             out.append(res)
             continue
         if clip is None or not L.rows:
@@ -214,8 +256,10 @@ def match_beats(
             continue
         prompts = b.get("prompts") or [b["concept"]]
         specific = bool(b.get("specific"))
-        if not specific:
-            prompts = prompts + GENERAL_PROMPTS
+        visual_text = b.get("visual_text") or b["text"]
+        prompts = list(dict.fromkeys([visual_text, *prompts]))
+        if b.get("visual_text"):
+            res["visual_text"] = visual_text
         pos = clip.embed_text(templated(prompts))
         own = [d for d in b.get("distractors") or [] if phrase(d).lower() not in " ".join(prompts).lower()]
         generic = [k for k, same in enumerate(_synonym_flags(GENERIC_DISTRACTORS, prompts + [b["concept"]])) if not same]
@@ -240,7 +284,15 @@ def match_beats(
             tt.append(row["t"] if row["t"] is not None else 0.0)
             pp.append(float(pr))
         # the best match first; for a hook / teaser / call to action, shots not shown yet first
-        ranked = sorted(per_key, key=lambda k: (not specific and k in used_keys, -max(per_key[k][1])))[:40]
+        def priority(key):
+            times, probs = per_key[key]
+            it = L.by_key[key]
+            spans = recent.get(it["file"], ())
+            # Prefer a fresh angle when its score is close to a recently exported one.
+            return max(p - (0.04 if any(a <= t < z for a, z in spans) else 0.0) for t, p in zip(times, probs))
+
+        occupied = _used_origins(L, used)
+        ranked = sorted((key for key in per_key if L.origin[key] not in occupied), key=priority, reverse=True)
         comp = vocab[~np.array(synonyms(prompts + [b["concept"]]))] if specific else None
         comp_labels = [lab for lab, same in zip(SCENE_LABELS, synonyms(prompts + [b["concept"]])) if not same] if specific else []
 
@@ -268,7 +320,10 @@ def match_beats(
             others = comp @ v
             rank = 1 + int((others > sc).sum())
             beats_explicit = bool((explicit @ v < sc).all())
-            return {"ok": rank <= VOCAB_TOP and beats_explicit, "strict": rank <= CLIP_ALONE_TOP and beats_explicit, "rank": rank, "looks_like": comp_labels[int(np.argmax(others))]}
+            margin = sc - max(float(others.max()), float((explicit @ v).max()))
+            return {"ok": rank <= VOCAB_TOP and beats_explicit,
+                    "strict": rank <= CLIP_ALONE_TOP and margin >= CLIP_MIN_MARGIN,
+                    "rank": rank, "looks_like": comp_labels[int(np.argmax(others))]}
 
         segments: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
@@ -278,14 +333,17 @@ def match_beats(
         remaining = need
         starts: list[float] = []
         means: list[float] = []
+        shown = _shown_frames(L, used)
         for key in ranked:
             if remaining <= 0.05 or len(segments) >= MAX_SEGMENTS:
                 break
             it = L.by_key[key]
             tt, pp = per_key[key]
-            if not specific and max(pp) < WEAK_MIN:
-                break
+            if L.origin[key] in occupied or (not specific and max(pp) < WEAK_MIN):
+                continue
             if it["kind"] == "photo":
+                if used.get(it["file"]):
+                    continue
                 win = (0.0, remaining, pp[0], pp[0])
             else:
                 win = best_window(tt, pp, it["s"], it["e"], remaining, used=used.get(it["file"], []))
@@ -293,22 +351,27 @@ def match_beats(
             if win is None or (not specific and win[3] < WEAK_MIN):
                 continue
             a, z, mean, first = win
-            times = [a + min(0.12, (z - a) / 4), (a + z) / 2]
+            edge = min(0.12, (z - a) / 4)
+            times = [0.0] if it["kind"] == "photo" else [a + edge, (a + z) / 2, z - edge]
+            samples = np.stack([frame_vec(key, t) for t in times])
+            if len(shown) and (samples @ shown.T).max() >= 0.985:
+                continue  # another file can be a still or a re-encode of the exact same moment
             junk_label = next((lab for lab in (not_gameplay(key, t) for t in times) if lab), "")
             if junk_label:  # a logo, a title card, a menu: never footage, not even for a hook
                 rejected.append({"file": it["file"], "at": round(a, 2), "why": f"not gameplay (looks like {junk_label!r})"})
                 continue
-            if specific:  # frame-level verification of the first and the middle frame of the window
+            if specific:  # verify the action through the cut
                 gates = [gate(key, t) for t in times]
                 why = ""
                 if not all(g["ok"] for g in gates):
-                    why = f"looks more like {gates[0]['looks_like'] if not gates[0]['ok'] else gates[1]['looks_like']!r} (CLIP rank {max(g['rank'] or 99 for g in gates)})"
+                    why = f"looks more like {next(g['looks_like'] for g in gates if not g['ok'])!r} (CLIP rank {max(g['rank'] or 99 for g in gates)})"
                 elif verify is not None:
                     if vision_calls >= MAX_VISION_CANDIDATES:
                         why = "not looked at (vision check limit for this beat)"
                     else:
                         vision_calls += 1
-                        checks = [verify(Path(it["path"]), None if it["kind"] == "photo" else t, b["concept"]) for t in times]
+                        target = f'the visible subject and action in the narration "{visual_text}" (visual context: {b["concept"]})'
+                        checks = [verify(Path(it["path"]), None if it["kind"] == "photo" else t, target) for t in times]
                         seen += [c["seen"] for c in checks if c.get("seen")]
                         if not all(c["shows"] for c in checks):
                             why = "the vision model saw: " + "; ".join(c["seen"] for c in checks if c.get("seen"))[:160]
@@ -321,11 +384,14 @@ def match_beats(
                     continue
             segments.append(_segment(settings, L, it, a, z, mean, first))
             used.setdefault(it["file"], []).append((a, z))
-            used_keys.add(key)
+            shown = np.concatenate([shown, samples])
+            occupied.add(L.origin[key])
             starts.append(first)
             means.append(mean)
             remaining -= z - a
         res["rejected"] = rejected[:8]
+        if not segments:
+            res["rejected_moments"] = [[r["file"], r["at"]] for r in rejected if not r["why"].startswith("not looked at")]
         res["seen"] = "; ".join(dict.fromkeys(seen))[:300]
         if not segments:
             res["reason"] = ("no frame of the library shows it" + (": " + "; ".join(f"{r['file']} @ {r['at']}s {r['why']}" for r in rejected[:3]) if rejected else " clearly (look-alikes rejected)"))[:400]
@@ -334,12 +400,6 @@ def match_beats(
                 res["weak_segments"] = weak
             out.append(res)
             continue
-        if remaining > 0.05:  # the last window is stretched to the end of its shot when it can be
-            last = segments[-1]
-            room = last["shot_end"] - last["end"]
-            grow = min(room, remaining)
-            last["end"] = round(last["end"] + grow, 3)
-            remaining -= grow
         conf = float(np.mean(means))
         res.update(segments=segments, confidence=round(conf, 3), first=round(starts[0], 3), short_by=round(max(0.0, remaining), 3))
         res["status"] = "general" if not specific else "verified_vision" if verify is not None else "verified_clip"
@@ -375,6 +435,153 @@ def _segment(settings: Any, L: Library, it: dict[str, Any], a: float, z: float, 
     }
 
 
+def long_focus_still(m: dict[str, Any]) -> bool:
+    return (m.get("status") == "illustration" and m["need"] >= 4.5 and len(m["segments"]) == 1
+            and m["segments"][0]["kind"] == "photo" and not m.get("focus_still_checked") and not m.get("callback_beat"))
+
+
+def _narration_cut(timing: dict[str, Any]) -> tuple[float, str] | None:
+    """Find a phrase or word onset near the middle, leaving a readable shot on both sides."""
+    words = timing.get("words") or []
+    duration = timing["need"]
+    candidates = []
+    for i in range(1, len(words)):
+        cut = round(words[i]["s"] - timing["start"], 3)
+        if min(cut, duration - cut) < max(1.35, duration * 0.28):
+            continue
+        prev = words[i - 1]
+        boundary = prev["w"].rstrip().endswith((",", ".", "?", "!", ":", ";")) or words[i]["s"] - prev["e"] >= 0.18
+        candidates.append((boundary, -abs(cut - duration / 2), cut, i))
+    if not candidates:
+        return None
+    _, _, cut, i = max(candidates)
+    return cut, " ".join(w["w"] for w in words[i:])
+
+
+def _illustration_windows(lib: Library, labels: np.ndarray, scores: np.ndarray, need: float,
+                          used: dict[str, list[tuple[float, float]]], allow_photos: bool, *, cutaway: bool = False
+                          ) -> Iterator[tuple[tuple[bool, bool, float], dict[str, Any], float, float, float]]:
+    occupied = _used_origins(lib, used)
+    shown = _shown_frames(lib, used)
+    similarities = (lib.vecs @ shown.T).max(axis=1) if len(shown) else None
+    for key, indices in lib.rows_by_key.items():
+        it = lib.by_key[key]
+        photo = it["kind"] == "photo"
+        if (photo and not allow_photos) or any(SCENE_LABELS[labels[i]] in NON_GAMEPLAY for i in indices):
+            continue
+        if photo:
+            a, z, score = 0.0, need, float(scores[indices[0]])
+        else:
+            times = [lib.rows[i]["t"] for i in indices]
+            win = best_window(times, scores[indices].tolist(), it["s"], it["e"], need,
+                              used=used.get(it["path"], []), max_overlap=0.0)
+            if win is None and not cutaway:
+                win = best_window(times, scores[indices].tolist(), it["s"], it["e"], need)
+            if win is None:
+                continue
+            a, z, score, _ = win
+        repeated = lib.origin[key] in occupied or any(min(z, end) > max(a, start) for start, end in used.get(it["path"], []))
+        if not repeated and similarities is not None:
+            middle = min(indices, key=lambda i: abs((lib.rows[i]["t"] or 0.0) - (a + z) / 2))
+            repeated = similarities[middle] >= 0.985
+        complete = z - a >= need - (0.001 if cutaway else 0.05)
+        if cutaway and (repeated or not complete):
+            continue
+        # When scores are close, prefer an animated still for the main illustration and motion for its cutaway.
+        preferred_kind = "shot" if cutaway else "photo"
+        bonus = 0.015 if it["kind"] == preferred_kind else 0.0
+        yield (not repeated, complete, score + bonus), it, a, z, score
+
+
+def _cut_focus_still(m: dict[str, Any], timing: dict[str, Any], settings: Any, lib: Library, labels: np.ndarray,
+                     scores: np.ndarray, clip: Any, used: dict[str, list[tuple[float, float]]], allow_photos: bool) -> None:
+    cut = _narration_cut(timing)
+    first = m["segments"][0]
+    indices = lib.rows_by_key.get(first["file"])
+    m["focus_still_checked"] = True
+    if not cut or not indices:
+        return
+    at, tail = cut
+    remaining = m["need"] - at
+    # Keep the overall concept, but let words actually spoken after the cut guide the alternate.
+    scores = (scores + lib.vecs @ clip.embed_text(templated([tail]))[0]) / 2
+    minimum = max(0.15, float(scores[indices[0]]) - 0.035)
+    windows = _illustration_windows(lib, labels, scores, remaining, used, allow_photos, cutaway=True)
+    for _, it, a, z, score in sorted(windows, key=lambda w: w[0], reverse=True):
+        if score < minimum or it["path"] == first["path"]:
+            continue
+        rows = lib.rows_by_key[it["key"]]
+        representative = min(rows, key=lambda i: abs((lib.rows[i]["t"] or 0.0) - a))
+        if lib.vecs[representative] @ lib.vecs[indices[0]] >= 0.97:
+            continue  # another encode of the same frame makes a distracting jump
+        sg = _segment(settings, lib, it, a, z, 0.0, 0.0)
+        if sg["rights"] not in ("official", "own", "licensed", "third_party_allowed"):
+            continue
+        first["end"] = round(first["start"] + at, 3)
+        m["segments"].append(sg)
+        m["web"] = m.get("web", False) or sg["rights"] == "web_found" or "/web/" in sg["file"]
+        used.setdefault(it["path"], []).append((a, z))
+        break
+
+
+def fill_illustrations(settings: Any, matches: list[dict[str, Any]], *, job: str, clip: Any,
+                       allow_photos: bool, log: Callable[[str], None], focus_beats: list[dict[str, Any]] | None = None) -> None:
+    """Fill unresolved beats, and cut long Focus illustrations at an aligned narration boundary."""
+    from ...app.core.errors import FactoryError
+
+    timings = {t["beat"]: t for t in focus_beats or []}
+    targets = [m for m in matches if not m["segments"] or (m["beat"] in timings and long_focus_still(m))]
+    if not targets:
+        return
+    if clip is None:
+        if all(m["segments"] for m in targets):
+            return  # an older edit can still render its existing illustration without the model
+        raise FactoryError("Cannot select illustrations without the CLIP index.", hint="Restore the CLIP model and resume from footage.")
+    vocabulary = clip.embed_text(templated(SCENE_LABELS))
+    used: dict[str, list[tuple[float, float]]] = {}
+    for m in matches:
+        for sg in m["segments"]:
+            used.setdefault(sg["path"], []).append((sg["start"], sg["end"]))
+    for gid in dict.fromkeys(m["game"] for m in targets):
+        lib = Library(settings, gid, job=job, clip=clip, log=log)
+        labels = np.argmax(lib.vecs @ vocabulary.T, axis=1)
+        long_stills = []
+        for m in (m for m in targets if m["game"] == gid):
+            descriptions = [m.get("visual_text") or m["text"], m["concept"]]
+            vocab = lib.items["vocab"]
+            for mention in vocab.mentions(" ".join(descriptions)):
+                descriptions.extend(vocab.look(tag) for tag in mention["concepts"] if vocab.look(tag))
+            prompts = clip.embed_text(templated(list(dict.fromkeys(descriptions))))
+            scores = (lib.vecs @ prompts.T).mean(axis=1)
+            if not m["segments"]:
+                windows = list(_illustration_windows(lib, labels, scores, m["need"], used, allow_photos))
+                if not windows:
+                    raise FactoryError(f"No usable {gid} visual for beat {m['beat'] + 1}: {m['text']}",
+                                       hint=f"Add gameplay or an eligible screenshot to the {gid} footage library, then resume from match.")
+                # Vary the picture among plausible choices, never spend relevance just to make a cut.
+                floor = max(w[4] for w in windows) - 0.045
+                windows = [w for w in windows if w[4] >= floor]
+                rejected = m.get("rejected_moments") or [(r["file"], r["at"]) for r in m.get("rejected", [])]
+                # Do not immediately recycle a picture that failed this beat's visual check.
+                alternatives = [w for w in windows if not any(
+                    w[1]["file"] == file and (w[1]["kind"] == "photo" or w[2] - 0.02 <= at < w[3])
+                    for file, at in rejected)]
+                _, it, a, z, score = max(alternatives or windows, key=lambda w: w[0])
+                sg = _segment(settings, lib, it, a, z, 0.0, 0.0)
+                used.setdefault(it["path"], []).append((a, z))
+                m.update(segments=[sg], status="illustration", confidence=0.0, seen="",
+                         illustration_similarity=round(score, 3), web=sg["rights"] == "web_found" or "/web/" in sg["file"])
+                log(f"match: beat {m['beat'] + 1} illustration ({sg['kind']}): {sg['file']}")
+            if m["beat"] in timings and long_focus_still(m):
+                long_stills.append((m, scores))
+        # Reserve the main image for every beat before a supplemental shot can claim it.
+        for m, scores in long_stills:
+            _cut_focus_still(m, timings[m["beat"]], settings, lib, labels, scores, clip, used, allow_photos)
+            if len(m["segments"]) > 1:
+                shot = m["segments"][1]
+                log(f"match: beat {m['beat'] + 1} illustration cuts at +{m['segments'][0]['end']:.2f}s to {shot['file']}")
+
+
 def sequence_for(match: dict[str, Any], need: float, *, offset: float = 0.0) -> list[dict[str, Any]]:
     """The picture of one beat: its matched windows back to back, filling ``need`` seconds exactly.
 
@@ -387,10 +594,13 @@ def sequence_for(match: dict[str, Any], need: float, *, offset: float = 0.0) -> 
     for k, sg in enumerate(match["segments"]):
         d = sg["end"] - sg["start"] if k < n - 1 else max(0.05, need - t)
         seg = {"t": round(offset + t, 3), "d": round(d, 3), "type": "photo" if sg["kind"] == "photo" else "shot", "file": sg["path"], "start": sg["start"], "beat": match["beat"]}
+        for axis in ("focus_x", "focus_y"):
+            if axis in sg:
+                seg[axis] = sg[axis]
         if sg.get("crop"):
             seg["crop"] = sg["crop"]
         if sg["kind"] == "shot":
-            avail = float(sg.get("shot_end", sg["end"])) - sg["start"]
+            avail = min(sg["end"], float(sg.get("shot_end", sg["end"]))) - sg["start"]
             if d > avail + 0.02:
                 seg["hold"] = round(d - avail, 3)
         segs.append(seg)

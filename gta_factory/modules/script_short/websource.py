@@ -6,10 +6,10 @@ instead of waiting for the operator to add footage:
 1. **Videos** (YouTube search through yt-dlp): "<game> <what the beat shows> gameplay".
    Rockstar's own uploads first, then short gameplay videos whose title names the game.
    Fan-made concepts, mods, reactions, leaks and other games are skipped by title. The best few
-   are downloaded (720p, length-capped) into the job's own folder of the game's library
-   (``videos/web/<job>/``).
+   are downloaded (720p, length-capped) into a reusable folder of the game's library
+   (``videos/web/<source>/``).
 2. **Pictures**, for when no video shows it (Bing images, then DuckDuckGo images): pictures whose
-   title or page names the game, at least 640 px wide (``photos/web/<job>/``).
+   title or page names the game, at least 640 px wide (``photos/web/<source>/``).
 
 Nothing is used just because a search returned it: every file goes through the same checks as
 the library (re-upload logo / subtitle scan, CLIP's vote against look-alikes, the vision model).
@@ -20,10 +20,12 @@ Every network call is a parameter of :func:`source_missing`, so tests run offlin
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Callable
 from urllib.parse import quote_plus, urlparse
 
@@ -68,7 +70,7 @@ def keywords(text: str, limit: int = 7) -> str:
 def queries(beat: dict[str, Any], game_short: str) -> list[str]:
     """Searches for one beat, most precise first: the narration's own words, then the planned picture."""
     out: list[str] = []
-    for src in (beat.get("text"), beat.get("concept"), *(beat.get("prompts") or [])[:1]):
+    for src in (beat.get("visual_text") or beat.get("text"), beat.get("concept"), *(beat.get("prompts") or [])[:1]):
         k = keywords(src or "")
         if k:
             q = f"{game_short} {k}"
@@ -133,7 +135,7 @@ def youtube_search(query: str, n: int, *, cookies: str = "") -> list[dict[str, A
     """YouTube results without downloading: [{"id", "url", "title", "duration", "channel"}]."""
     import yt_dlp  # type: ignore
 
-    opts: dict[str, Any] = {"extract_flat": "in_playlist", "quiet": True, "no_warnings": True}
+    opts: dict[str, Any] = {"extract_flat": "in_playlist", "quiet": True, "no_warnings": True, "socket_timeout": 10, "extractor_retries": 1, "retries": 1}
     if cookies:
         opts["cookiesfrombrowser"] = (cookies,)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -148,7 +150,7 @@ def youtube_search(query: str, n: int, *, cookies: str = "") -> list[dict[str, A
     return out
 
 
-def youtube_download(url: str, folder: Path, *, max_height: int, max_seconds: float, cookies: str = "") -> tuple[Path | None, dict[str, Any]]:
+def youtube_download(url: str, folder: Path, *, max_height: int, max_seconds: float, cookies: str = "", include_audio: bool = False) -> tuple[Path | None, dict[str, Any]]:
     """One video into ``folder`` (video only, mp4 when there is one). Returns (file, info)."""
     import yt_dlp  # type: ignore
 
@@ -158,9 +160,12 @@ def youtube_download(url: str, folder: Path, *, max_height: int, max_seconds: fl
         "format": f"bv*[height<={max_height}][ext=mp4]/bv*[height<={max_height}]/b[height<={max_height}]/b",
         "outtmpl": str(folder / "%(title).70B [%(id)s].%(ext)s"),
         "noplaylist": True, "quiet": True, "no_warnings": True, "noprogress": True,
-        "max_filesize": 400_000_000,
+        "max_filesize": 400_000_000, "socket_timeout": 20, "retries": 2, "extractor_retries": 1,
         "match_filter": yt_dlp.utils.match_filter_func(f"duration <= {int(max_seconds)}"),
     }
+    if include_audio:
+        opts["format"] = f"b[height<={max_height}][ext=mp4]/bv[height<={max_height}]+ba/b"
+        opts["merge_output_format"] = "mp4"
     if cookies:
         opts["cookiesfrombrowser"] = (cookies,)
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -249,12 +254,49 @@ def playable(path: Path) -> bool:
 
 
 # ----------------------------------------------------------------------------- the step
-def _slug(text: str, n: int = 40) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:n] or "web"
-
-
 def _host(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.")
+
+
+def _known_urls(root: Path) -> set[tuple[str, str]]:
+    """Skip files already searched by the initial library pass, including older job folders."""
+    from ..footage.library import _sidecar
+
+    known = set()
+    for kind in ("videos", "photos"):
+        for meta in (root / kind).rglob("*.json"):
+            path = meta.with_suffix("")
+            if not path.is_file() or "articles" in path.relative_to(root).parts:
+                continue
+            url = _sidecar(path).get("source_url")
+            if url:
+                known.add((kind, url))
+    return known
+
+
+def _store(root: Path, kind: str, url: str, fetch: Callable, metadata: Callable) -> Path | None:
+    """Publish the media and its provenance together, under a per-source cache key."""
+    from ..footage.library import sidecar_path
+
+    key = hashlib.sha256(url.encode()).hexdigest()
+    target = root / kind / "web" / key
+    scratch = root / ".web-staging"
+    scratch.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        with TemporaryDirectory(dir=scratch) as temp:
+            folder = Path(temp) / "asset"
+            folder.mkdir()
+            path, meta = fetch(folder)
+            if path is None:
+                return None
+            write_json(sidecar_path(path), metadata(meta))
+            try:
+                folder.rename(target)
+            except OSError:
+                if not target.is_dir():
+                    raise
+    return next((p for p in target.iterdir() if p.is_file() and sidecar_path(p).is_file()), None)
 
 
 def source_missing(
@@ -262,6 +304,7 @@ def source_missing(
     beats: list[dict[str, Any]],
     *,
     job: str,
+    media: str = "both",
     log: Callable[[str], None] = print,
     search_videos: Callable[..., list[dict[str, Any]]] | None = None,
     download_video: Callable[..., tuple[Path | None, dict[str, Any]]] | None = None,
@@ -270,11 +313,10 @@ def source_missing(
 ) -> dict[str, Any]:
     """Search and download web footage for ``beats`` (the missing ones). Returns the report.
 
-    Files land in the job's folders of each game's library, with a sidecar that keeps them for this
-    job only (``article_media``) and marks them ``web_found``.
+    Files stay in the game library for subsequent Shorts. Sidecars retain the original job and attribution.
     """
     from ..footage.games import game, game_settings
-    from ..footage.library import _cookies, footage_dir, sidecar_path
+    from ..footage.library import _cookies, _sidecar, footage_dir
 
     cfg = defaults(settings)
     cookies = _cookies(settings)
@@ -284,25 +326,34 @@ def source_missing(
     download_image = download_image or image_download
     blocked = [str(w) for w in settings.get("rights_review.blocked_keywords", []) or []] + cfg["exclude_words"]
     report: dict[str, Any] = {"beats": [], "videos": 0, "photos": 0, "errors": []}
-    taken: set[str] = set()
+    known_by_game: dict[str, set[tuple[str, str]]] = {}
     n_videos = 0
-    for b in beats:
+    video_service_down = False
+    for beat_index, b in enumerate(beats):
         gid = b.get("game") or "gta6"
         g = game(settings, gid)
         root = footage_dir(game_settings(settings, gid))
+        if gid not in known_by_game:
+            known_by_game[gid] = _known_urls(root)
+        known = known_by_game[gid]
         game_rx, other_rx = game_pattern(settings, gid), other_games(settings, gid)
         qs = queries(b, g["short"])
         row: dict[str, Any] = {"beat": b.get("index"), "text": b.get("text", ""), "game": gid, "queries": qs, "videos": [], "photos": [], "skipped": []}
         # --- videos
         cands: dict[str, dict[str, Any]] = {}
-        for q in qs:
+        remaining_beats = len(beats) - beat_index
+        remaining_budget = max(0, cfg["max_videos_per_job"] - n_videos)
+        quota = min(cfg["videos_per_beat"], (remaining_budget + remaining_beats - 1) // remaining_beats)
+        for q in qs if media != "photos" and quota > 0 and not video_service_down else ():
             try:
                 hits = search_videos(q + " gameplay", cfg["search_results"])
             except Exception as exc:
-                report["errors"].append(f"video search '{q}': {type(exc).__name__}: {str(exc).splitlines()[0][:160]}")
-                break  # the search engine is not reachable: the other queries would fail too
+                report["errors"].append(f"video search '{q}': {type(exc).__name__}: {str(exc)[:160]}")
+                message = str(exc).casefold()
+                video_service_down = any(term in message for term in ("timed out", "connection refused", "network is unreachable", "name resolution"))
+                break
             for h in hits:
-                if h["id"] in cands or h["id"] in taken:
+                if h["id"] in cands or ("videos", h["url"]) in known:
                     continue
                 why = keep_title(h["title"], game_rx=game_rx, other_rx=other_rx, blocked=blocked)
                 dur = h.get("duration")
@@ -311,38 +362,42 @@ def source_missing(
                 if why:
                     row["skipped"].append({"url": h["url"], "title": h["title"][:90], "why": why})
                     continue
-                official = "rockstar games" in h.get("channel", "").lower()
+                official = h.get("channel", "").casefold() == "rockstar games"
                 cands[h["id"]] = {**h, "query": q, "score": (2.0 if official else 0.0) + relevance(h["title"], q) - (float(dur or 300) / 3600.0)}
         ranked = sorted(cands.values(), key=lambda c: -c["score"])
         for c in ranked:
-            if len(row["videos"]) >= cfg["videos_per_beat"] or n_videos >= cfg["max_videos_per_job"]:
+            if len(row["videos"]) >= quota:
                 break
             log(f"web footage: beat “{b.get('text', '')[:40]}” <- {c['channel'] or 'YouTube'}: {c['title'][:70]}")
+            def fetch(folder):
+                path, meta = download_video(c["url"], folder)
+                if path and not playable(path):
+                    raise ValueError("the downloaded file cannot be read")
+                return path, meta
+
+            def metadata(meta):
+                who = meta.get("channel") or meta.get("uploader") or c.get("channel") or ""
+                official = who.casefold() == "rockstar games"
+                return {"source_url": c["url"], "uploader": meta.get("uploader") or who, "channel": who,
+                        "channel_url": meta.get("channel_url") or c.get("channel_url", ""), "title": c["title"],
+                        "credit": "Footage: Rockstar Games" if official else f"Footage: {who or 'YouTube'} (YouTube)",
+                        "tags": [], "article_media": job, "query": c["query"],
+                        **({} if official else {"web_found": True, "allow_third_party": True})}
+
             try:
-                path, meta = download_video(c["url"], root / "videos" / "web" / job)
+                path = _store(root, "videos", c["url"], fetch, metadata)
             except Exception as exc:
-                row["skipped"].append({"url": c["url"], "title": c["title"][:90], "why": f"download failed: {str(exc).splitlines()[0][:120]}"})
+                row["skipped"].append({"url": c["url"], "title": c["title"][:90], "why": f"download failed: {str(exc)[:120]}"})
                 continue
             if path is None:
                 row["skipped"].append({"url": c["url"], "title": c["title"][:90], "why": "not downloaded (too long or too big)"})
                 continue
-            if not playable(path):  # a broken file would stop the indexing of the whole library
-                path.unlink(missing_ok=True)
-                row["skipped"].append({"url": c["url"], "title": c["title"][:90], "why": "the downloaded file cannot be read"})
-                continue
-            who = meta.get("channel") or meta.get("uploader") or c.get("channel") or ""
-            official = "rockstar games" in who.lower()
-            write_json(sidecar_path(path), {
-                "source_url": c["url"], "uploader": meta.get("uploader") or who, "channel": who, "channel_url": meta.get("channel_url") or c.get("channel_url", ""),
-                "title": c["title"], "credit": "Footage: Rockstar Games" if official else f"Footage: {who or 'YouTube'} (YouTube)",
-                "tags": [], "article_media": job, "query": c["query"],
-                **({} if official else {"web_found": True, "allow_third_party": True}),
-            })
-            taken.add(c["id"])
+            who = _sidecar(path).get("channel", "")
+            known.add(("videos", c["url"]))
             n_videos += 1
             row["videos"].append({"file": path.relative_to(root).as_posix(), "url": c["url"], "title": c["title"], "channel": who})
-        # --- pictures: a still that shows it, for when no video does (cheap, always fetched)
-        if cfg["photo_fallback"] and cfg["photos_per_beat"] > 0:
+        # A still can cover narration for which no video passed verification.
+        if media != "videos" and cfg["photo_fallback"] and cfg["photos_per_beat"] > 0:
             for q in qs:
                 if len(row["photos"]) >= cfg["photos_per_beat"]:
                     break
@@ -351,27 +406,30 @@ def source_missing(
                 except Exception as exc:
                     report["errors"].append(f"image search '{q}': {type(exc).__name__}: {str(exc)[:120]}")
                     break
-                for k, h in enumerate(hits):
+                for h in hits:
                     if len(row["photos"]) >= cfg["photos_per_beat"]:
                         break
-                    if h["url"] in taken:
+                    if ("photos", h["url"]) in known:
                         continue
                     why = keep_title(" ".join([h.get("title", ""), h.get("page", "")]), game_rx=game_rx, other_rx=other_rx, blocked=blocked)
                     if why:
                         row["skipped"].append({"url": h["url"], "title": h.get("title", "")[:90], "why": why})
                         continue
-                    stem = f"beat{int(b.get('index') or 0) + 1:02d}-{_slug(q, 30)}-{k:02d}"
-                    path = download_image(h["url"], root / "photos" / "web" / job / f"{stem}.bin", referer=h.get("page") or "")
-                    taken.add(h["url"])
+                    host = _host(h.get("page") or h["url"])
+                    meta = {"source_url": h["url"], "page_url": h.get("page") or "", "title": h.get("title", ""), "uploader": host,
+                            "credit": f"Image: {host}" if host else "Image: web", "tags": [], "article_media": job, "query": q,
+                            "web_found": True, "allow_third_party": True}
+                    try:
+                        path = _store(root, "photos", h["url"],
+                                      lambda folder: (download_image(h["url"], folder / (hashlib.sha256(h["url"].encode()).hexdigest()[:20] + ".bin"), referer=h.get("page") or ""), {}),
+                                      lambda _: meta)
+                    except Exception as exc:
+                        row["skipped"].append({"url": h["url"], "why": f"image download failed: {str(exc)[:120]}"})
+                        continue
                     if path is None:
                         row["skipped"].append({"url": h["url"], "title": h.get("title", "")[:90], "why": "could not be downloaded, or too small"})
                         continue
-                    host = _host(h.get("page") or h["url"])
-                    write_json(sidecar_path(path), {
-                        "source_url": h["url"], "page_url": h.get("page") or "", "title": h.get("title", ""), "uploader": host,
-                        "credit": f"Image: {host}" if host else "Image: web", "tags": [], "article_media": job, "query": q,
-                        "web_found": True, "allow_third_party": True,
-                    })
+                    known.add(("photos", h["url"]))
                     row["photos"].append({"file": path.relative_to(root).as_posix(), "url": h["url"], "page": h.get("page") or ""})
         report["videos"] += len(row["videos"])
         report["photos"] += len(row["photos"])

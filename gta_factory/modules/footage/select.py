@@ -636,16 +636,26 @@ def build_segments(fo: dict[str, Any], words: list[dict[str, Any]], duration: fl
     return [{k: v for k, v in s.items() if k != "_p"} for s in segs]
 
 
-def _cover_filter(w: int, h: int, fps: int, crop: list[int] | None = None) -> str:
-    return f"{crop_filter(crop)}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps={fps},format=yuv420p"
+def crop_position(focus_x: float | None, focus_y: float | None = None) -> str:
+    x = "" if focus_x is None else f":x=(iw-ow)*{focus_x:.4f}"
+    y = "" if focus_y is None else f":y=(ih-oh)*{focus_y:.4f}"
+    return x + y
 
 
-def _pan_filter(w: int, h: int, fps: int, frames: int, k: int) -> str:
+def _cover_filter(w: int, h: int, fps: int, crop: list[int] | None = None, focus_x: float | None = None, focus_y: float | None = None) -> str:
+    return f"{crop_filter(crop)}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}{crop_position(focus_x, focus_y)},setsar=1,fps={fps},format=yuv420p"
+
+
+def photo_pan_size(w: int, h: int) -> tuple[int, int]:
+    return (int(w * 1.1) // 2) * 2, (int(h * 1.1) // 2) * 2
+
+
+def _pan_filter(w: int, h: int, fps: int, frames: int, k: int, focus_x: float | None = None) -> str:
     """A screenshot inside a clip: cover-cropped 10 % larger, then a slow horizontal pan (direction alternates)."""
-    W, H = (int(w * 1.1) // 2) * 2, (int(h * 1.1) // 2) * 2
+    W, H = photo_pan_size(w, h)
     dur = max(1, frames) / fps
     x = f"({W}-{w})*min(1,t/{dur:.3f})" if k % 2 == 0 else f"({W}-{w})*(1-min(1,t/{dur:.3f}))"
-    return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},crop={w}:{h}:x='{x}':y='({H}-{h})/2',setsar=1,fps={fps},format=yuv420p"
+    return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}{crop_position(focus_x)},crop={w}:{h}:x='{x}':y='({H}-{h})/2',setsar=1,fps={fps},format=yuv420p"
 
 
 def cut_scene_clips(

@@ -300,6 +300,8 @@ def cmd_short_from_script(args: argparse.Namespace) -> int:
         _print('usage: short-from-script "GTA 5 never let you do any of these. Seven: ..."  (or --file script.txt)')
         return 2
     opts = _options(args)
+    if args.edit_style:
+        opts["edit_style"] = args.edit_style
     if args.fps:
         opts["fps"] = args.fps
     for key in ("allow_weak", "offline", "no_web"):
@@ -964,7 +966,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("script", nargs="*", help="the narration (quote it), or use --file")
     sp.add_argument("--file", help="read the narration from a text file")
     sp.add_argument("--fps", choices=("auto", "30", "60"), help="frame rate (auto: 60 when the footage is 60 fps)")
-    sp.add_argument("--allow-weak", action="store_true", help="also show uncertain footage matches (they are marked in the report; default: such phrases show their words)")
+    sp.add_argument("--edit-style", choices=("standard", "focus", "replay"), help="Short editing preset (default: replay)")
+    sp.add_argument("--allow-weak", action="store_true", help="prefer an uncertain match over a contextual illustration (marked in the report)")
     sp.add_argument("--offline", action="store_true", help="no internet for footage: no new official videos, no web search for the missing phrases")
     sp.add_argument("--no-web", action="store_true", help="do not search the web (YouTube, pictures) for the phrases the footage library cannot show")
     sp.add_argument("--no-search", action="store_true", help="do not search the news to fact-check the claims")
