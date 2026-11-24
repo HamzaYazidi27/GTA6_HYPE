@@ -11,7 +11,7 @@
     rewrite JOB SECTION "..."  regenerate one script section, then resume from "scenes"
     voices                     list the voices of the TTS provider
     brand [IMAGE] [--square]   the channel logo (watermark of every video): install a new one, write the YouTube Studio images
-    footage [list|update|add|tag|autotag|find|concepts|remove|fetch|stills] [--game rdr2]
+    footage [list|update|add|tag|autotag|find|concepts|remove|fetch|stills|search] [--game rdr2]
                                real GTA 6 footage library (or another game's, for comparisons): add footage, tag it, see what a sentence shows
     competitors CHANNEL_URL    refresh the competitor reference database
     youtube auth|whoami|logout|status JOB    connect the channel (OAuth, one time)
@@ -675,6 +675,23 @@ def cmd_footage(args: argparse.Namespace) -> int:
         rows, _ = index_frames(s, lib.load_items(s, lib.build_index(s, force=args.reindex, log=_print)), log=_print, model=model)
         _print(f"clip index: {len(rows)} frame(s) of {len({r['key'] for r in rows})} shot(s) / photo(s)")
         return 0
+    elif act == "search":  # look for footage on the web and keep it in the library (the same search the factory runs by itself)
+        from ...modules.script_short.websource import source_missing
+
+        query = " ".join(args.paths)
+        if not query:
+            _print('usage: footage search "jet ski chase" [--game rdr2]')
+            return 2
+        gid = getattr(s, "game_id", "gta6")
+        found = source_missing(s, [{"text": query, "concept": query, "game": gid, "prompts": [query]}], job="manual", log=_print)
+        for e in found.get("errors", [])[:3]:
+            _print(f"web footage: {e}")
+        if not (found.get("videos") or found.get("photos")):
+            _print("footage: nothing usable found on the web for this")
+            return 1
+        _print(f"footage: {found['videos']} video(s), {found['photos']} picture(s) added to the library (videos/web, photos/web)")
+        _autotag_new(s, args)
+        return 0
     index = lib.build_index(s, force=args.reindex, log=_print)
     _footage_listing(s, index)
     return 0
@@ -902,10 +919,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_brand)
 
     sp = sub.add_parser("footage", help="real GTA 6 footage: add new footage, tag it, see what the narration will show")
-    sp.add_argument("action", choices=("list", "update", "add", "tag", "autotag", "find", "concepts", "remove", "fetch", "stills", "index"), nargs="?", default="list",
+    sp.add_argument("action", choices=("list", "update", "add", "tag", "autotag", "find", "concepts", "remove", "fetch", "stills", "index", "search"), nargs="?", default="list",
                     help="update: official trailers + any NEW official GTA VI video; add: files, folders or URLs; tag: set what a file shows; "
                          "autotag: let the local vision model tag everything; find: what a sentence would show; concepts: what the narration can call for; "
-                         "index: the CLIP frame index used by Script to Short")
+                         "index: the CLIP frame index used by Script to Short; search: look for footage on the web and keep it in the library")
     sp.add_argument("paths", nargs="*", help="add: files, folders or URLs; fetch/update: video URLs; tag/remove: a file name; find: a sentence")
     sp.add_argument("--tags", help="comma-separated tags, e.g. lucia,beach (characters, places, anything you will say in a video)")
     sp.add_argument("--at", help="tag: only this part of a video, START-END in seconds (e.g. 12-19.5)")

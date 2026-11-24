@@ -61,6 +61,7 @@ def project(tmp_path: Path, audio_assets: Path):
     cfg = {
         "providers": {"llm": {"default": "scripted"}, "tts": {"default": "fake"}, "search": {"providers": []}, "stock": {"pexels": {"enabled": False}, "pixabay": {"enabled": False}}},
         "video": {"render_concurrency": 4},
+        "footage": {"web_search": False},  # tests never search the web (the autonomous search is tested with fakes)
     }
     (root / "config.yaml").write_text(yaml.safe_dump(cfg))
     article = root / "article.txt"

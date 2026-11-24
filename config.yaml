@@ -303,6 +303,23 @@ footage:
   min_brightness: 28               # shots darker than this (title cards, fades) are skipped
   skip_head_seconds: 3             # trailer logos
   skip_tail_seconds: 10            # end card / rating screen
+  min_width: 640                   # videos narrower than this are never used (too blurry once enlarged)
+  min_photo_width: 640             # same for screenshots
+  min_sharpness: 0                 # shots blurrier than this (Laplacian variance) are never used; 0 = off (sharp shots are preferred anyway)
+  reject_static: true              # long frozen shots (title cards, freeze frames) are never used
+  min_motion: 1.0                  # mean frame-to-frame change below this = frozen
+  web_search: true                 # when the narration names something the library cannot show, search the web for it by itself (kept in the library for the next videos)
+  web_footage:                     # the autonomous web search (shared with Script to Short; script_short.web_footage still works)
+    enabled: true
+    videos_per_beat: 2             # videos downloaded per missing thing
+    photos_per_beat: 3             # pictures downloaded per missing thing (used only when no video shows it)
+    max_videos_per_job: 12
+    max_video_seconds: 600         # longer search results are skipped (download time)
+    max_height: 720
+    search_results: 12             # results read per search
+    photo_fallback: true           # a picture (slow zoom) rather than a blank when no video shows it
+    keep_in_library: true          # what is found stays in the library (videos/web, photos/web) for the next videos; never downloaded twice
+    exclude_words: []              # more title words that mark a result as not real footage (fan-made, mods... are built in)
 
 # ---------------------------------------------------------------------------
 # "Details you missed" videos: the vision model finds small details in the footage, the edit

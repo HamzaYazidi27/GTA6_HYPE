@@ -577,6 +577,40 @@ def step_details_scenes(ctx: JobContext) -> dict[str, Any]:
     return {"scenes": len(scenes), "details": sum(1 for sc in scenes if sc["template"] == "detail")}
 
 
+def _web_fallback(ctx: JobContext, scenes: list[dict[str, Any]], footage: dict[str, Any], checker: Any) -> dict[str, Any]:
+    """Footage the library cannot show: search the web for it by itself, keep it in the library, pick again.
+
+    The narration names something the library has nothing of (``footage.web_search``, on by default):
+    the factory searches YouTube (then pictures), downloads the best results into the game's library
+    (``videos/web/``, ``photos/web/``) where they stay for the next videos, and assigns the footage
+    again so this video shows them. What was found automatically is flagged in the rights review
+    (``check_before_publishing``): its permission must be checked before publishing.
+    """
+    from ...modules.footage.select import assign_footage
+
+    summ = footage.get("summary") or {}
+    missing = summ.get("missing") or []
+    if not missing or not ctx.settings.get("footage.web_search", True):
+        return footage
+    if ctx.options.get("offline") or ctx.options.get("no_web"):
+        return footage
+    from ...modules.script_short.websource import source_missing
+
+    beats = [{"text": m["said"], "concept": (m.get("concepts") or [m["said"]])[0], "game": m.get("game") or "gta6", "prompts": [m["said"]]} for m in missing]
+    ctx.log(f"footage: {len(beats)} thing(s) said but not in the library ({', '.join(sorted({b['text'] for b in beats})[:8])}) - searching the web ...")
+    try:
+        found = source_missing(ctx.settings, beats, job=ctx.job_id, log=ctx.log)
+    except Exception as exc:  # the web search must never stop the job: the original assignment stands
+        ctx.warn(f"web footage: the search failed ({type(exc).__name__}: {str(exc).splitlines()[0][:160]}) - the video keeps the footage it had")
+        return footage
+    for e in found.get("errors", [])[:3]:
+        ctx.warn(f"web footage: {e}")
+    if not (found.get("videos") or found.get("photos")):
+        return footage
+    ctx.log(f"web footage: {found['videos']} video(s), {found['photos']} picture(s) added to the library - picking the footage again")
+    return assign_footage(ctx.settings, scenes, log=ctx.log, checker=checker, job=ctx.job_id)
+
+
 def step_rights(ctx: JobContext) -> dict[str, Any]:
     from ...modules.asset_management.audio_library import build_library, library_ready
     from ...modules.asset_management.rights import review_assets
@@ -600,6 +634,7 @@ def step_rights(ctx: JobContext) -> dict[str, Any]:
         if checker is None:
             ctx.log("footage: no local vision model running: picked shots are not checked for watermarks or burned-in text (start Ollama)")
     footage = assign_footage(ctx.settings, scenes, log=ctx.log, checker=checker, job=ctx.job_id)
+    footage = _web_fallback(ctx, scenes, footage, checker)
     if ctx.kind == "topic" and footage["summary"].get("enabled"):
         bare = [sc["scene_number"] for sc in scenes if (sc.get("footage_pair") and not (sc.get("footage") and sc.get("footage_b"))) or (sc.get("footage_game") and not sc.get("footage"))]
         if bare:

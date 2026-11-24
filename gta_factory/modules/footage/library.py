@@ -33,8 +33,15 @@ Tags are what lets a scene that *says* "Lucia" show Lucia (see ``vocabulary.py``
 They come from, strongest first: the sidecar (per shot or per photo), the file
 name (``lucia_beach_01.jpg`` -> lucia, beach), the vision tagger, and the whole
 video's tags. Shots are found with ffmpeg's scene-change detector. Dark shots
-(title cards, fades, black frames), the first seconds (logos) and the last seconds
-(end card, rating screen) are left out automatically.
+(title cards, fades, black frames), frozen shots (title cards, freeze frames),
+blurry shots (``footage.min_sharpness``), videos and pictures narrower than
+``footage.min_width`` / ``footage.min_photo_width``, the first seconds (logos)
+and the last seconds (end card, rating screen) are left out automatically.
+
+What the recent videos already showed is remembered (``footage_usage.json`` in
+the jobs cache, shared with Script to Short): the next video picks the shots
+and screenshots it has not shown yet first, so the same footage does not come
+back video after video.
 """
 from __future__ import annotations
 
@@ -51,7 +58,7 @@ from .vocabulary import GENERIC_OBJECTS, Vocabulary, load_vocabulary
 
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".webp"}
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 DEFAULT_CREDIT = "Footage: Rockstar Games"
 
 # official Rockstar Games uploads (edit footage.sources in config.yaml to add newer trailers)
@@ -120,7 +127,12 @@ def _probe(path: Path) -> dict[str, Any]:
 
 
 def detect_shots(path: Path, duration: float, *, threshold: float = 0.3, sample_fps: int = 4) -> list[dict[str, float]]:
-    """Cut points by scene change, plus the mean brightness (0-255) of each shot."""
+    """Cut points by scene change, plus the mean brightness (0-255) of each shot.
+
+    Each shot also gets ``sharp`` (Laplacian variance: how much detail the picture has, so blurry
+    footage can be left out) and ``motion`` (mean frame-to-frame change: a frozen shot - a title
+    card, a freeze frame - barely moves). Both are measured on small grey frames.
+    """
     cut_proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-an", "-vf", f"scale=320:-2,select='gt(scene,{threshold})',showinfo", "-f", "null", "-"],
         capture_output=True,
@@ -134,13 +146,33 @@ def detect_shots(path: Path, duration: float, *, threshold: float = 0.3, sample_
     )
     samples = [(float(t), float(y)) for t, y in re.findall(r"pts_time:([0-9.]+)[^\n]*\n[^\n]*lavfi\.signalstats\.YAVG=([0-9.]+)", luma_proc.stderr)]
     bounds = [0.0] + [c for c in cuts if 0.2 < c < duration - 0.2] + [duration]
+    sharp, motion = _quality_samples(path, sample_fps)
     shots = []
     for s, e in zip(bounds, bounds[1:]):
         if e - s < 0.25:
             continue
         ys = [y for t, y in samples if s <= t < e]
-        shots.append({"s": round(s, 3), "e": round(e, 3), "luma": round(sum(ys) / len(ys), 1) if ys else 0.0})
+        ss = [v for t, v in sharp if s <= t < e]
+        # the first motion sample of a shot is the cut itself (the difference with the previous shot): not the shot's own movement
+        ms = [v for t, v in motion if s + 1.0 / sample_fps <= t < e]
+        shots.append({"s": round(s, 3), "e": round(e, 3), "luma": round(sum(ys) / len(ys), 1) if ys else 0.0,
+                      "sharp": round(sum(ss) / len(ss), 1) if ss else 0.0, "motion": round(sum(ms) / len(ms), 3) if ms else 0.0})
     return shots
+
+
+def _quality_samples(path: Path, sample_fps: int) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """(times, sharpness) and (times, motion) of the video's small grey frames."""
+    times, frames = _gray_frames(path, fps=float(sample_fps))
+    if not len(frames):
+        return [], []
+    import numpy as np
+
+    f = frames.astype(np.float32)
+    lap = np.array([(-4 * fr[1:-1, 1:-1] + fr[:-2, 1:-1] + fr[2:, 1:-1] + fr[1:-1, :-2] + fr[1:-1, 2:]).var() for fr in f])
+    diff = np.abs(np.diff(f, axis=0)).mean(axis=(1, 2)) if len(f) > 1 else np.zeros(0, dtype=np.float32)
+    sharp = [(t, float(v)) for t, v in zip(times, lap)]
+    motion = [(times[i], float(diff[i - 1])) for i in range(1, len(times))]
+    return sharp, motion
 
 
 def split_long_shots(shots: list[dict[str, Any]], max_len: float) -> list[dict[str, Any]]:
@@ -431,6 +463,13 @@ def _usable(shot: dict[str, float], duration: float, cfg: dict[str, Any], exclud
         return False
     if shot["luma"] < float(cfg.get("min_brightness", 28)):
         return False
+    # blurry footage (out of focus, heavy compression) is never shown (footage.min_sharpness, 0 = off)
+    if float(cfg.get("min_sharpness", 0) or 0) > 0 and float(shot.get("sharp") or 0) < float(cfg["min_sharpness"]):
+        return False
+    # a long frozen shot (title card, freeze frame, stalled capture) is never shown
+    # (footage.reject_static / min_motion); a short still shot can be a real establishing shot
+    if cfg.get("reject_static", True) and shot["e"] - shot["s"] >= 6.0 and float(shot.get("motion") or 0) < float(cfg.get("min_motion", 1.0)):
+        return False
     if shot["s"] < float(cfg.get("skip_head_seconds", 3.0)) or shot["e"] > duration - float(cfg.get("skip_tail_seconds", 10.0)):
         return False
     for a, b in exclude:
@@ -491,9 +530,22 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
                 skipped.append({"file": rel, "reason": f"third-party post ({foreign}): re-uploads are not used (`footage add <url> --third-party-ok` to allow it)"})
                 continue
             known = old_photos.get((rel, st.st_size))
-            crop = known["crop"] if known else photo_crop(p)
-            photo = {"id": p.stem, "file": rel, "size": st.st_size, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop, **({"allow_overlay": True} if side.get("allow_overlay") else {}),
+            if known and "width" in known:
+                width, height, crop = known["width"], known["height"], known["crop"]
+            else:
+                try:
+                    info = _probe(p)
+                    width, height = info["width"], info["height"]
+                except Exception:  # an unreadable picture keeps the old behaviour (it fails at render time, not here)
+                    width = height = None
+                crop = photo_crop(p)
+            min_photo_width = float(cfg.get("min_photo_width", 640) or 0)
+            if width is not None and min_photo_width > 0 and width < min_photo_width:
+                skipped.append({"file": rel, "reason": f"picture is {width}px wide (minimum {min_photo_width:.0f}px): too blurry once enlarged"})
+                continue
+            photo = {"id": p.stem, "file": rel, "size": st.st_size, "width": width, "height": height, "tags": tags, "credit": credit, "source_url": side.get("source_url", ""), "crop": crop, **({"allow_overlay": True} if side.get("allow_overlay") else {}),
                      **({"web_found": True} if side.get("web_found") else {}),
+                     **({"found_for": side["found_for"]} if side.get("found_for") else {}),
                      **({"article_media": side["article_media"], "caption": side.get("caption", ""), "role": side.get("role", "")} if side.get("article_media") else {})}
             if side.get("from_video"):  # a still pulled from a trailer: same picture as that shot
                 photo.update(from_video=str(side["from_video"]), time=float(side.get("time") or 0), video_tags=canonical_tags(side.get("video_tags"), vocab))
@@ -533,12 +585,16 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
         if foreign and not allowed_foreign and not same_file:
             log(f"footage: {p.name}: posted by a third party ({foreign}): not used. Your own capture? `footage add <file> --own`. Allowed re-use? put \"allow_third_party\": true in {sidecar_path(p).name}")
         skipped += _skip_notes(rel, overlay, spans, foreign, side)
+        min_width = float(cfg.get("min_width", 640) or 0)
+        too_small = min_width > 0 and info["width"] < min_width
+        if too_small:
+            skipped.append({"file": rel, "reason": f"video is {info['width']}px wide (minimum {min_width:.0f}px): too blurry once enlarged"})
         blocked_overlay = (bool(overlay) and not side.get("allow_overlay")) or (bool(foreign) and not allowed_foreign)
         hidden = [] if side.get("allow_overlay") else spans
         seg_tags = [seg for seg in side.get("segments") or [] if isinstance(seg, dict)]
         exclude = [x for x in side.get("exclude") or [] if isinstance(x, list) and len(x) == 2]
         for sh in shots:
-            sh["ok"] = _usable(sh, info["duration"], cfg, exclude) and not blocked_overlay and not any(_overlap({"start": x["s"], "end": x["e"]}, sh) > 0.2 for x in hidden)
+            sh["ok"] = _usable(sh, info["duration"], cfg, exclude) and not too_small and not blocked_overlay and not any(_overlap({"start": x["s"], "end": x["e"]}, sh) > 0.2 for x in hidden)
             # a tagged part of the video applies to the shots it really covers (not one it grazes at a cut)
             extra = {t for seg in seg_tags if _overlap(seg, sh) >= min(1.0, 0.5 * (sh["e"] - sh["s"])) for t in canonical_tags(seg.get("tags"), vocab)}
             if extra:
@@ -566,7 +622,7 @@ def build_index(settings: Any, *, force: bool = False, log: Callable[[str], None
     return index
 
 
-RULES = 2  # version of the re-upload rules applied to an indexed video (a new version re-checks every video once)
+RULES = 3  # version of the re-upload / quality rules applied to an indexed video (a new version re-checks every video once)
 
 
 def _skip_notes(rel: str, overlay: dict[str, Any] | None, spans: list[dict[str, Any]], foreign: str | None, side: dict[str, Any]) -> list[dict[str, Any]]:
@@ -591,6 +647,39 @@ def library_summary(index: dict[str, Any]) -> dict[str, Any]:
         "usable_seconds": round(sum(s["e"] - s["s"] for s in usable), 1),
         "skipped": index.get("skipped", []),
     }
+
+
+# ----------------------------------------------------------------------------- what the recent videos already showed
+# One memory for every kind of video (long-form and Shorts): the footage of the last USAGE_JOBS jobs
+# is counted, so the next video picks the shots and screenshots it has not shown yet first.
+USAGE_FILE = "footage_usage.json"
+USAGE_JOBS = 25  # how many recent videos count when a shot was "already shown"
+USAGE_KEEP = 200  # rows kept in the file
+
+
+def usage_path(settings: Any) -> Path:
+    return settings.jobs_dir / ".cache" / USAGE_FILE
+
+
+def load_usage(settings: Any, *, exclude_job: str | None = None) -> dict[str, int]:
+    """{item key: how many of the recent videos showed it} (this job's own earlier run left out)."""
+    data = read_json(usage_path(settings), {}) or {}
+    counts: dict[str, int] = {}
+    for row in (data.get("jobs") or [])[-USAGE_JOBS:]:
+        if row.get("job") == exclude_job:
+            continue
+        for k in set(row.get("keys") or []):
+            counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def record_usage(settings: Any, job: str, keys: list[str]) -> None:
+    """Remember which shots / screenshots this video shows, so the next ones pick other footage first."""
+    path = usage_path(settings)
+    data = read_json(path, {}) or {}
+    rows = [r for r in data.get("jobs") or [] if r.get("job") != job]
+    rows.append({"job": job, "keys": sorted(set(keys))})
+    write_json(path, {"jobs": rows[-USAGE_KEEP:]})
 
 
 # ----------------------------------------------------------------------------- tags as the selector sees them
@@ -666,7 +755,10 @@ def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str |
     for v in index.get("videos", []):
         side = v.get("sidecar") or {}
         mine = belongs(side.get("article_media"))
-        if mine is False or (side.get("web_found") and not web and not mine):
+        # footage this job found on the web itself is shown by this job (flagged for a rights check);
+        # other jobs only use it with footage.use_web_found (its permission has not been checked)
+        found_here = job is not None and (side.get("found_for") or {}).get("job") == job
+        if mine is False or (side.get("web_found") and not web and not mine and not found_here):
             continue
         for sh in v.get("shots", []):
             if not sh.get("ok") or overlaid(shot_key(v["file"], v.get("size", 0), sh), side.get("allow_overlay")):
@@ -675,11 +767,12 @@ def load_items(settings: Any, index: dict[str, Any] | None = None, *, job: str |
             add(tags, v.get("tags"), W_VIDEO)
             add_auto(tags, shot_key(v["file"], v.get("size", 0), sh))
             add(tags, sh.get("tags"), W_ITEM)
-            shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "crop": sh.get("crop"), "tags": tags, "key": f"{v['file']}@{sh['s']}", "autokey": shot_key(v["file"], v.get("size", 0), sh),
+            shots.append({"kind": "shot", "video": v, "file": v["file"], "path": str(root / v["file"]), "s": sh["s"], "e": sh["e"], "vdur": v.get("duration", sh["e"]), "luma": sh.get("luma", 0), "sharp": sh.get("sharp", 0.0), "motion": sh.get("motion", 0.0), "crop": sh.get("crop"), "tags": tags, "key": f"{v['file']}@{sh['s']}", "autokey": shot_key(v["file"], v.get("size", 0), sh),
                           **({"story": True, "caption": side.get("caption", ""), "role": side.get("role", "")} if mine else {})})
     for p in index.get("photos", []):
         mine = belongs(p.get("article_media"))
-        if mine is False or (p.get("web_found") and not web and not mine):
+        found_here = job is not None and (p.get("found_for") or {}).get("job") == job
+        if mine is False or (p.get("web_found") and not web and not mine and not found_here):
             continue
         own = photo_key(p["file"], p.get("size", 0))
         if overlaid(own if own in auto else (still_shot_key(index, p) or own), p.get("allow_overlay")):

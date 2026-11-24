@@ -156,6 +156,13 @@ def _candidates(pool: list[dict[str, Any]], want: dict[str, float]) -> list[tupl
     return direct or scored
 
 
+def _quality(item: dict[str, Any]) -> float:
+    """How good this shot looks: sharp and moving (0..1). A screenshot is neutral (0.5)."""
+    if item["kind"] != "shot":
+        return 0.5
+    return 0.5 * min(1.0, float(item.get("sharp") or 0) / 200.0) + 0.5 * min(1.0, float(item.get("motion") or 0) / 3.0)
+
+
 def best_item(want: dict[str, float], pool: list[dict[str, Any]], used: dict[str, int], seed: str, prefer: str = "shot") -> tuple[dict[str, Any] | None, float]:
     scored = _candidates(pool, want)
     if not scored:
@@ -166,14 +173,15 @@ def best_item(want: dict[str, float], pool: list[dict[str, Any]], used: dict[str
     if prefer == "shot":  # moving footage first: a clip that shows it reasonably well beats a screenshot that shows it perfectly
         clips = [(s, it) for s, it in scored if it["kind"] == "shot" and s >= top * 0.5]
         good = clips or good
-    s, it = min(good, key=lambda x: (used.get(x[1]["key"], 0), -x[0], 0 if x[1]["kind"] == ("shot" if prefer == "shot" else "photo") else 1, _h(seed, x[1]["key"])))
+    # least shown first (this video, then the recent ones), then the best match, then the sharpest / most moving
+    s, it = min(good, key=lambda x: (used.get(x[1]["key"], 0), -x[0], -_quality(x[1]), 0 if x[1]["kind"] == ("shot" if prefer == "shot" else "photo") else 1, _h(seed, x[1]["key"])))
     return it, s
 
 
 class _Library:
     """One footage library (GTA 6, or another game of a comparison) while footage is assigned to the scenes."""
 
-    def __init__(self, settings: Any, gid: str, *, ledger: dict[str, dict[str, Any]], cfg: dict[str, Any], max_clip: float, min_piece: float, photo_share: float, job: str | None = None):
+    def __init__(self, settings: Any, gid: str, *, ledger: dict[str, dict[str, Any]], cfg: dict[str, Any], max_clip: float, min_piece: float, photo_share: float, job: str | None = None, history: dict[str, int] | None = None):
         self.settings = settings
         self.gid = gid
         self.items = load_items(settings, job=job)
@@ -186,7 +194,8 @@ class _Library:
         self.by_video: dict[str, list[dict[str, Any]]] = {}
         for it in self.fill_shots:
             self.by_video.setdefault(it["file"], []).append(it)
-        self.used: dict[str, int] = {}
+        # what the recent videos already showed counts first: the least shown footage is picked first
+        self.used: dict[str, int] = dict(history or {})
         self.picked: dict[str, dict[str, Any]] = {}  # every shot / screenshot used, by autotag key
         self.ledger = ledger
         self.cfg = cfg
@@ -206,6 +215,7 @@ class _Library:
         file_rel = it["file"]
         aid = ("gta6-" if self.gid == "gta6" else f"{self.gid}-") + hashlib.sha1(file_rel.encode()).hexdigest()[:10]
         what = "Real GTA 6 footage (footage.ratio)" if self.gid == "gta6" else f"Real {self.name} footage, shown while the comparison talks about it"
+        web_found = bool(it.get("web_found")) if it["kind"] == "photo" else bool((it.get("video") or {}).get("sidecar", {}).get("web_found"))
         e = self.ledger.setdefault(aid, {
             "asset_id": aid,
             "kind": ("article_picture" if it.get("story") else "official_screenshot") if it["kind"] == "photo" else ("article_video" if it.get("story") else "official_trailer"),
@@ -215,8 +225,10 @@ class _Library:
             "commercial_use": True,
             "attribution_required": True,
             "attribution": (it.get("credit") if it["kind"] == "photo" else it["video"].get("credit")) or DEFAULT_CREDIT,
-            "review_status": "approved",
-            "reason": f"{what}. Excerpts <= {self.max_clip:g}s, credited on screen and in the description. YouTube Content ID may still claim the video for Rockstar/Take-Two.",
+            "review_status": "check_before_publishing" if web_found else "approved",
+            "reason": (f"{what}. Found automatically on the web: check you may use it before publishing. Excerpts <= {self.max_clip:g}s, credited on screen and in the description."
+                       if web_found else
+                       f"{what}. Excerpts <= {self.max_clip:g}s, credited on screen and in the description. YouTube Content ID may still claim the video for Rockstar/Take-Two."),
             "scenes": [],
             **({"game": self.gid} if self.gid != "gta6" else {}),
         })
@@ -225,7 +237,11 @@ class _Library:
         return aid
 
     def fill_for(self, sc: dict[str, Any], need: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Filler pieces: follow one trailer's own edit from a shot that fits the scene's words, least used first."""
+        """Filler pieces: follow one trailer's own edit from a shot that fits the scene's words, least used first.
+
+        A shot is never shown twice in the same scene: when the trailer runs out, the least shown
+        shots of the other videos continue the scene (the old code looped back over the same shots).
+        """
         n = sc["scene_number"]
         used = self.used
         words = {t for t, _ in word_tokens(" ".join([sc.get("narration", ""), sc.get("on_screen_text", ""), sc.get("emphasis", "")]))}
@@ -233,15 +249,14 @@ class _Library:
         its: list[dict[str, Any]] = []
         got = 0.0
         if self.fill_shots:
-            start = min(self.fill_shots, key=lambda s: (-len(words & set(s["tags"])), used.get(s["key"], 0), _h(n, s["key"])))
+            start = min(self.fill_shots, key=lambda s: (-len(words & set(s["tags"])), used.get(s["key"], 0), -_quality(s), _h(n, s["key"])))
             seq = self.by_video[start["file"]]
             j = seq.index(start)
-            k = 0
-            while got < need and k < len(seq) * 2:
-                s = seq[(j + k) % len(seq)]
-                k += 1
-                if k > 1 and used.get(s["key"], 0) > used.get(start["key"], 0):
-                    continue
+            # the trailer's own edit from the start shot, then the least shown shots of the other videos
+            ordered = seq[j:] + seq[:j] + sorted((s for s in self.fill_shots if s["file"] != start["file"]), key=lambda s: (used.get(s["key"], 0), -_quality(s), _h(n, s["key"])))
+            for s in ordered:
+                if got >= need:
+                    break
                 p = _piece(s, self.max_clip)
                 pieces.append(p)
                 its.append(s)
@@ -316,14 +331,23 @@ class _Library:
 def assign_footage(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str], None] = lambda m: None, checker: Callable[[Any, list[dict[str, Any]]], int] | None = None, job: str | None = None) -> dict[str, Any]:
     """See ``_assign``. With a ``checker`` (``autotag.overlay_checker``), every picked shot or screenshot that
     was never checked for a watermark, a social-media post or burned-in subtitles is checked; when some are
-    found, the footage is picked again without them."""
+    found, the footage is picked again without them.
+
+    With a ``job``, what this video shows is remembered (``library.record_usage``): the next videos
+    pick the shots and screenshots they have not shown yet first.
+    """
     result, libs = _assign(settings, scenes, log=log, job=job)
-    if checker is None:
-        return result
-    flagged = sum(checker(x.settings, list(x.picked.values())) for x in libs.values() if x.picked)
-    if flagged:
-        log(f"footage: {flagged} picked shot(s) / screenshot(s) carry a watermark, a post or burned-in subtitles, or are not game pictures: picking again without them")
-        result, _ = _assign(settings, scenes, log=log, job=job)
+    if checker is not None:
+        flagged = sum(checker(x.settings, list(x.picked.values())) for x in libs.values() if x.picked)
+        if flagged:
+            log(f"footage: {flagged} picked shot(s) / screenshot(s) carry a watermark, a post or burned-in subtitles, or are not game pictures: picking again without them")
+            result, libs = _assign(settings, scenes, log=log, job=job)
+    if job:
+        from .library import record_usage
+
+        keys = [it["key"] for x in libs.values() for it in x.picked.values() if it.get("key")]
+        if keys:
+            record_usage(settings, job, keys)
     return result
 
 
@@ -417,12 +441,15 @@ def _assign(settings: Any, scenes: list[dict[str, Any]], *, log: Callable[[str],
         return {"ledger": [], "summary": {"enabled": False}}, {}
     topic = any(sc.get("footage_game") or sc.get("footage_pair") for sc in scenes)
     ledger: dict[str, dict[str, Any]] = {}
+    from .library import load_usage
+
     opts = {
         "ledger": ledger,
         "cfg": cfg,
         "max_clip": float(cfg.get("max_clip_seconds") or settings.get("rights_review.max_seconds_per_official_clip", 6)),
         "min_piece": float(cfg.get("min_piece_seconds", 1.2)),
         "photo_share": max(0.0, min(1.0, float(cfg.get("photo_share", 0.25)))),
+        "history": load_usage(settings, exclude_job=job),
     }
     main = _Library(settings, "gta6", **opts, job=job)
     libs: dict[str, _Library] = {"gta6": main}
@@ -579,6 +606,11 @@ class _Fill:
             guard += 1
             p = self.pieces[self.k % len(self.pieces)]
             self.k += 1
+            if out and len(self.pieces) > 1 and p is out[-1]["_p"]:
+                # never the same piece twice in a row when another one exists
+                alt = next((q for q in self.pieces if q is not p), None)
+                if alt is not None:
+                    p = alt
             rem = b - t
             avail = self._len(p)
             if avail >= rem - 1e-6 or (p["type"] == "shot" and _room(p) >= rem and rem <= self.max_hold + self.min_piece) or (p["type"] == "photo" and rem <= avail + self.min_piece):

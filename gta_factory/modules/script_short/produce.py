@@ -410,34 +410,16 @@ def step_footage(ctx: Any) -> dict[str, Any]:
 
 
 # =========================================================================== match
-USAGE_FILE = "footage_usage.json"
-USAGE_JOBS = 25  # how many recent Shorts count when a clip was "already shown"
-
-
-def usage_path(settings: Any) -> Path:
-    return settings.jobs_dir / ".cache" / USAGE_FILE
-
-
-def load_usage(settings: Any, *, exclude_job: str | None = None) -> dict[str, int]:
-    """{shot key: how many of the recent Shorts showed it} (this job's own earlier run left out)."""
-    data = read_json(usage_path(settings), {}) or {}
-    counts: dict[str, int] = {}
-    for row in (data.get("jobs") or [])[-USAGE_JOBS:]:
-        if row.get("job") == exclude_job:
-            continue
-        for k in set(row.get("keys") or []):
-            counts[k] = counts.get(k, 0) + 1
-    return counts
+# what the recent videos already showed: one memory shared with the long-form videos
+# (footage.library), so a clip shown by a Short is not picked again by the next video
+from ..footage.library import USAGE_FILE, USAGE_JOBS, load_usage, usage_path  # noqa: F401
 
 
 def record_usage(settings: Any, job: str, matches: list[dict[str, Any]]) -> None:
     """Remember which shots this Short shows, so the next ones pick other footage first."""
-    path = usage_path(settings)
-    data = read_json(path, {}) or {}
-    rows = [r for r in data.get("jobs") or [] if r.get("job") != job]
-    keys = sorted({sg["key"] for m in matches for sg in m["segments"] if sg.get("key")})
-    rows.append({"job": job, "keys": keys})
-    write_json(path, {"jobs": rows[-200:]})
+    from ..footage.library import record_usage as _record
+
+    _record(settings, job, [sg["key"] for m in matches for sg in m["segments"] if sg.get("key")])
 
 
 def step_match(ctx: Any) -> dict[str, Any]:

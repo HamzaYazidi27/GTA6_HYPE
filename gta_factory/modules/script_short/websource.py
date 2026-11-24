@@ -48,7 +48,8 @@ _LEAD = re.compile(r"^(?:number\s+)?(?:#?\d{1,2}|one|two|three|four|five|six|sev
 
 
 def defaults(settings: Any) -> dict[str, Any]:
-    cfg = dict(settings.get("script_short.web_footage") or {})
+    # one web-footage config for every kind of video: `footage.web_footage` (long-form) or the Shorts' own section
+    cfg = {**dict(settings.get("footage.web_footage") or {}), **dict(settings.get("script_short.web_footage") or {})}
     return {
         "enabled": bool(cfg.get("enabled", True)),
         "videos_per_beat": int(cfg.get("videos_per_beat", 2)),

@@ -197,7 +197,7 @@ def test_assign_footage_shows_what_is_said(footage_project):
     assert by[3]["footage"]["kind"] == "photo" and by[3]["footage"]["file"].endswith("lucia_beach_01.jpg")
     # "the police": a shot from the tagged part of the trailer, cut in at the word
     beat = by[5]["footage"]["beats"][0]
-    assert beat["said"] == "police" and beat["word"] == 4 and beat["piece"]["type"] == "shot" and 12.0 <= beat["piece"]["start"] < 18.0
+    assert beat["said"].split(" / ")[0] == "police" and beat["word"] == 4 and beat["piece"]["type"] == "shot" and 12.0 <= beat["piece"]["start"] < 18.0
     # "Vice City": its screenshot; "Port Gellhorn": nothing in the library -> reported, any footage shown
     vc = by[6]["footage"]["beats"]
     assert vc[0]["said"] == "Vice City" and vc[0]["piece"]["file"].endswith("vice_city_night.jpg")
@@ -412,3 +412,61 @@ def test_letterbox_bars_are_cut_away(project):
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", sc["footage"]["clip"], "-frames:v", "1", "-vf", "format=gray", "-f", "rawvideo", "pipe:1"], capture_output=True).stdout
     frame = np.frombuffer(raw, dtype=np.uint8).reshape(360, 640)
     assert frame[:3].mean() > 40 and frame[-3:].mean() > 40  # no black band at the top or the bottom
+
+
+def test_pipeline_searches_the_web_for_missing_footage_and_keeps_it(project, monkeypatch):
+    from types import SimpleNamespace
+
+    from gta_factory.app.core import pipeline
+    from gta_factory.modules.footage import select as select_mod
+    from gta_factory.modules.script_short import websource
+
+    s = SimpleNamespace(get=lambda k, d=None: True if k == "footage.web_search" else d)  # tests keep the web off; here it is on
+    ctx = SimpleNamespace(settings=s, options={}, job_id="job-42", log=lambda m: None, warn=lambda m: None)
+    before = {"summary": {"missing": [{"said": "a kayak in the swamp", "concepts": ["kayak"]}]}, "ledger": []}
+    seen = {}
+
+    def fake_source(settings, beats, *, job, log):
+        seen["beats"], seen["job"] = beats, job
+        return {"videos": 1, "photos": 0, "errors": []}
+
+    monkeypatch.setattr(websource, "source_missing", fake_source)
+    monkeypatch.setattr(select_mod, "assign_footage", lambda settings, scenes, **kw: {"summary": {"missing": []}, "ledger": ["new"]})
+    out = pipeline._web_fallback(ctx, [], before, None)
+    assert out["ledger"] == ["new"] and seen["job"] == "job-42" and seen["beats"][0]["concept"] == "kayak"
+    # offline: the web is never touched, the original assignment stands
+    ctx.options = {"offline": True}
+    monkeypatch.setattr(websource, "source_missing", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("web touched")))
+    assert pipeline._web_fallback(ctx, [], before, None) is before
+
+
+# ----------------------------------------------------------------- quality gates, shared memory, QC
+def test_quality_gates_reject_blurry_and_long_frozen_shots():
+    cfg = {"min_shot_seconds": 1.0, "skip_head_seconds": 0, "skip_tail_seconds": 0, "min_sharpness": 40, "reject_static": True, "min_motion": 1.0}
+    good = {"s": 10.0, "e": 14.0, "luma": 120.0, "sharp": 300.0, "motion": 5.0}
+    assert lib._usable(good, 60.0, cfg, [])
+    assert not lib._usable({**good, "sharp": 5.0}, 60.0, cfg, [])  # blurry / heavy compression
+    assert not lib._usable({**good, "s": 10.0, "e": 20.0, "motion": 0.0}, 60.0, cfg, [])  # a long freeze
+    assert lib._usable({**good, "motion": 0.0}, 60.0, cfg, [])  # a short still shot can be real
+    assert lib._usable({**good, "sharp": 5.0}, 60.0, {**cfg, "min_sharpness": 0}, [])  # gate off
+
+
+def test_usage_history_is_shared_and_counts_other_jobs_only(project):
+    s = project["settings"]
+    lib.record_usage(s, "job-a", ["v.mp4@1.0", "v.mp4@4.0"])
+    lib.record_usage(s, "job-b", ["v.mp4@1.0"])
+    assert lib.load_usage(s) == {"v.mp4@1.0": 2, "v.mp4@4.0": 1}
+    assert lib.load_usage(s, exclude_job="job-b") == {"v.mp4@1.0": 1, "v.mp4@4.0": 1}
+    lib.record_usage(s, "job-b", ["v.mp4@9.0"])  # a resumed job replaces its own row
+    assert lib.load_usage(s) == {"v.mp4@1.0": 1, "v.mp4@4.0": 1, "v.mp4@9.0": 1}
+    from gta_factory.modules.script_short import produce
+
+    assert produce.load_usage(s) == lib.load_usage(s)  # Shorts and long videos share the one memory
+
+
+def test_qc_flags_repeated_and_missing_footage():
+    from gta_factory.modules.quality_control.checks import footage_repetition
+
+    matched = [{"kind": "shot", "file": "videos/t.mp4", "at": 3.0}] * 3 + [{"kind": "shot", "file": "videos/t.mp4", "at": 9.0}] * 2 + [{"kind": "photo", "file": "photos/a.jpg"}] * 5
+    assert footage_repetition(matched) == [{"file": "videos/t.mp4", "at": 3.0, "uses": 3}]
+    assert footage_repetition(matched, max_uses=5) == []

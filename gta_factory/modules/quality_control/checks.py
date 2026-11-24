@@ -74,6 +74,16 @@ def analyse_silence(path: Path, *, min_seconds: float = 2.5) -> list[dict[str, f
     return [{"start": s, "duration": d} for s, (_, d) in zip(starts, ends)]
 
 
+def footage_repetition(matched: list[dict[str, Any]], max_uses: int = 2) -> list[dict[str, Any]]:
+    """Shots shown more than ``max_uses`` times in one video: [{file, at, uses}] (the same footage coming back)."""
+    counts: dict[tuple[str, Any], int] = {}
+    for m in matched or []:
+        if m.get("kind") == "shot":
+            key = (str(m.get("file") or ""), m.get("at"))
+            counts[key] = counts.get(key, 0) + 1
+    return [{"file": f, "at": a, "uses": n} for (f, a), n in sorted(counts.items(), key=lambda x: -x[1]) if n > max_uses]
+
+
 def caption_stats(cues: list[dict[str, Any]], max_chars: int, max_cps: float) -> dict[str, Any]:
     long_lines = [c for c in cues if any(len(ln) > max_chars for ln in c["text"].split("\n"))]
     fast = []
@@ -184,6 +194,15 @@ def run_qc(
         covered = sum(sc["durationFrames"] for sc in props.get("scenes", []) if sc.get("footage")) / max(1, int(props.get("totalFrames") or 1))
         lo, hi = float(fo.get("ratio_min", 0.8)), float(fo.get("ratio_max", 0.9))
         r.add("footage.share", "warning", lo - 0.03 <= covered <= hi + 0.03, f"Real GTA 6 footage on {covered:.0%} of the video (target {lo:.0%}-{hi:.0%}).", matched=len(fo.get("matched") or []))
+    if fo.get("enabled"):
+        repeats = footage_repetition(fo.get("matched") or [])
+        r.add("footage.repetition", "warning", not repeats,
+              f"The same shot is shown {max(x['uses'] for x in repeats)} times in this video ({', '.join(x['file'] for x in repeats[:3])}): the footage repeats." if repeats else "No shot is repeated in this video.",
+              repeats=repeats[:10])
+        missing_concepts = fo.get("missing") or []
+        r.add("footage.missing", "warning", not missing_concepts,
+              f"Said but not shown: {', '.join(sorted({m['said'] for m in missing_concepts})[:8])} (add footage with `footage add ... --tags ...`, or let the web search find it)." if missing_concepts else "Everything said is shown.",
+              missing=[m["said"] for m in missing_concepts[:10]])
 
     # --- storyboard rhythm (from the render props)
     scenes = props.get("scenes", [])
